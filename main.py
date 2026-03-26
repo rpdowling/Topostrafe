@@ -69,6 +69,7 @@ async def game_page(request: Request, game_id: str):
 
 @app.get("/api/public-games")
 async def api_public_games():
+    store.prune_expired_open_games()
     return JSONResponse({"games": store.list_public_games()})
 
 
@@ -82,6 +83,7 @@ async def api_state(game_id: str, player: str | None = None):
 
 @app.post("/api/create")
 async def api_create(payload: dict[str, Any]):
+    store.prune_expired_open_games()
     try:
         created = store.create_game(payload)
         return JSONResponse(created)
@@ -91,6 +93,7 @@ async def api_create(payload: dict[str, Any]):
 
 @app.post("/api/join/public/{game_id}")
 async def api_join_public(game_id: str):
+    store.prune_expired_open_games()
     try:
         joined = store.join_public(game_id)
         await broadcast_state(game_id, "Opponent joined.")
@@ -101,6 +104,7 @@ async def api_join_public(game_id: str):
 
 @app.post("/api/join/private")
 async def api_join_private(payload: dict[str, Any]):
+    store.prune_expired_open_games()
     try:
         joined = store.join_private(payload.get("join_code", ""))
         await broadcast_state(joined["game_id"], "Opponent joined.")
@@ -115,6 +119,7 @@ async def ws_game(websocket: WebSocket, game_id: str):
     async with conn_lock:
         connections[game_id].add(websocket)
     player_key = websocket.query_params.get("player")
+    store.note_connection_opened(game_id, player_key)
     try:
         await websocket.send_json({"type": "state", "state": store.serialize(game_id, player_key), "message": None})
         while True:
@@ -138,6 +143,10 @@ async def ws_game(websocket: WebSocket, game_id: str):
     finally:
         async with conn_lock:
             connections[game_id].discard(websocket)
+            has_other_connections = bool(connections[game_id])
+            if not connections[game_id]:
+                connections.pop(game_id, None)
+        store.note_connection_closed(game_id, player_key, has_other_connections)
 
 
 if __name__ == "__main__":

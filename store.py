@@ -52,6 +52,7 @@ class GameSession:
     turn_started_at: float | None = None
     time_remaining: dict[int, float] = field(default_factory=dict)
     log: list[str] = field(default_factory=list)
+    abandon_delete_at: float | None = None
 
     def __post_init__(self):
         if not self.time_remaining:
@@ -78,6 +79,8 @@ class GameSession:
 
 
 class GameStore:
+    OPEN_GAME_ABANDON_GRACE_SECONDS = 10.0
+
     def __init__(self):
         self.games: dict[str, GameSession] = {}
         self.lock = threading.RLock()
@@ -92,8 +95,50 @@ class GameStore:
             "player_colors": PLAYER_COLORS,
         }
 
+    def _prune_expired_open_games_locked(self):
+        now = time.time()
+        expired = [
+            game_id
+            for game_id, game in self.games.items()
+            if (
+                game.status == "open"
+                and not game.vs_bot
+                and game.seat_keys[1] is None
+                and game.abandon_delete_at is not None
+                and game.abandon_delete_at <= now
+            )
+        ]
+        for game_id in expired:
+            self.games.pop(game_id, None)
+
+    def prune_expired_open_games(self):
+        with self.lock:
+            self._prune_expired_open_games_locked()
+
+    def note_connection_opened(self, game_id: str, player_key: str | None):
+        with self.lock:
+            self._prune_expired_open_games_locked()
+            game = self.games.get(game_id)
+            if game is None:
+                return
+            if player_key is not None and game.seat_for_key(player_key) is not None:
+                game.abandon_delete_at = None
+
+    def note_connection_closed(self, game_id: str, player_key: str | None, has_other_connections: bool):
+        with self.lock:
+            self._prune_expired_open_games_locked()
+            game = self.games.get(game_id)
+            if game is None:
+                return
+            if has_other_connections:
+                return
+            seat = game.seat_for_key(player_key)
+            if seat == 0 and game.status == "open" and not game.vs_bot and game.seat_keys[1] is None:
+                game.abandon_delete_at = time.time() + self.OPEN_GAME_ABANDON_GRACE_SECONDS
+
     def list_public_games(self) -> list[dict[str, Any]]:
         with self.lock:
+            self._prune_expired_open_games_locked()
             rows = []
             for game in self.games.values():
                 if game.is_private or game.status != "open":
@@ -159,6 +204,7 @@ class GameStore:
 
     def create_game(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
+            self._prune_expired_open_games_locked()
             settings = self._settings_from_payload(payload.get("settings", {}))
             map_data = self._map_from_payload(settings, payload)
             game_id = _short_id(8)
@@ -181,6 +227,7 @@ class GameStore:
             if vs_bot:
                 game.seat_keys[1] = "BOT"
                 game.status = "active"
+                game.abandon_delete_at = None
                 game.turn_started_at = time.monotonic()
                 game.log.append("Game created vs bot.")
             else:
@@ -195,6 +242,7 @@ class GameStore:
 
     def join_public(self, game_id: str) -> dict[str, Any]:
         with self.lock:
+            self._prune_expired_open_games_locked()
             game = self.games.get(game_id)
             if game is None:
                 raise ValueError("Game not found.")
@@ -205,6 +253,7 @@ class GameStore:
             player_key = _token(24)
             game.seat_keys[1] = player_key
             game.status = "active"
+            game.abandon_delete_at = None
             game.turn_started_at = time.monotonic()
             game.log.append("Player 2 joined.")
             return {"game_id": game_id, "player_key": player_key, "url": f"/game/{game_id}?player={player_key}"}
@@ -212,11 +261,13 @@ class GameStore:
     def join_private(self, join_code: str) -> dict[str, Any]:
         join_code = (join_code or "").strip().upper()
         with self.lock:
+            self._prune_expired_open_games_locked()
             for game in self.games.values():
                 if game.join_code == join_code and game.status == "open":
                     player_key = _token(24)
                     game.seat_keys[1] = player_key
                     game.status = "active"
+                    game.abandon_delete_at = None
                     game.turn_started_at = time.monotonic()
                     game.log.append("Private opponent joined.")
                     return {"game_id": game.game_id, "player_key": player_key, "url": f"/game/{game.game_id}?player={player_key}"}
@@ -224,6 +275,7 @@ class GameStore:
 
     def get_game(self, game_id: str) -> GameSession | None:
         with self.lock:
+            self._prune_expired_open_games_locked()
             return self.games.get(game_id)
 
     def _effective_time_remaining(self, game: GameSession, owner: int) -> float:
@@ -266,6 +318,7 @@ class GameStore:
 
     def serialize(self, game_id: str, player_key: str | None) -> dict[str, Any]:
         with self.lock:
+            self._prune_expired_open_games_locked()
             game = self.games.get(game_id)
             if game is None:
                 raise ValueError("Game not found.")
@@ -328,6 +381,7 @@ class GameStore:
 
     def apply_action(self, game_id: str, player_key: str | None, action: dict[str, Any]) -> str:
         with self.lock:
+            self._prune_expired_open_games_locked()
             game = self.games.get(game_id)
             if game is None:
                 raise ValueError("Game not found.")
@@ -393,6 +447,7 @@ class GameStore:
 
     def run_bot_if_needed(self, game_id: str) -> str | None:
         with self.lock:
+            self._prune_expired_open_games_locked()
             game = self.games.get(game_id)
             if game is None or not game.vs_bot or game.bot is None:
                 return None
