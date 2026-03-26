@@ -240,6 +240,10 @@ function extendActiveRouteTo(cell) {
     if (activeRoute.some(p => sameCell(p, step))) break;
     activeRoute.push(step);
     changed = true;
+    if (activeRoute.length > 1) {
+      const stepNode = nodeAt(step);
+      if (stepNode) break;
+    }
   }
   if (changed) refreshActiveRoutePreview();
   return changed;
@@ -581,7 +585,11 @@ function onBoardClick(evt) {
     return;
   }
 
-  extendActiveRouteTo(cell);
+  const changed = extendActiveRouteTo(cell);
+  if (changed && activeRoute.length >= 2) {
+    const destNode = nodeAt(activeRoute[activeRoute.length - 1]);
+    if (destNode && sameCell(activeRoute[activeRoute.length - 1], cell)) finishRoute();
+  }
 }
 
 function applyState(state, message) {
