@@ -18,6 +18,11 @@
       </details>
 
       <form id="create-form" class="stack gap-12">
+        <div class="actions menu-actions">
+          <button type="submit">Play</button>
+          <span id="create-status" class="muted"></span>
+        </div>
+
         <div class="grid two">
           <label>
             <span>Map</span>
@@ -96,10 +101,6 @@
           <input id="custom_map_file" type="file" accept="application/json,.json" />
         </label>
 
-        <div class="actions">
-          <button type="submit">Play</button>
-          <span id="create-status" class="muted"></span>
-        </div>
       </form>
     </section>
 
