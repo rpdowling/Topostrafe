@@ -1,6 +1,6 @@
 # Topostrafe Web
 
-Topography based strategy game
+Minimal FastAPI/WebSocket web wrapper for the current Topostrafe rules engine.
 
 ## Local run
 
@@ -28,3 +28,9 @@ Open `http://127.0.0.1:8000`.
 - Private games use a join code.
 - Public games are listed on the home page until joined.
 - Custom maps are raw JSON with `width`, `height`, and `grid`.
+
+
+## Preset Maps
+
+- `Altar` is bundled as the default preset map.
+- The original rules text is shown on the home page.

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import engine_core as eng
+from preset_maps import ALTAR_MAP
 
 
 ELEVATION_COLORS = {
@@ -19,7 +20,7 @@ ELEVATION_COLORS = {
 }
 PLAYER_COLORS = {0: "#ff00ff", 1: "#ffffff"}
 PLAYER_OUTLINES = {0: "#2b0030", 1: "#000000"}
-MAP_TYPES = ["Noise", "Ridges", "Plains", "Three Mountains", "Mountains", "Custom"]
+MAP_TYPES = ["Altar", "Noise", "Ridges", "Plains", "Three Mountains", "Mountains", "Custom"]
 
 
 def _short_id(n: int = 8) -> str:
@@ -83,6 +84,7 @@ class GameStore:
 
     def defaults(self) -> dict[str, Any]:
         d = eng.GameSettings()
+        d.map_type = "Altar"
         return {
             "settings": d.__dict__.copy(),
             "map_types": MAP_TYPES,
@@ -124,6 +126,8 @@ class GameStore:
                 data[field] = val
         if data["map_type"] not in MAP_TYPES:
             data["map_type"] = base.map_type
+        if not data["map_type"]:
+            data["map_type"] = "Altar"
         data["map_width"] = max(5, min(80, int(data["map_width"])))
         data["map_height"] = max(5, min(80, int(data["map_height"])))
         data["cell_size"] = max(8, min(80, int(data["cell_size"])))
@@ -134,6 +138,8 @@ class GameStore:
         return eng.GameSettings(**data)
 
     def _map_from_payload(self, settings: eng.GameSettings, payload: dict[str, Any]) -> eng.MapData:
+        if settings.map_type == "Altar":
+            return eng.MapData(int(ALTAR_MAP["width"]), int(ALTAR_MAP["height"]), [[int(c) for c in row] for row in ALTAR_MAP["grid"]])
         if settings.map_type == "Custom":
             raw = payload.get("custom_map_json", "")
             if not raw:

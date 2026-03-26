@@ -12,11 +12,17 @@
       <h1>Topostrafe</h1>
       <p class="muted">Create a public game, a private code game, or a bot game.</p>
 
+      <details open class="rules-box">
+        <summary>Rules</summary>
+        <pre class="rules-text">{{ rules_text }}</pre>
+      </details>
+
       <form id="create-form" class="stack gap-12">
         <div class="grid two">
           <label>
-            <span>Map Type</span>
+            <span>Map</span>
             <select id="map_type"></select>
+            <small class="muted">Altar is the default preset map.</small>
           </label>
           <label>
             <span>Start Band</span>

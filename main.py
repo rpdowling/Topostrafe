@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from store import GameStore
+from preset_maps import RULES_TEXT
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -53,6 +54,7 @@ async def index(request: Request):
         "index.html",
         {
             "defaults_json": json.dumps(defaults),
+            "rules_text": RULES_TEXT,
             "title": "Topostrafe",
         },
     )
