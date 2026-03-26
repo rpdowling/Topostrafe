@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <div class="page game-layout">
+    <section class="panel board-panel">
+      <div class="toolbar">
+        <div>
+          <strong id="game-title">Game {{ game_id }}</strong>
+          <div class="muted" id="share-line"></div>
+        </div>
+        <div class="toolbar-right">
+          <span id="status-line" class="muted">Connecting…</span>
+          <a class="button-link" href="/">Back</a>
+        </div>
+      </div>
+      <canvas id="board" width="1100" height="900"></canvas>
+    </section>
+
+    <section class="panel sidebar">
+      <div class="stack gap-12">
+        <div>
+          <h2>Turn</h2>
+          <div id="turn-line"></div>
+          <div id="winner-line" class="warn"></div>
+        </div>
+
+        <div class="grid two stat-grid">
+          <div class="stat"><span>Player 1</span><strong id="clock0">00:00</strong></div>
+          <div class="stat"><span>Player 2</span><strong id="clock1">00:00</strong></div>
+          <div class="stat"><span>Remaining Path</span><strong id="remaining-path">0</strong></div>
+          <div class="stat"><span>Your Seat</span><strong id="seat-line">Spectator</strong></div>
+        </div>
+
+        <div>
+          <h2>Actions</h2>
+          <div class="mode-buttons">
+            <button id="mode-routes" type="button">Routes</button>
+            <button id="mode-entrench" type="button">Entrench</button>
+            <button id="mode-fortify" type="button">Fortify</button>
+          </div>
+          <div class="stack gap-8 top-8">
+            <button id="finish-route" type="button">Finish Route</button>
+            <button id="commit-routes" type="button">Commit Routes</button>
+            <button id="clear-draft" type="button">Clear Draft</button>
+            <button id="end-turn" type="button">End Turn</button>
+            <button id="resign" type="button">Resign</button>
+          </div>
+        </div>
+
+        <div>
+          <h2>Draft</h2>
+          <div id="draft-line" class="muted">No draft.</div>
+        </div>
+
+        <div>
+          <h2>Log</h2>
+          <div id="log" class="log-box"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    window.TOPOS_GAME_ID = "{{ game_id }}";
+  </script>
+  <script src="/static/game.js"></script>
+</body>
+</html>

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <div class="page two-col">
+    <section class="panel">
+      <h1>Topostrafe</h1>
+      <p class="muted">Create a public game, a private code game, or a bot game.</p>
+
+      <form id="create-form" class="stack gap-12">
+        <div class="grid two">
+          <label>
+            <span>Map Type</span>
+            <select id="map_type"></select>
+          </label>
+          <label>
+            <span>Start Band</span>
+            <input id="start_band" type="number" min="1" max="8" />
+          </label>
+          <label>
+            <span>Map Width</span>
+            <input id="map_width" type="number" min="5" max="80" />
+          </label>
+          <label>
+            <span>Map Height</span>
+            <input id="map_height" type="number" min="5" max="80" />
+          </label>
+          <label>
+            <span>Path Count / Turn</span>
+            <input id="path_count" type="number" min="1" max="128" />
+          </label>
+          <label>
+            <span>Max Link Length</span>
+            <input id="max_link_distance" type="number" min="1" max="64" />
+          </label>
+          <label>
+            <span>Cell Size</span>
+            <input id="cell_size" type="number" min="8" max="80" />
+          </label>
+          <label>
+            <span>Time Bank / Side (sec)</span>
+            <input id="time_bank_seconds" type="number" min="10" max="86400" />
+          </label>
+        </div>
+
+        <div class="grid two compact-checks">
+          <label class="check"><input id="time_limit_enabled" type="checkbox" /><span>Use Time Limit</span></label>
+          <label class="check"><input id="is_private" type="checkbox" /><span>Private Game</span></label>
+          <label class="check"><input id="vs_bot" type="checkbox" /><span>Play vs Bot</span></label>
+          <label class="check"><input id="retake_rule" type="checkbox" /><span>Retake Lock</span></label>
+          <label class="check"><input id="inherited_attack_rule" type="checkbox" /><span>Shared Attack Privilege</span></label>
+          <label class="check"><input id="show_unattackable_range_targets" type="checkbox" /><span>Show Unattackable Targets</span></label>
+          <label class="check"><input id="entrench_rule" type="checkbox" /><span>Entrench</span></label>
+          <label class="check"><input id="fortify_rule" type="checkbox" /><span>Fortify</span></label>
+          <label class="check"><input id="require_move_confirmation" type="checkbox" /><span>Require Move Confirmation</span></label>
+        </div>
+
+        <details>
+          <summary>Bot Weights</summary>
+          <div class="grid two bot-grid">
+            <label><span>Castle Survival</span><input id="bot_castle_survival" type="number" /></label>
+            <label><span>Castle Kill Threat</span><input id="bot_castle_kill_threat" type="number" /></label>
+            <label><span>Disconnect Enemy</span><input id="bot_disconnect_enemy" type="number" /></label>
+            <label><span>Avoid Disconnect</span><input id="bot_avoid_disconnect" type="number" /></label>
+            <label><span>Redundancy</span><input id="bot_redundancy" type="number" /></label>
+            <label><span>High Ground</span><input id="bot_high_ground" type="number" /></label>
+            <label><span>Mobility</span><input id="bot_mobility" type="number" /></label>
+            <label><span>Local Expansion</span><input id="bot_local_expansion" type="number" /></label>
+            <label><span>Forward Pressure</span><input id="bot_forward_pressure" type="number" /></label>
+            <label><span>Castle Protect</span><input id="bot_castle_protect" type="number" /></label>
+          </div>
+        </details>
+
+        <label>
+          <span>Private Join Code</span>
+          <input id="join_code" type="text" maxlength="16" placeholder="Optional. Leave blank to auto-generate." />
+        </label>
+
+        <label>
+          <span>Custom Map JSON</span>
+          <textarea id="custom_map_json" rows="8" placeholder='{"width":30,"height":30,"grid":[[5,...], ...]}'></textarea>
+        </label>
+        <label>
+          <span>Load Custom Map File</span>
+          <input id="custom_map_file" type="file" accept="application/json,.json" />
+        </label>
+
+        <div class="actions">
+          <button type="submit">Play</button>
+          <span id="create-status" class="muted"></span>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>Open Public Games</h2>
+      <form id="join-private-form" class="inline-form">
+        <input id="private_code" type="text" placeholder="Private code" />
+        <button type="submit">Join Private</button>
+      </form>
+      <div id="games-list" class="stack gap-8"></div>
+    </section>
+  </div>
+
+  <script>
+    window.TOPOS_DEFAULTS = {{ defaults_json | safe }};
+  </script>
+  <script src="/static/lobby.js"></script>
+</body>
+</html>
