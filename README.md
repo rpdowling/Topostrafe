@@ -1,6 +1,6 @@
 # Topostrafe Web
 
-Minimal FastAPI/WebSocket web wrapper for the current Topostrafe rules engine.
+Topography based strategy game
 
 ## Local run
 
