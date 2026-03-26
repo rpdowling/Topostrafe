@@ -345,17 +345,22 @@ class GameStore:
             if game.state.winner is not None:
                 return game.state.win_reason
 
+            auto_end_turn = False
             if t == "starter":
                 ok, msg = game.state.commit_starter(int(action["x"]), int(action["y"]))
+                auto_end_turn = ok
             elif t == "routes":
                 routes = [[(int(x), int(y)) for x, y in route] for route in action.get("routes", [])]
                 ok, msg = game.state.commit_routes(routes)
+                auto_end_turn = ok
             elif t == "fortify":
                 ok, msg = game.state.commit_fortify((int(action["x"]), int(action["y"])))
+                auto_end_turn = ok
             elif t == "entrench":
                 src = tuple(action["src"])
                 target = tuple(action["target"])
                 ok, msg = game.state.commit_entrench((int(src[0]), int(src[1])), (int(target[0]), int(target[1])))
+                auto_end_turn = ok
             elif t == "end_turn":
                 ok, msg = game.state.end_turn()
                 if ok:
@@ -365,6 +370,12 @@ class GameStore:
 
             if not ok:
                 raise ValueError(msg)
+
+            if auto_end_turn and game.state.winner is None:
+                ok2, msg2 = game.state.end_turn()
+                if ok2:
+                    self._start_next_turn(game)
+                    msg = f"{msg} {msg2}".strip()
 
             if game.state.winner is not None:
                 game.status = "finished"

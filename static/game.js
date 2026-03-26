@@ -17,6 +17,9 @@ let entrenchSource = null;
 let reconnectTimer = null;
 let pingTimer = null;
 let boardGeom = {cell: 20, ox: 10, oy: 10};
+let pointerDown = false;
+let pointerDragged = false;
+let suppressClick = false;
 
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
@@ -73,18 +76,19 @@ function clearDraft() {
 }
 
 function finishRoute() {
-  if (activeRoute.length < 2) return;
+  if (activeRoute.length < 2) return false;
   const dest = activeRoute[activeRoute.length - 1];
   if (pendingDestination && !sameCell(dest, pendingDestination)) {
     latestMessage = 'All routes this turn must end at the same node.';
     renderStatus();
-    return;
+    return false;
   }
   pendingRoutes.push(activeRoute.map(p => [p[0], p[1]]));
   pendingDestination = pendingDestination || [dest[0], dest[1]];
   activeRoute = [];
   updateDraftLine();
   draw();
+  return true;
 }
 
 function commitRoutes() {
@@ -174,6 +178,61 @@ function hitCell(evt) {
   return [gx, gy];
 }
 
+function interpolateCells(a, b) {
+  const cells = [[a[0], a[1]]];
+  let [x, y] = a;
+  while (x !== b[0]) {
+    x += b[0] > x ? 1 : -1;
+    cells.push([x, y]);
+  }
+  while (y !== b[1]) {
+    y += b[1] > y ? 1 : -1;
+    cells.push([x, y]);
+  }
+  return cells;
+}
+
+function requireConfirmation() {
+  return !!(latestState && latestState.settings && latestState.settings.require_move_confirmation);
+}
+
+function tryAutoConfirmDestination(cell) {
+  if (!pendingRoutes.length || activeRoute.length || requireConfirmation()) return false;
+  if (pendingDestination && sameCell(cell, pendingDestination)) {
+    commitRoutes();
+    return true;
+  }
+  return false;
+}
+
+function refreshActiveRoutePreview() {
+  updateDraftLine();
+  draw();
+}
+
+function extendActiveRouteTo(cell) {
+  if (!activeRoute.length || !cell) return false;
+  const last = activeRoute[activeRoute.length - 1];
+  if (sameCell(cell, last)) return false;
+  if (activeRoute.length > 1 && sameCell(cell, activeRoute[activeRoute.length - 2])) {
+    activeRoute.pop();
+    refreshActiveRoutePreview();
+    return true;
+  }
+  const stepPath = interpolateCells(last, cell);
+  let changed = false;
+  for (let i = 1; i < stepPath.length; i++) {
+    const step = stepPath[i];
+    const cur = activeRoute[activeRoute.length - 1];
+    if (!orthAdj(cur, step)) break;
+    if (activeRoute.some(p => sameCell(p, step))) break;
+    activeRoute.push(step);
+    changed = true;
+  }
+  if (changed) refreshActiveRoutePreview();
+  return changed;
+}
+
 function drawRoute(path, color, width = 4, dashed = false) {
   if (path.length < 2) return;
   ctx.save();
@@ -256,6 +315,10 @@ function draw() {
 }
 
 function onBoardClick(evt) {
+  if (suppressClick) {
+    suppressClick = false;
+    return;
+  }
   if (!latestState) return;
   const cell = hitCell(evt);
   if (!cell) return;
@@ -290,6 +353,8 @@ function onBoardClick(evt) {
     return;
   }
 
+  if (tryAutoConfirmDestination(cell)) return;
+
   const node = nodeAt(cell);
   if (!activeRoute.length) {
     if (node && node.owner === mySeat) {
@@ -300,18 +365,7 @@ function onBoardClick(evt) {
     return;
   }
 
-  const last = activeRoute[activeRoute.length - 1];
-  if (activeRoute.length > 1 && sameCell(cell, activeRoute[activeRoute.length - 2])) {
-    activeRoute.pop();
-    updateDraftLine();
-    draw();
-    return;
-  }
-  if (!orthAdj(last, cell)) return;
-  if (activeRoute.some(p => sameCell(p, cell))) return;
-  activeRoute.push(cell);
-  updateDraftLine();
-  draw();
+  extendActiveRouteTo(cell);
 }
 
 function applyState(state, message) {
@@ -320,6 +374,41 @@ function applyState(state, message) {
   renderStatus();
   updateDraftLine();
   draw();
+}
+
+
+function onBoardMouseDown(evt) {
+  pointerDown = true;
+  pointerDragged = false;
+  if (!latestState || !isMyTurn() || mode !== 'routes') return;
+  const cell = hitCell(evt);
+  if (!cell) return;
+  const mySeat = latestState.my_seat;
+  if (mySeat === null || !latestState.starter_placed[mySeat]) return;
+  if (!activeRoute.length) {
+    const node = nodeAt(cell);
+    if (node && node.owner === mySeat) {
+      activeRoute = [cell];
+      updateDraftLine();
+      draw();
+    }
+  }
+}
+
+function onBoardMouseMove(evt) {
+  if (!pointerDown || !latestState || !isMyTurn() || mode !== 'routes' || !activeRoute.length) return;
+  const cell = hitCell(evt);
+  if (!cell) return;
+  if (extendActiveRouteTo(cell)) pointerDragged = true;
+}
+
+function onBoardMouseUp() {
+  if (pointerDown && pointerDragged) {
+    suppressClick = true;
+    finishRoute();
+  }
+  pointerDown = false;
+  pointerDragged = false;
 }
 
 function connect() {
@@ -348,6 +437,10 @@ function connect() {
 }
 
 window.addEventListener('resize', resizeCanvas);
+canvas.addEventListener('mousedown', onBoardMouseDown);
+canvas.addEventListener('mousemove', onBoardMouseMove);
+canvas.addEventListener('mouseup', onBoardMouseUp);
+canvas.addEventListener('mouseleave', onBoardMouseUp);
 canvas.addEventListener('click', onBoardClick);
 el('mode-routes').onclick = () => setMode('routes');
 el('mode-entrench').onclick = () => setMode('entrench');
