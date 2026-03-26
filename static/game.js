@@ -20,6 +20,10 @@ let boardGeom = {cell: 20, ox: 10, oy: 10};
 let pointerDown = false;
 let pointerDragged = false;
 let suppressClick = false;
+let suppressClickTimer = null;
+let rangeCells = [];
+let rangeAnchor = null;
+let rangeColor = null;
 
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
@@ -27,7 +31,8 @@ const ctx = canvas.getContext('2d');
 function el(id) { return document.getElementById(id); }
 function sameCell(a, b) { return a && b && a[0] === b[0] && a[1] === b[1]; }
 function orthAdj(a, b) { return Math.abs(a[0]-b[0]) + Math.abs(a[1]-b[1]) === 1; }
-function diagAdj(a, b) { return a && b && a[0] !== b[0] || a[1] !== b[1] ? Math.max(Math.abs(a[0]-b[0]), Math.abs(a[1]-b[1])) === 1 : false; }
+function keyOf(cell) { return `${cell[0]},${cell[1]}`; }
+function parseKey(key) { const [x, y] = key.split(',').map(Number); return [x, y]; }
 
 function formatClock(seconds) {
   const s = Math.max(0, Math.floor(seconds));
@@ -56,14 +61,20 @@ function nodeAt(cell) {
   return latestState.nodes.find(n => n.x === cell[0] && n.y === cell[1]) || null;
 }
 
-function roadTouchesCell(cell) {
-  if (!latestState) return false;
-  return latestState.roads.some(r => r.path.some(p => p[0] === cell[0] && p[1] === cell[1]));
+function roadAt(cell) {
+  if (!latestState) return null;
+  return latestState.roads.find(r => r.path.slice(1, -1).some(p => p[0] === cell[0] && p[1] === cell[1])) || null;
 }
 
 function send(payload) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify(payload));
+}
+
+function clearRange() {
+  rangeCells = [];
+  rangeAnchor = null;
+  rangeColor = null;
 }
 
 function clearDraft() {
@@ -96,6 +107,7 @@ function commitRoutes() {
   if (!pendingRoutes.length) return;
   send({ type: 'routes', routes: pendingRoutes });
   clearDraft();
+  clearRange();
 }
 
 function updateDraftLine() {
@@ -233,6 +245,176 @@ function extendActiveRouteTo(cell) {
   return changed;
 }
 
+function mapElev(cell) {
+  return latestState.map.grid[cell[1]][cell[0]];
+}
+
+function neighbors4(cell) {
+  const out = [];
+  const [x, y] = cell;
+  if (x > 0) out.push([x - 1, y]);
+  if (x + 1 < latestState.map.width) out.push([x + 1, y]);
+  if (y > 0) out.push([x, y - 1]);
+  if (y + 1 < latestState.map.height) out.push([x, y + 1]);
+  return out;
+}
+
+function castlePos(owner) {
+  const node = latestState.nodes.find(n => n.owner === owner && n.starter);
+  return node ? [node.x, node.y] : null;
+}
+
+function ownerNodeSet(owner) {
+  const s = new Set();
+  for (const n of latestState.nodes) if (n.owner === owner) s.add(keyOf([n.x, n.y]));
+  return s;
+}
+
+function ownerGraph(owner) {
+  const nodes = ownerNodeSet(owner);
+  const adj = new Map();
+  for (const k of nodes) adj.set(k, new Set());
+  for (const k of nodes) {
+    const cell = parseKey(k);
+    for (const nxt of neighbors4(cell)) {
+      const nk = keyOf(nxt);
+      if (nodes.has(nk)) adj.get(k).add(nk);
+    }
+  }
+  for (const road of latestState.roads) {
+    if (road.owner !== owner) continue;
+    const a = keyOf(road.path[0]);
+    const b = keyOf(road.path[road.path.length - 1]);
+    if (adj.has(a) && adj.has(b)) {
+      adj.get(a).add(b);
+      adj.get(b).add(a);
+    }
+  }
+  return adj;
+}
+
+function connectedToCastle(owner) {
+  const castle = castlePos(owner);
+  if (!castle) return new Set();
+  const graph = ownerGraph(owner);
+  const start = keyOf(castle);
+  if (!graph.has(start)) return new Set();
+  const seen = new Set([start]);
+  const stack = [start];
+  while (stack.length) {
+    const cur = stack.pop();
+    for (const nxt of graph.get(cur) || []) {
+      if (!seen.has(nxt)) {
+        seen.add(nxt);
+        stack.push(nxt);
+      }
+    }
+  }
+  return seen;
+}
+
+function isConnectedToCastle(cell) {
+  const node = nodeAt(cell);
+  if (!node) return false;
+  return connectedToCastle(node.owner).has(keyOf(cell));
+}
+
+function roadIsConnectedToCastle(road) {
+  const connected = connectedToCastle(road.owner);
+  return connected.has(keyOf(road.path[0])) || connected.has(keyOf(road.path[road.path.length - 1]));
+}
+
+function attackPrivilegeElevation(owner) {
+  const connected = connectedToCastle(owner);
+  if (!connected.size) return 5;
+  let best = 5;
+  for (const k of connected) {
+    const elev = mapElev(parseKey(k));
+    if (elev < best) best = elev;
+  }
+  return best;
+}
+
+function attackElevationForSource(src) {
+  const node = nodeAt(src);
+  if (!node) return mapElev(src);
+  if (!latestState.settings.inherited_attack_rule) return mapElev(src);
+  if (!connectedToCastle(node.owner).has(keyOf(src))) return mapElev(src);
+  return attackPrivilegeElevation(node.owner);
+}
+
+function canAttackFrom(src, dst) {
+  return attackElevationForSource(src) < mapElev(dst);
+}
+
+function practicalRangeCells(src, radius, showUnattackableTargets) {
+  const node = nodeAt(src);
+  if (!node || radius <= 0) return [];
+  const minAllowed = Math.max(1, mapElev(src) - 1);
+  const seen = new Set([keyOf(src)]);
+  const reach = new Set();
+  const queue = [[src, 0]];
+  while (queue.length) {
+    const [cur, dist] = queue.shift();
+    if (dist >= radius) continue;
+    for (const nxt of neighbors4(cur)) {
+      const nk = keyOf(nxt);
+      if (seen.has(nk)) continue;
+      if (mapElev(nxt) < minAllowed) continue;
+      seen.add(nk);
+      const otherNode = nodeAt(nxt);
+      if (otherNode && !sameCell(nxt, src)) {
+        if (otherNode.owner === node.owner) {
+          reach.add(nk);
+        } else {
+          const protectedNode = isConnectedToCastle(nxt);
+          if (showUnattackableTargets || !protectedNode || canAttackFrom(src, nxt)) reach.add(nk);
+        }
+        continue;
+      }
+      const road = roadAt(nxt);
+      if (road) {
+        if (road.owner === node.owner) {
+          reach.add(nk);
+        } else {
+          const protectedRoad = roadIsConnectedToCastle(road);
+          if (showUnattackableTargets || !protectedRoad || canAttackFrom(src, nxt)) reach.add(nk);
+        }
+        continue;
+      }
+      reach.add(nk);
+      queue.push([nxt, dist + 1]);
+    }
+  }
+  return Array.from(reach, parseKey);
+}
+
+function ownRangeRadius() {
+  if (!latestState) return 0;
+  return Math.min(latestState.remaining_path, latestState.settings.max_link_distance);
+}
+
+function otherRangeRadius() {
+  if (!latestState) return 0;
+  return Math.min(latestState.settings.path_count, latestState.settings.max_link_distance);
+}
+
+function setRangeFromNode(cell) {
+  if (!latestState) {
+    clearRange();
+    return;
+  }
+  const node = nodeAt(cell);
+  if (!node) {
+    clearRange();
+    return;
+  }
+  const radius = node.owner === latestState.current_owner ? ownRangeRadius() : otherRangeRadius();
+  rangeAnchor = [cell[0], cell[1]];
+  rangeColor = node.owner === latestState.current_owner ? 'rgba(0,100,27,0.20)' : 'rgba(99,0,0,0.20)';
+  rangeCells = practicalRangeCells(cell, radius, !!latestState.settings.show_unattackable_range_targets);
+}
+
 function drawRoute(path, color, width = 4, dashed = false) {
   if (path.length < 2) return;
   ctx.save();
@@ -267,9 +449,22 @@ function draw() {
     }
   }
 
+  if (rangeCells.length) {
+    ctx.save();
+    for (const cell of rangeCells) {
+      ctx.fillStyle = rangeColor || 'rgba(255,255,255,0.16)';
+      ctx.fillRect(ox + cell[0] * s + 1, oy + cell[1] * s + 1, s - 2, s - 2);
+    }
+    if (rangeAnchor) {
+      ctx.fillStyle = 'rgba(255,255,255,0.22)';
+      ctx.fillRect(ox + rangeAnchor[0] * s + 1, oy + rangeAnchor[1] * s + 1, s - 2, s - 2);
+    }
+    ctx.restore();
+  }
+
   latestState.roads.forEach(road => drawRoute(road.path, PLAYER_COLORS[road.owner], Math.max(3, s * 0.18), false));
-  pendingRoutes.forEach(route => drawRoute(route, '#76d0ff', Math.max(3, s * 0.18), true));
-  if (activeRoute.length >= 2) drawRoute(activeRoute, '#00ffff', Math.max(3, s * 0.18), true);
+  pendingRoutes.forEach(route => drawRoute(route, '#101010', Math.max(3, s * 0.18), true));
+  if (activeRoute.length >= 2) drawRoute(activeRoute, '#111111', Math.max(3, s * 0.18), true);
 
   latestState.retake_locks.forEach(lock => {
     const [cx, cy] = cellCenter([lock.x, lock.y]);
@@ -292,17 +487,29 @@ function draw() {
     ctx.fillStyle = PLAYER_COLORS[node.owner];
     ctx.strokeStyle = PLAYER_OUTLINES[node.owner];
     ctx.lineWidth = Math.max(2, s * 0.11);
-    ctx.arc(cx, cy, Math.max(5, s * (node.starter ? 0.34 : 0.27)), 0, Math.PI * 2);
+    ctx.arc(cx, cy, Math.max(5, s * 0.34), 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     if (node.starter) {
       ctx.beginPath();
-      ctx.lineWidth = Math.max(1, s * 0.06);
-      ctx.arc(cx, cy, Math.max(6, s * 0.42), 0, Math.PI * 2);
-      ctx.stroke();
+      ctx.fillStyle = '#000000';
+      ctx.arc(cx, cy, Math.max(2, s * 0.10), 0, Math.PI * 2);
+      ctx.fill();
     }
     ctx.restore();
   });
+
+  if (pendingDestination) {
+    const [cx, cy] = cellCenter(pendingDestination);
+    ctx.save();
+    ctx.strokeStyle = '#101010';
+    ctx.lineWidth = Math.max(2, s * 0.08);
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(5, s * 0.34), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
 
   if (entrenchSource) {
     const [cx, cy] = cellCenter(entrenchSource);
@@ -324,6 +531,13 @@ function onBoardClick(evt) {
   if (!cell) return;
   const mySeat = latestState.my_seat;
   if (mySeat === null) return;
+
+  if (mode === 'routes') {
+    const clickedNode = nodeAt(cell);
+    if (clickedNode) setRangeFromNode(cell);
+    else clearRange();
+  }
+
   if (!latestState.starter_placed[mySeat] && isMyTurn()) {
     send({ type: 'starter', x: cell[0], y: cell[1] });
     return;
@@ -339,6 +553,7 @@ function onBoardClick(evt) {
     if (!entrenchSource) {
       if (node && node.owner === mySeat) {
         entrenchSource = cell;
+        setRangeFromNode(cell);
         updateDraftLine();
         draw();
       }
@@ -359,6 +574,7 @@ function onBoardClick(evt) {
   if (!activeRoute.length) {
     if (node && node.owner === mySeat) {
       activeRoute = [cell];
+      setRangeFromNode(cell);
       updateDraftLine();
       draw();
     }
@@ -371,11 +587,14 @@ function onBoardClick(evt) {
 function applyState(state, message) {
   latestState = state;
   latestMessage = message || latestMessage;
+  if (rangeAnchor) {
+    if (nodeAt(rangeAnchor)) setRangeFromNode(rangeAnchor);
+    else clearRange();
+  }
   renderStatus();
   updateDraftLine();
   draw();
 }
-
 
 function onBoardMouseDown(evt) {
   pointerDown = true;
@@ -389,6 +608,7 @@ function onBoardMouseDown(evt) {
     const node = nodeAt(cell);
     if (node && node.owner === mySeat) {
       activeRoute = [cell];
+      setRangeFromNode(cell);
       updateDraftLine();
       draw();
     }
@@ -405,6 +625,11 @@ function onBoardMouseMove(evt) {
 function onBoardMouseUp() {
   if (pointerDown && pointerDragged) {
     suppressClick = true;
+    if (suppressClickTimer) clearTimeout(suppressClickTimer);
+    suppressClickTimer = setTimeout(() => {
+      suppressClick = false;
+      suppressClickTimer = null;
+    }, 0);
     finishRoute();
   }
   pointerDown = false;
@@ -447,7 +672,7 @@ el('mode-entrench').onclick = () => setMode('entrench');
 el('mode-fortify').onclick = () => setMode('fortify');
 el('finish-route').onclick = finishRoute;
 el('commit-routes').onclick = commitRoutes;
-el('clear-draft').onclick = clearDraft;
+el('clear-draft').onclick = () => { clearDraft(); clearRange(); };
 el('end-turn').onclick = () => send({ type: 'end_turn' });
 el('resign').onclick = () => send({ type: 'resign' });
 setMode('routes');
