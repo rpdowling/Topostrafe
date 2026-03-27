@@ -510,30 +510,46 @@ class GameState:
         self.check_winner()
         return True, "Entrench complete."
 
+    def fortify_eligible_road_cells(self, road: Road):
+        if road is None:
+            return []
+        eligible = []
+        for pos in road.path[1:-1]:
+            cur = self.map.get(*pos)
+            if cur <= 1:
+                continue
+            new_val = cur - 1
+            if self.can_change_cell_to(pos, new_val):
+                eligible.append(pos)
+        return eligible
+
     def preview_fortify(self, pos):
         if self.winner is not None:
             return False, "Game over."
         if not self.settings.fortify_rule:
             return False, "Fortify is disabled."
-        if pos not in self.nodes or self.nodes[pos].owner != self.current_owner:
-            return False, "Select your own node."
-        if not self.can_build_from(pos, self.current_owner):
-            return False, "Cannot act from nodes disconnected from your castle."
-        cur = self.map.get(*pos)
-        if cur <= 1:
-            return False, "That node is already at the highest elevation."
-        new_val = cur - 1
-        if not self.can_change_cell_to(pos, new_val):
-            return False, "Fortify would violate the adjacent elevation rule."
-        return True, "Fortify ready. Confirm or click the node again."
+        road = self.road_at(pos)
+        if road is None:
+            return False, "Select one of your road squares to fortify that path."
+        if road.owner != self.current_owner:
+            return False, "Select one of your own paths."
+        if not self.road_is_connected_to_castle(road):
+            return False, "Cannot fortify a path disconnected from your castle."
+        eligible = self.fortify_eligible_road_cells(road)
+        if not eligible:
+            return False, "No road squares on that path can be raised without breaking the adjacent elevation rule."
+        return True, f"Fortify ready on {len(eligible)} road square{'s' if len(eligible) != 1 else ''}."
 
     def commit_fortify(self, pos):
         ok, msg = self.preview_fortify(pos)
         if not ok:
             return False, msg
-        self.map.set(pos[0], pos[1], self.map.get(*pos) - 1)
+        road = self.road_at(pos)
+        eligible = self.fortify_eligible_road_cells(road)
+        for cell in eligible:
+            self.map.set(cell[0], cell[1], self.map.get(*cell) - 1)
         self.check_winner()
-        return True, "Fortify complete."
+        return True, f"Fortify complete on {len(eligible)} road square{'s' if len(eligible) != 1 else ''}."
 
     def practical_range_cells(self, src, radius: int, show_unattackable_targets: bool = True):
         node = self.nodes.get(src)
