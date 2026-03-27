@@ -77,6 +77,7 @@ button:hover, .button-link:hover { background: var(--button-active); }
 .check input { width: auto; }
 .stack.gap-12 > * + * { margin-top: 12px; }
 .stack.gap-8 > * + * { margin-top: 8px; }
+.top-12 { margin-top: 12px; }
 .top-8 { margin-top: 8px; }
 .muted { color: var(--muted); }
 .warn { color: var(--warn); }
@@ -163,3 +164,28 @@ button:hover, .button-link:hover { background: var(--button-active); }
 .button-file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .button-file span { display: block; width: 100%; background: var(--button); color: var(--text); border: 1px solid #334154; border-radius: 8px; padding: 10px 12px; text-align: center; }
 .button-file:hover span { background: var(--button-active); }
+
+
+.elevation-legend {
+  border-top: 1px solid #2f3a47;
+  padding-top: 12px;
+}
+.legend-list {
+  display: grid;
+  gap: 8px;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.legend-swatch {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.18);
+  flex: 0 0 18px;
+}

@@ -24,6 +24,7 @@ let suppressClickTimer = null;
 let rangeCells = [];
 let rangeAnchor = null;
 let rangeColor = null;
+let previewValid = true;
 
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
@@ -66,6 +67,96 @@ function roadAt(cell) {
   return latestState.roads.find(r => r.path.slice(1, -1).some(p => p[0] === cell[0] && p[1] === cell[1])) || null;
 }
 
+function localPendingLength(extraRoute = null) {
+  let total = pendingRoutes.reduce((sum, route) => sum + Math.max(0, route.length - 1), 0);
+  if (extraRoute) total += Math.max(0, extraRoute.length - 1);
+  return total;
+}
+
+function localRemainingBudget(extraRoute = null) {
+  if (!latestState) return 0;
+  return latestState.remaining_path - localPendingLength(extraRoute);
+}
+
+function sourceAlreadyUsed(cell, extraRoutes = []) {
+  const key = keyOf(cell);
+  return [...pendingRoutes, ...extraRoutes].some(route => keyOf(route[0]) === key);
+}
+
+function evaluateRoutesLocal(routes) {
+  if (!latestState) return { ok: false, message: 'No state.' };
+  if (latestState.winner !== null) return { ok: false, message: 'Game over.' };
+  if (!routes.length) return { ok: false, message: 'No routes selected.' };
+  const mySeat = latestState.current_owner;
+  if (!latestState.starter_placed[mySeat]) return { ok: false, message: 'Place your starter first.' };
+
+  const dest = routes[0][routes[0].length - 1];
+  let totalLength = 0;
+  const sources = [];
+  const tempOccupied = new Set();
+  const connectedSources = connectedToCastle(mySeat);
+
+  for (const route of routes) {
+    if (!route || route.length < 2) return { ok: false, message: 'Route too short.' };
+    const src = route[0];
+    const srcNode = nodeAt(src);
+    if (!srcNode || srcNode.owner !== mySeat) return { ok: false, message: 'Every route must start on your own node.' };
+    if (!connectedSources.has(keyOf(src))) return { ok: false, message: 'Cannot build from nodes disconnected from your castle.' };
+    if (!sameCell(route[route.length - 1], dest)) return { ok: false, message: 'All routes this turn must end at the same node.' };
+    if (new Set(route.map(keyOf)).size !== route.length) return { ok: false, message: 'A route cannot revisit cells.' };
+    if (route.some(([x, y]) => x < 0 || y < 0 || x >= latestState.map.width || y >= latestState.map.height)) return { ok: false, message: 'Out of bounds.' };
+    for (let i = 0; i < route.length - 1; i++) {
+      if (Math.abs(route[i][0] - route[i + 1][0]) + Math.abs(route[i][1] - route[i + 1][1]) !== 1) {
+        return { ok: false, message: 'Route must move orthogonally one cell at a time.' };
+      }
+    }
+    if (!routeBuildAllowedLocal(src, route)) return { ok: false, message: 'Route and new node may only go to equal, lower, or one level higher terrain from the source.' };
+
+    const length = route.length - 1;
+    if (length > latestState.settings.max_link_distance) return { ok: false, message: `Max route length is ${latestState.settings.max_link_distance}.` };
+    totalLength += length;
+    sources.push(keyOf(src));
+
+    for (const pos of route.slice(1, -1)) {
+      if (nodeAt(pos)) return { ok: false, message: 'Intermediate cells cannot cross nodes.' };
+      if (roadAt(pos)) return { ok: false, message: 'Intermediate cells cannot cross roads.' };
+      const pk = keyOf(pos);
+      if (tempOccupied.has(pk)) return { ok: false, message: 'Pending routes cannot overlap except at the destination.' };
+      tempOccupied.add(pk);
+    }
+  }
+
+  if (new Set(sources).size !== sources.length) return { ok: false, message: 'Use each source node at most once this turn.' };
+  if (totalLength > latestState.remaining_path) return { ok: false, message: 'Not enough path remaining this turn.' };
+
+  const destNode = nodeAt(dest);
+  const destRoad = roadAt(dest);
+  if (destNode && destNode.owner !== mySeat) {
+    if (latestState.settings.retake_rule && latestState.retake_locks.some(lock => lock.blocked_owner === mySeat && lock.x === dest[0] && lock.y === dest[1])) {
+      return { ok: false, message: 'Retake blocked on that node this turn.' };
+    }
+    const protectedNode = isConnectedToCastle(dest);
+    if (protectedNode && !routes.some(route => canAttackFrom(route[0], dest))) {
+      return { ok: false, message: 'You must attack from a node at a higher elevation unless that group is disconnected from its castle.' };
+    }
+  } else if (destRoad && destRoad.owner !== mySeat) {
+    const protectedRoad = roadIsConnectedToCastle(destRoad);
+    if (protectedRoad && !routes.some(route => canAttackFrom(route[0], dest))) {
+      return { ok: false, message: 'You must attack that road section from a higher elevation unless that group is disconnected from its castle.' };
+    }
+  } else if (!destNode && !destRoad) {
+    // build is fine
+  }
+
+  return { ok: true, message: 'Ready. Confirm to commit.' };
+}
+
+function routeBuildAllowedLocal(src, route) {
+  const srcElev = mapElev(src);
+  const minAllowed = Math.max(1, srcElev - 1);
+  return route.slice(1).every(pos => mapElev(pos) >= minAllowed);
+}
+
 function send(payload) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify(payload));
@@ -82,22 +173,29 @@ function clearDraft() {
   pendingRoutes = [];
   pendingDestination = null;
   entrenchSource = null;
+  previewValid = true;
   updateDraftLine();
   draw();
 }
 
 function finishRoute() {
   if (activeRoute.length < 2) return false;
-  const dest = activeRoute[activeRoute.length - 1];
-  if (pendingDestination && !sameCell(dest, pendingDestination)) {
-    latestMessage = 'All routes this turn must end at the same node.';
+  const candidate = [...pendingRoutes, activeRoute.map(p => [p[0], p[1]])];
+  const check = evaluateRoutesLocal(candidate);
+  if (!check.ok) {
+    latestMessage = check.message;
+    previewValid = false;
     renderStatus();
+    draw();
     return false;
   }
+  const dest = activeRoute[activeRoute.length - 1];
   pendingRoutes.push(activeRoute.map(p => [p[0], p[1]]));
   pendingDestination = pendingDestination || [dest[0], dest[1]];
   activeRoute = [];
+  previewValid = true;
   updateDraftLine();
+  if (rangeAnchor && nodeAt(rangeAnchor)) setRangeFromNode(rangeAnchor);
   draw();
   return true;
 }
@@ -241,6 +339,11 @@ function tryAutoConfirmDestination(cell) {
 }
 
 function refreshActiveRoutePreview() {
+  if (activeRoute.length >= 2) {
+    previewValid = evaluateRoutesLocal([...pendingRoutes, activeRoute]).ok;
+  } else {
+    previewValid = true;
+  }
   updateDraftLine();
   draw();
 }
@@ -374,12 +477,12 @@ function canAttackFrom(src, dst) {
   return attackElevationForSource(src) < mapElev(dst);
 }
 
-function practicalRangeCells(src, radius, showUnattackableTargets) {
+function practicalRangeData(src, radius, showUnattackableTargets) {
   const node = nodeAt(src);
   if (!node || radius <= 0) return [];
   const minAllowed = Math.max(1, mapElev(src) - 1);
   const seen = new Set([keyOf(src)]);
-  const reach = new Set();
+  const reach = new Map();
   const queue = [[src, 0]];
   while (queue.length) {
     const [cur, dist] = queue.shift();
@@ -389,36 +492,41 @@ function practicalRangeCells(src, radius, showUnattackableTargets) {
       if (seen.has(nk)) continue;
       if (mapElev(nxt) < minAllowed) continue;
       seen.add(nk);
+      const nextDist = dist + 1;
       const otherNode = nodeAt(nxt);
       if (otherNode && !sameCell(nxt, src)) {
         if (otherNode.owner === node.owner) {
-          reach.add(nk);
+          reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextDist });
         } else {
           const protectedNode = isConnectedToCastle(nxt);
-          if (showUnattackableTargets || !protectedNode || canAttackFrom(src, nxt)) reach.add(nk);
+          if (showUnattackableTargets || !protectedNode || canAttackFrom(src, nxt)) reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextDist });
         }
         continue;
       }
       const road = roadAt(nxt);
       if (road) {
         if (road.owner === node.owner) {
-          reach.add(nk);
+          reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextDist });
         } else {
           const protectedRoad = roadIsConnectedToCastle(road);
-          if (showUnattackableTargets || !protectedRoad || canAttackFrom(src, nxt)) reach.add(nk);
+          if (showUnattackableTargets || !protectedRoad || canAttackFrom(src, nxt)) reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextDist });
         }
         continue;
       }
-      reach.add(nk);
-      queue.push([nxt, dist + 1]);
+      reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextDist });
+      queue.push([nxt, nextDist]);
     }
   }
-  return Array.from(reach, parseKey);
+  return Array.from(reach.values());
+}
+
+function practicalRangeCells(src, radius, showUnattackableTargets) {
+  return practicalRangeData(src, radius, showUnattackableTargets).map(item => item.cell);
 }
 
 function ownRangeRadius() {
   if (!latestState) return 0;
-  return Math.min(latestState.remaining_path, latestState.settings.max_link_distance);
+  return Math.min(Math.max(0, localRemainingBudget()), latestState.settings.max_link_distance);
 }
 
 function otherRangeRadius() {
@@ -436,10 +544,21 @@ function setRangeFromNode(cell) {
     clearRange();
     return;
   }
-  const radius = node.owner === latestState.current_owner ? ownRangeRadius() : otherRangeRadius();
+  const isOwnCurrentNode = node.owner === latestState.current_owner;
+  const radius = isOwnCurrentNode ? ownRangeRadius() : otherRangeRadius();
   rangeAnchor = [cell[0], cell[1]];
-  rangeColor = node.owner === latestState.current_owner ? 'rgba(0,100,27,0.20)' : 'rgba(99,0,0,0.20)';
-  rangeCells = practicalRangeCells(cell, radius, !!latestState.settings.show_unattackable_range_targets);
+  rangeColor = isOwnCurrentNode ? 'rgba(0,100,27,0.20)' : 'rgba(99,0,0,0.20)';
+  let data = practicalRangeData(cell, radius, !!latestState.settings.show_unattackable_range_targets);
+  if (isOwnCurrentNode && isMyTurn()) {
+    if (sourceAlreadyUsed(cell)) {
+      data = [];
+    } else if (pendingDestination) {
+      data = data.filter(item => sameCell(item.cell, pendingDestination));
+    }
+    const budget = Math.max(0, localRemainingBudget());
+    data = data.filter(item => item.dist <= budget);
+  }
+  rangeCells = data.map(item => item.cell);
 }
 
 function drawRoute(path, color, width = 4, dashed = false) {
@@ -491,7 +610,7 @@ function draw() {
 
   latestState.roads.forEach(road => drawRoute(road.path, PLAYER_COLORS[road.owner], Math.max(3, s * 0.18), false));
   pendingRoutes.forEach(route => drawRoute(route, '#101010', Math.max(3, s * 0.18), true));
-  if (activeRoute.length >= 2) drawRoute(activeRoute, '#111111', Math.max(3, s * 0.18), true);
+  if (activeRoute.length >= 2) drawRoute(activeRoute, previewValid ? '#111111' : '#ffffff', Math.max(3, s * 0.18), true);
 
   latestState.retake_locks.forEach(lock => {
     const [cx, cy] = cellCenter([lock.x, lock.y]);
@@ -618,6 +737,7 @@ function onBoardClick(evt) {
 function applyState(state, message) {
   latestState = state;
   latestMessage = message || latestMessage;
+  previewValid = true;
   if (rangeAnchor) {
     if (nodeAt(rangeAnchor)) setRangeFromNode(rangeAnchor);
     else clearRange();
