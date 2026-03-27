@@ -25,6 +25,7 @@ let rangeCells = [];
 let rangeAnchor = null;
 let rangeColor = null;
 let previewValid = true;
+let invalidPreviewPath = [];
 
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
@@ -174,6 +175,7 @@ function clearDraft() {
   pendingDestination = null;
   entrenchSource = null;
   previewValid = true;
+  invalidPreviewPath = [];
   updateDraftLine();
   draw();
 }
@@ -193,6 +195,7 @@ function finishRoute() {
   pendingRoutes.push(activeRoute.map(p => [p[0], p[1]]));
   pendingDestination = pendingDestination || [dest[0], dest[1]];
   activeRoute = [];
+  invalidPreviewPath = [];
   previewValid = true;
   updateDraftLine();
   if (rangeAnchor && nodeAt(rangeAnchor)) setRangeFromNode(rangeAnchor);
@@ -339,6 +342,7 @@ function tryAutoConfirmDestination(cell) {
 }
 
 function refreshActiveRoutePreview() {
+  invalidPreviewPath = [];
   if (activeRoute.length >= 2) {
     previewValid = evaluateRoutesLocal([...pendingRoutes, activeRoute]).ok;
   } else {
@@ -350,6 +354,7 @@ function refreshActiveRoutePreview() {
 
 function extendActiveRouteTo(cell) {
   if (!activeRoute.length || !cell) return false;
+  invalidPreviewPath = [];
   const last = activeRoute[activeRoute.length - 1];
   if (sameCell(cell, last)) return false;
   if (activeRoute.length > 1 && sameCell(cell, activeRoute[activeRoute.length - 2])) {
@@ -363,8 +368,25 @@ function extendActiveRouteTo(cell) {
     const step = stepPath[i];
     const cur = activeRoute[activeRoute.length - 1];
     if (!orthAdj(cur, step)) break;
-    if (activeRoute.some(p => sameCell(p, step))) break;
-    activeRoute.push(step);
+    if (activeRoute.some(p => sameCell(p, step))) {
+      invalidPreviewPath = [...activeRoute, [step[0], step[1]]];
+      previewValid = false;
+      updateDraftLine();
+      draw();
+      return false;
+    }
+    const candidate = [...activeRoute, [step[0], step[1]]];
+    const legality = evaluateRoutesLocal([...pendingRoutes, candidate]);
+    if (!legality.ok) {
+      invalidPreviewPath = candidate;
+      previewValid = false;
+      latestMessage = legality.message;
+      renderStatus();
+      updateDraftLine();
+      draw();
+      return false;
+    }
+    activeRoute.push([step[0], step[1]]);
     changed = true;
     if (activeRoute.length > 1) {
       const stepNode = nodeAt(step);
@@ -611,6 +633,7 @@ function draw() {
   latestState.roads.forEach(road => drawRoute(road.path, PLAYER_COLORS[road.owner], Math.max(3, s * 0.18), false));
   pendingRoutes.forEach(route => drawRoute(route, '#101010', Math.max(3, s * 0.18), true));
   if (activeRoute.length >= 2) drawRoute(activeRoute, previewValid ? '#111111' : '#ffffff', Math.max(3, s * 0.18), true);
+  if (invalidPreviewPath.length >= 2) drawRoute(invalidPreviewPath, '#ffffff', Math.max(4, s * 0.22), true);
 
   latestState.retake_locks.forEach(lock => {
     const [cx, cy] = cellCenter([lock.x, lock.y]);
@@ -738,6 +761,7 @@ function applyState(state, message) {
   latestState = state;
   latestMessage = message || latestMessage;
   previewValid = true;
+  invalidPreviewPath = [];
   if (rangeAnchor) {
     if (nodeAt(rangeAnchor)) setRangeFromNode(rangeAnchor);
     else clearRange();
