@@ -84,26 +84,31 @@ function sourceAlreadyUsed(cell, extraRoutes = []) {
   return [...pendingRoutes, ...extraRoutes].some(route => keyOf(route[0]) === key);
 }
 
-function evaluateRoutesLocal(routes) {
+function evaluateRoutesLocal(routes, options = {}) {
   if (!latestState) return { ok: false, message: 'No state.' };
   if (latestState.winner !== null) return { ok: false, message: 'Game over.' };
   if (!routes.length) return { ok: false, message: 'No routes selected.' };
   const mySeat = latestState.current_owner;
   if (!latestState.starter_placed[mySeat]) return { ok: false, message: 'Place your starter first.' };
 
-  const dest = routes[0][routes[0].length - 1];
+  const allowPartialLastRoute = !!options.allowPartialLastRoute;
+  const dest = pendingDestination ? [pendingDestination[0], pendingDestination[1]] : routes[0][routes[0].length - 1];
   let totalLength = 0;
   const sources = [];
   const tempOccupied = new Set();
   const connectedSources = connectedToCastle(mySeat);
+  let partialLastRoute = null;
 
-  for (const route of routes) {
+  for (let routeIndex = 0; routeIndex < routes.length; routeIndex++) {
+    const route = routes[routeIndex];
     if (!route || route.length < 2) return { ok: false, message: 'Route too short.' };
     const src = route[0];
     const srcNode = nodeAt(src);
     if (!srcNode || srcNode.owner !== mySeat) return { ok: false, message: 'Every route must start on your own node.' };
     if (!connectedSources.has(keyOf(src))) return { ok: false, message: 'Cannot build from nodes disconnected from your castle.' };
-    if (!sameCell(route[route.length - 1], dest)) return { ok: false, message: 'All routes this turn must end at the same node.' };
+    const routeDest = route[route.length - 1];
+    const isPartial = allowPartialLastRoute && routeIndex === routes.length - 1 && pendingDestination && !sameCell(routeDest, dest);
+    if (!isPartial && !sameCell(routeDest, dest)) return { ok: false, message: 'All routes this turn must end at the same node.' };
     if (new Set(route.map(keyOf)).size !== route.length) return { ok: false, message: 'A route cannot revisit cells.' };
     if (route.some(([x, y]) => x < 0 || y < 0 || x >= latestState.map.width || y >= latestState.map.height)) return { ok: false, message: 'Out of bounds.' };
     for (let i = 0; i < route.length - 1; i++) {
@@ -125,28 +130,36 @@ function evaluateRoutesLocal(routes) {
       if (tempOccupied.has(pk)) return { ok: false, message: 'Pending routes cannot overlap except at the destination.' };
       tempOccupied.add(pk);
     }
+
+    if (isPartial) partialLastRoute = route;
   }
 
   if (new Set(sources).size !== sources.length) return { ok: false, message: 'Use each source node at most once this turn.' };
   if (totalLength > latestState.remaining_path) return { ok: false, message: 'Not enough path remaining this turn.' };
 
-  const destNode = nodeAt(dest);
-  const destRoad = roadAt(dest);
-  if (destNode && destNode.owner !== mySeat) {
-    if (latestState.settings.retake_rule && latestState.retake_locks.some(lock => lock.blocked_owner === mySeat && lock.x === dest[0] && lock.y === dest[1])) {
-      return { ok: false, message: 'Retake blocked on that node this turn.' };
+  if (!partialLastRoute) {
+    const destNode = nodeAt(dest);
+    const destRoad = roadAt(dest);
+    if (destNode && destNode.owner !== mySeat) {
+      if (latestState.settings.retake_rule && latestState.retake_locks.some(lock => lock.blocked_owner === mySeat && lock.x === dest[0] && lock.y === dest[1])) {
+        return { ok: false, message: 'Retake blocked on that node this turn.' };
+      }
+      if (!routes.some(route => canAttackFrom(route[0], dest))) {
+        const protectedNode = isConnectedToCastle(dest);
+        if (protectedNode) {
+          return { ok: false, message: 'You must attack from a node at a higher elevation unless that group is disconnected from its castle.' };
+        }
+      }
+    } else if (destRoad && destRoad.owner !== mySeat) {
+      if (!routes.some(route => canAttackFrom(route[0], dest))) {
+        const protectedRoad = roadIsConnectedToCastle(destRoad);
+        if (protectedRoad) {
+          return { ok: false, message: 'You must attack that road section from a higher elevation unless that group is disconnected from its castle.' };
+        }
+      }
+    } else if (!destNode && !destRoad) {
+      // build is fine
     }
-    const protectedNode = isConnectedToCastle(dest);
-    if (protectedNode && !routes.some(route => canAttackFrom(route[0], dest))) {
-      return { ok: false, message: 'You must attack from a node at a higher elevation unless that group is disconnected from its castle.' };
-    }
-  } else if (destRoad && destRoad.owner !== mySeat) {
-    const protectedRoad = roadIsConnectedToCastle(destRoad);
-    if (protectedRoad && !routes.some(route => canAttackFrom(route[0], dest))) {
-      return { ok: false, message: 'You must attack that road section from a higher elevation unless that group is disconnected from its castle.' };
-    }
-  } else if (!destNode && !destRoad) {
-    // build is fine
   }
 
   return { ok: true, message: 'Ready. Confirm to commit.' };
@@ -344,7 +357,7 @@ function tryAutoConfirmDestination(cell) {
 function refreshActiveRoutePreview() {
   invalidPreviewPath = [];
   if (activeRoute.length >= 2) {
-    previewValid = evaluateRoutesLocal([...pendingRoutes, activeRoute]).ok;
+    previewValid = evaluateRoutesLocal([...pendingRoutes, activeRoute], { allowPartialLastRoute: true }).ok;
   } else {
     previewValid = true;
   }
@@ -376,7 +389,7 @@ function extendActiveRouteTo(cell) {
       return false;
     }
     const candidate = [...activeRoute, [step[0], step[1]]];
-    const legality = evaluateRoutesLocal([...pendingRoutes, candidate]);
+    const legality = evaluateRoutesLocal([...pendingRoutes, candidate], { allowPartialLastRoute: true });
     if (!legality.ok) {
       invalidPreviewPath = candidate;
       previewValid = false;
