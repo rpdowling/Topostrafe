@@ -27,8 +27,8 @@ body {
 }
 .game-layout {
   display: grid;
-  grid-template-columns: 300px minmax(680px, 1fr) 360px;
-  gap: 16px;
+  grid-template-columns: 220px minmax(820px, 1fr) 300px;
+  gap: 12px;
   align-items: start;
 }
 .editor-layout {
@@ -90,6 +90,7 @@ button:hover, .button-link:hover { background: var(--button-active); }
   border: 1px solid #2f3a47;
 }
 .sidebar { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
+.chat-panel, .sidebar { min-width: 0; }
 .mode-buttons { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
 .mode-buttons button.active { outline: 2px solid var(--accent); }
 .stat-grid { gap: 8px; }
@@ -138,8 +139,8 @@ button:hover, .button-link:hover { background: var(--button-active); }
   background: var(--input);
   border: 1px solid #334154;
   border-radius: 8px;
-  min-height: 420px;
-  max-height: calc(100vh - 180px);
+  min-height: 220px;
+  max-height: 320px;
   overflow: auto;
   padding: 8px;
 }
