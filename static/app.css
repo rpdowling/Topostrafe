@@ -27,7 +27,13 @@ body {
 }
 .game-layout {
   display: grid;
-  grid-template-columns: minmax(680px, 1fr) 360px;
+  grid-template-columns: 300px minmax(680px, 1fr) 360px;
+  gap: 16px;
+  align-items: start;
+}
+.editor-layout {
+  display: grid;
+  grid-template-columns: 360px minmax(680px, 1fr);
   gap: 16px;
   align-items: start;
 }
@@ -118,11 +124,41 @@ button:hover, .button-link:hover { background: var(--button-active); }
 }
 .game-row small { color: var(--muted); display: block; }
 @media (max-width: 1200px) {
-  .game-layout, .two-col { grid-template-columns: 1fr; }
-  .sidebar { position: static; max-height: none; }
-  #board { height: 70vh; }
+  .game-layout, .two-col, .editor-layout { grid-template-columns: 1fr; }
+  .sidebar, .chat-panel, .editor-sidebar { position: static; max-height: none; }
+  #board, #editor-board { height: 70vh; }
 }
 
 .rules-box { margin: 14px 0 18px; border: 1px solid #2f3a47; border-radius: 10px; padding: 10px 12px; background: #111821; }
 .rules-box summary { cursor: pointer; font-weight: 700; margin-bottom: 8px; }
 .rules-text { white-space: pre-wrap; margin: 10px 0 0; font: inherit; color: #b8c3cf; }
+
+.chat-panel { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
+.chat-box {
+  background: var(--input);
+  border: 1px solid #334154;
+  border-radius: 8px;
+  min-height: 420px;
+  max-height: calc(100vh - 180px);
+  overflow: auto;
+  padding: 8px;
+}
+.chat-entry { padding: 8px; border-radius: 8px; background: var(--panel2); margin-bottom: 8px; border: 1px solid #334154; }
+.chat-entry.owner-0 { border-left: 4px solid #ff00ff; }
+.chat-entry.owner-1 { border-left: 4px solid #ffffff; }
+.chat-name { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.chat-text { white-space: pre-wrap; word-break: break-word; }
+.editor-sidebar { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
+.editor-board-panel { min-height: calc(100vh - 32px); }
+#editor-board {
+  width: 100%;
+  height: calc(100vh - 64px);
+  min-height: 620px;
+  border-radius: 10px;
+  background: #0a0f14;
+  border: 1px solid #2f3a47;
+}
+.button-file { display: block; position: relative; }
+.button-file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.button-file span { display: block; width: 100%; background: var(--button); color: var(--text); border: 1px solid #334154; border-radius: 8px; padding: 10px 12px; text-align: center; }
+.button-file:hover span { background: var(--button-active); }

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <div class="page editor-layout">
+    <section class="panel editor-sidebar">
+      <div class="toolbar">
+        <strong>Map Editor</strong>
+        <a class="button-link" href="/">Back</a>
+      </div>
+
+      <div class="stack gap-12">
+        <div class="grid two">
+          <label><span>Base Map</span><select id="editor_map_type"></select></label>
+          <label><span>Brush</span><select id="editor_mode"><option value="raise">Raise</option><option value="lower">Lower</option></select></label>
+          <label><span>Width</span><input id="editor_width" type="number" min="5" max="80" /></label>
+          <label><span>Height</span><input id="editor_height" type="number" min="5" max="80" /></label>
+        </div>
+
+        <label class="check"><input id="ignore_adjacency" type="checkbox" /><span>Ignore adjacency</span></label>
+
+        <div class="grid two">
+          <button id="generate-map" type="button">Generate</button>
+          <button id="use-map" type="button">Use In Lobby</button>
+          <button id="download-map" type="button">Download JSON</button>
+          <label class="button-file"><input id="load-map-file" type="file" accept="application/json,.json" /><span>Load JSON</span></label>
+        </div>
+
+        <label>
+          <span>Map JSON</span>
+          <textarea id="editor_json" rows="8"></textarea>
+        </label>
+
+        <div id="editor-status" class="muted">Editor ready.</div>
+      </div>
+    </section>
+
+    <section class="panel editor-board-panel">
+      <canvas id="editor-board" width="1100" height="900"></canvas>
+    </section>
+  </div>
+
+  <script>
+    window.TOPOS_DEFAULTS = {{ defaults_json | safe }};
+  </script>
+  <script src="/static/editor.js"></script>
+</body>
+</html>

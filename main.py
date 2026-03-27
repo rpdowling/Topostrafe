@@ -12,7 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from store import GameStore
-from preset_maps import RULES_TEXT
+import engine_core as eng
+from preset_maps import RULES_TEXT, ALTAR_MAP
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -59,6 +60,36 @@ async def index(request: Request):
         },
     )
 
+
+
+
+@app.get("/editor", response_class=HTMLResponse)
+async def editor_page(request: Request):
+    defaults = store.defaults()
+    return templates.TemplateResponse(
+        request,
+        "editor.html",
+        {
+            "defaults_json": json.dumps(defaults),
+            "title": "Topostrafe Map Editor",
+        },
+    )
+
+
+@app.post("/api/generate-map")
+async def api_generate_map(payload: dict[str, Any]):
+    width = max(5, min(80, int(payload.get("width", 30))))
+    height = max(5, min(80, int(payload.get("height", 30))))
+    map_type = str(payload.get("map_type", "Noise") or "Noise")
+    if map_type == "Altar":
+        map_data = eng.MapData(ALTAR_MAP["width"], ALTAR_MAP["height"], [row[:] for row in ALTAR_MAP["grid"]])
+    else:
+        map_data = eng.MapGenerator.generate(width, height, map_type)
+    return JSONResponse({
+        "width": map_data.width,
+        "height": map_data.height,
+        "grid": [row[:] for row in map_data.grid],
+    })
 
 @app.get("/game/{game_id}", response_class=HTMLResponse)
 async def game_page(request: Request, game_id: str):
@@ -129,6 +160,14 @@ async def ws_game(websocket: WebSocket, game_id: str):
                 before = store.serialize(game_id, player_key)
                 await websocket.send_json({"type": "state", "state": before, "message": None})
                 await broadcast_state(game_id)
+                continue
+            if msg_type == "chat":
+                try:
+                    store.add_chat_message(game_id, player_key, data.get("text", ""))
+                    await broadcast_state(game_id)
+                except Exception as e:
+                    await websocket.send_json({"type": "error", "message": str(e)})
+                    await websocket.send_json({"type": "state", "state": store.serialize(game_id, player_key), "message": None})
                 continue
             try:
                 message = store.apply_action(game_id, player_key, data)

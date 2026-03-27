@@ -121,6 +121,20 @@ async function joinPrivate(evt) {
   }
 }
 
+
+function restoreEditorMap() {
+  const stored = localStorage.getItem('topos_custom_map_json');
+  if (!stored) return;
+  try {
+    const parsed = JSON.parse(stored);
+    if (!parsed || !Array.isArray(parsed.grid) || !parsed.width || !parsed.height) return;
+    el('custom_map_json').value = JSON.stringify(parsed);
+    el('map_type').value = 'Custom';
+    localStorage.removeItem('topos_custom_map_json');
+    setStatus('Loaded map from editor.');
+  } catch (_) {}
+}
+
 function hookFileLoader() {
   el('custom_map_file').addEventListener('change', async (evt) => {
     const file = evt.target.files?.[0];
@@ -131,6 +145,7 @@ function hookFileLoader() {
 }
 
 buildForm();
+restoreEditorMap();
 hookFileLoader();
 el('create-form').addEventListener('submit', createGame);
 el('join-private-form').addEventListener('submit', joinPrivate);

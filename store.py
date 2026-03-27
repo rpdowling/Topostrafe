@@ -52,6 +52,7 @@ class GameSession:
     turn_started_at: float | None = None
     time_remaining: dict[int, float] = field(default_factory=dict)
     log: list[str] = field(default_factory=list)
+    chat: list[dict[str, Any]] = field(default_factory=list)
     abandon_delete_at: float | None = None
 
     def __post_init__(self):
@@ -362,7 +363,24 @@ class GameStore:
                 "roads": roads,
                 "retake_locks": [{"x": x, "y": y, "blocked_owner": blocked} for (x, y), blocked in state.retake_locks.items()],
                 "log": game.log[-16:],
+                "chat": game.chat[-100:],
             }
+
+    def add_chat_message(self, game_id: str, player_key: str | None, text: str) -> None:
+        with self.lock:
+            self._prune_expired_open_games_locked()
+            game = self.games.get(game_id)
+            if game is None:
+                raise ValueError("Game not found.")
+            seat = game.seat_for_key(player_key)
+            if seat is None:
+                raise ValueError("Only players can chat.")
+            msg = str(text or "").strip()
+            if not msg:
+                return
+            if len(msg) > 500:
+                msg = msg[:500]
+            game.chat.append({"owner": seat, "name": game.owner_name(seat), "text": msg, "ts": time.time()})
 
     def _assert_player_turn(self, game: GameSession, player_key: str | None) -> int:
         seat = game.seat_for_key(player_key)

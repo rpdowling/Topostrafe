@@ -132,6 +132,28 @@ function renderLog() {
   });
 }
 
+function renderChat() {
+  const box = el('chat-box');
+  if (!box) return;
+  if (!latestState) { box.innerHTML = ''; return; }
+  const atBottom = Math.abs(box.scrollHeight - box.scrollTop - box.clientHeight) < 12;
+  box.innerHTML = '';
+  (latestState.chat || []).forEach((msg) => {
+    const row = document.createElement('div');
+    row.className = `chat-entry owner-${msg.owner}`;
+    const head = document.createElement('div');
+    head.className = 'chat-name';
+    head.textContent = msg.name;
+    const body = document.createElement('div');
+    body.className = 'chat-text';
+    body.textContent = msg.text;
+    row.appendChild(head);
+    row.appendChild(body);
+    box.appendChild(row);
+  });
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
 function renderStatus() {
   if (!latestState) return;
   el('turn-line').textContent = `${latestState.current_owner_name}'s turn`;
@@ -151,6 +173,7 @@ function renderStatus() {
     el('share-line').textContent = latestState.status === 'open' ? `Share this URL: ${window.location.href}` : '';
   }
   renderLog();
+  renderChat();
 }
 
 function resizeCanvas() {
@@ -686,3 +709,16 @@ el('resign').onclick = () => send({ type: 'resign' });
 setMode('routes');
 resizeCanvas();
 connect();
+
+function sendChat(evt) {
+  evt.preventDefault();
+  const input = el('chat-input');
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+  send({ type: 'chat', text });
+  input.value = '';
+}
+
+const chatForm = el('chat-form');
+if (chatForm) chatForm.addEventListener('submit', sendChat);
