@@ -67,24 +67,24 @@ function hitCell(evt) {
 }
 
 function drawReferenceDots() {
-  const centerX = Math.round((mapData.width - 1) / 2);
-  const centerY = Math.round((mapData.height - 1) / 2);
+  const centerVX = Math.round(mapData.width / 2);
+  const centerVY = Math.round(mapData.height / 2);
   const every = 5;
   ctx.save();
   ctx.fillStyle = '#000';
-  for (let y = centerY % every; y < mapData.height; y += every) {
-    for (let x = centerX % every; x < mapData.width; x += every) {
-      const cx = boardGeom.ox + x * boardGeom.cell + boardGeom.cell / 2;
-      const cy = boardGeom.oy + y * boardGeom.cell + boardGeom.cell / 2;
+  for (let vy = centerVY % every; vy <= mapData.height; vy += every) {
+    for (let vx = centerVX % every; vx <= mapData.width; vx += every) {
+      const cx = boardGeom.ox + vx * boardGeom.cell;
+      const cy = boardGeom.oy + vy * boardGeom.cell;
       ctx.beginPath();
-      ctx.arc(cx, cy, Math.max(2, boardGeom.cell * 0.08), 0, Math.PI * 2);
+      ctx.arc(cx, cy, Math.max(2, boardGeom.cell * 0.07), 0, Math.PI * 2);
       ctx.fill();
     }
   }
-  const ccx = boardGeom.ox + centerX * boardGeom.cell + boardGeom.cell / 2;
-  const ccy = boardGeom.oy + centerY * boardGeom.cell + boardGeom.cell / 2;
+  const ccx = boardGeom.ox + centerVX * boardGeom.cell;
+  const ccy = boardGeom.oy + centerVY * boardGeom.cell;
   ctx.beginPath();
-  ctx.arc(ccx, ccy, Math.max(3, boardGeom.cell * 0.12), 0, Math.PI * 2);
+  ctx.arc(ccx, ccy, Math.max(3, boardGeom.cell * 0.11), 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
