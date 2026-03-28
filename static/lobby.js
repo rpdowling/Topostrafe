@@ -38,6 +38,55 @@ function buildForm() {
   }
 }
 
+
+const SIZE_PRESETS = {
+  small: { map_width: 10, map_height: 10, max_link_distance: 5, path_count: 6 },
+  medium: { map_width: 20, map_height: 20, max_link_distance: 10, path_count: 11 },
+  large: { map_width: 30, map_height: 30, max_link_distance: 15, path_count: 16 },
+};
+
+function detectPreset() {
+  const width = Number(el('map_width').value);
+  const height = Number(el('map_height').value);
+  const link = Number(el('max_link_distance').value);
+  const paths = Number(el('path_count').value);
+  for (const [name, cfg] of Object.entries(SIZE_PRESETS)) {
+    if (width === cfg.map_width && height === cfg.map_height && link === cfg.max_link_distance && paths === cfg.path_count) return name;
+  }
+  return 'custom';
+}
+
+function applyPreset(name) {
+  const cfg = SIZE_PRESETS[name];
+  const custom = name === 'custom';
+  if (cfg) {
+    el('map_width').value = cfg.map_width;
+    el('map_height').value = cfg.map_height;
+    el('max_link_distance').value = cfg.max_link_distance;
+    el('path_count').value = cfg.path_count;
+  }
+  for (const id of ['map_width', 'map_height', 'max_link_distance', 'path_count']) {
+    el(id).disabled = !custom;
+  }
+  el('size_preset').value = custom ? 'custom' : name;
+}
+
+function hookSizePreset() {
+  const preset = el('size_preset');
+  preset.value = detectPreset();
+  applyPreset(preset.value);
+  preset.addEventListener('change', () => applyPreset(preset.value));
+  for (const id of ['map_width', 'map_height', 'max_link_distance', 'path_count']) {
+    el(id).addEventListener('input', () => {
+      const next = detectPreset();
+      if (preset.value !== 'custom') {
+        preset.value = next;
+        if (next !== 'custom') applyPreset(next);
+      }
+    });
+  }
+}
+
 function collectPayload() {
   const payload = {
     settings: {},
@@ -147,6 +196,7 @@ function hookFileLoader() {
 buildForm();
 restoreEditorMap();
 hookFileLoader();
+hookSizePreset();
 el('create-form').addEventListener('submit', createGame);
 el('join-private-form').addEventListener('submit', joinPrivate);
 refreshGames();

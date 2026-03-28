@@ -19,7 +19,7 @@
 
       <form id="create-form" class="stack gap-12">
         <div class="actions menu-actions">
-          <button type="submit">Play</button>
+          <button id="play-button" class="play-button" type="submit">Play</button>
           <a class="button-link" href="/editor">Map Editor</a>
           <span id="create-status" class="muted"></span>
         </div>
@@ -28,11 +28,21 @@
           <label>
             <span>Map</span>
             <select id="map_type"></select>
-            <small class="muted">Altar is the default preset map.</small>
+            <small class="muted">Three Mountains is the default preset map.</small>
           </label>
           <label>
             <span>Start Band</span>
             <input id="start_band" type="number" min="1" max="8" />
+          </label>
+          <label>
+            <span>Map Size Preset</span>
+            <select id="size_preset">
+              <option value="small">Small</option>
+              <option value="medium">Medium</option>
+              <option value="large">Large</option>
+              <option value="custom">Custom</option>
+            </select>
+            <small class="muted">Small 10x10 · link 5 · path 6. Medium 20x20 · link 10 · path 11. Large 30x30 · link 15 · path 16.</small>
           </label>
           <label>
             <span>Map Width</span>

@@ -20,7 +20,7 @@ ELEVATION_COLORS = {
 }
 PLAYER_COLORS = {0: "#ff00ff", 1: "#ffffff"}
 PLAYER_OUTLINES = {0: "#2b0030", 1: "#000000"}
-MAP_TYPES = ["Altar", "Noise", "Ridges", "Plains", "Three Mountains", "Mountains", "Custom"]
+MAP_TYPES = ["Three Mountains", "Altar", "Noise", "Ridges", "Plains", "Mountains", "Custom"]
 
 
 def _short_id(n: int = 8) -> str:
@@ -88,7 +88,7 @@ class GameStore:
 
     def defaults(self) -> dict[str, Any]:
         d = eng.GameSettings()
-        d.map_type = "Altar"
+        d.map_type = "Three Mountains"
         return {
             "settings": d.__dict__.copy(),
             "map_types": MAP_TYPES,
@@ -173,7 +173,7 @@ class GameStore:
         if data["map_type"] not in MAP_TYPES:
             data["map_type"] = base.map_type
         if not data["map_type"]:
-            data["map_type"] = "Altar"
+            data["map_type"] = "Three Mountains"
         data["map_width"] = max(5, min(80, int(data["map_width"])))
         data["map_height"] = max(5, min(80, int(data["map_height"])))
         data["cell_size"] = max(8, min(80, int(data["cell_size"])))

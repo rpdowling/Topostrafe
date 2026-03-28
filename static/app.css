@@ -197,3 +197,23 @@ button:hover, .button-link:hover { background: var(--button-active); }
 .legend-mid { background-color: #fee08b; }
 .legend-low { background-color: #91cf60; }
 .legend-lowest { background-color: #4575b4; }
+
+.play-button {
+  background: linear-gradient(180deg, #4d7fb0 0%, #35577a 100%);
+  border-color: #5f96cb;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255,255,255,0.12);
+}
+.play-button:hover {
+  background: linear-gradient(180deg, #5c90c4 0%, #3d648a 100%);
+}
+.menu-actions {
+  align-items: stretch;
+}
+.menu-actions > * {
+  flex: 0 0 auto;
+}
+.menu-actions #create-status {
+  align-self: center;
+}
