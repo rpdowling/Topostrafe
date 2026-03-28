@@ -61,7 +61,7 @@ function ensureAudio() {
   if (!audioCtx) {
     audioCtx = new AC();
     audioMaster = audioCtx.createGain();
-    audioMaster.gain.value = 0.18;
+    audioMaster.gain.value = 0.42;
     audioMaster.connect(audioCtx.destination);
     const length = Math.max(1, Math.floor(audioCtx.sampleRate * 1.25));
     noiseBuffer = audioCtx.createBuffer(1, length, audioCtx.sampleRate);
@@ -78,7 +78,20 @@ function ensureAudio() {
 }
 
 function unlockAudio() {
-  if (soundEnabled) ensureAudio();
+  if (!soundEnabled) return;
+  const ctx = ensureAudio();
+  if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
+}
+
+async function armAudio() {
+  const ctx = ensureAudio();
+  if (!ctx) return false;
+  try {
+    if (ctx.state === 'suspended') await ctx.resume();
+    return ctx.state === 'running';
+  } catch (_err) {
+    return false;
+  }
 }
 
 function burstNoise(t, duration, bandStart, bandEnd, gainPeak, q = 0.9) {
@@ -1019,11 +1032,14 @@ el('commit-routes').onclick = commitRoutes;
 el('clear-draft').onclick = () => { clearDraft(); clearRange(); };
 el('end-turn').onclick = () => send({ type: 'end_turn' });
 el('resign').onclick = () => send({ type: 'resign' });
-el('sound-toggle').onclick = () => {
+el('sound-toggle').onclick = async () => {
   soundEnabled = !soundEnabled;
   localStorage.setItem('topos_sound_enabled', soundEnabled ? '1' : '0');
-  if (soundEnabled) ensureAudio();
   updateSoundToggle();
+  if (soundEnabled) {
+    const ok = await armAudio();
+    if (ok) playGameSound('place');
+  }
 };
 updateSoundToggle();
 setMode('routes');
