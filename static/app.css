@@ -209,24 +209,27 @@ button:hover, .button-link:hover { background: var(--button-active); }
   background: linear-gradient(180deg, #5c90c4 0%, #3d648a 100%);
 }
 .menu-actions {
+  flex-direction: column;
   align-items: stretch;
 }
 .menu-actions > * {
   flex: 0 0 auto;
 }
 .menu-actions #create-status {
-  align-self: center;
+  align-self: flex-start;
 }
-
+.menu-secondary {
+  margin-top: 2px;
+}
 
 .custom-size-field { display: none; }
 .play-button {
-  background: linear-gradient(180deg, #72d98c 0%, #43b266 100%);
-  border-color: #66c683;
-  color: #0b2213;
+  background: linear-gradient(180deg, #8ff0a4 0%, #38b95f 100%);
+  border-color: #7add93;
+  color: #08210f;
   font-weight: 800;
-  box-shadow: 0 6px 18px rgba(67,178,102,0.25);
+  box-shadow: 0 8px 22px rgba(56,185,95,0.34);
 }
 .play-button:hover {
-  background: linear-gradient(180deg, #84e29a 0%, #4fc273 100%);
+  background: linear-gradient(180deg, #a1f4b2 0%, #46c86d 100%);
 }
