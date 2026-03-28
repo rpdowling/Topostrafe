@@ -217,3 +217,16 @@ button:hover, .button-link:hover { background: var(--button-active); }
 .menu-actions #create-status {
   align-self: center;
 }
+
+
+.custom-size-field { display: none; }
+.play-button {
+  background: linear-gradient(180deg, #72d98c 0%, #43b266 100%);
+  border-color: #66c683;
+  color: #0b2213;
+  font-weight: 800;
+  box-shadow: 0 6px 18px rgba(67,178,102,0.25);
+}
+.play-button:hover {
+  background: linear-gradient(180deg, #84e29a 0%, #4fc273 100%);
+}

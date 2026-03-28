@@ -68,6 +68,10 @@ function applyPreset(name) {
   for (const id of ['map_width', 'map_height', 'max_link_distance', 'path_count']) {
     el(id).disabled = !custom;
   }
+  for (const id of ['map_width_wrap', 'map_height_wrap', 'max_link_distance_wrap', 'path_count_wrap']) {
+    const node = el(id);
+    if (node) node.style.display = custom ? '' : 'none';
+  }
   el('size_preset').value = custom ? 'custom' : name;
 }
 
@@ -99,6 +103,14 @@ function collectPayload() {
     const node = el(key);
     if (!node) continue;
     payload.settings[key] = node.type === 'checkbox' ? node.checked : node.value;
+  }
+  const preset = el('size_preset').value;
+  if (preset !== 'custom' && SIZE_PRESETS[preset]) {
+    const cfg = SIZE_PRESETS[preset];
+    payload.settings.map_width = cfg.map_width;
+    payload.settings.map_height = cfg.map_height;
+    payload.settings.max_link_distance = cfg.max_link_distance;
+    payload.settings.path_count = cfg.path_count;
   }
   return payload;
 }
