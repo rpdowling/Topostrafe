@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=2" />
+  <link rel="stylesheet" href="/static/app.css?v=3" />
 </head>
 <body>
   <div class="page game-layout">
@@ -40,6 +40,7 @@
         </div>
         <div class="toolbar-right">
           <span id="status-line" class="muted">Connecting…</span>
+          <button id="sound-toggle" type="button" class="sound-toggle">Sound: On</button>
           <a class="button-link quit-link" href="/">Quit</a>
         </div>
       </div>
@@ -93,6 +94,6 @@
   <script>
     window.TOPOS_GAME_ID = "{{ game_id }}";
   </script>
-  <script src="/static/game.js"></script>
+  <script src="/static/game.js?v=1"></script>
 </body>
 </html>

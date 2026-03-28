@@ -26,6 +26,10 @@ let rangeAnchor = null;
 let rangeColor = null;
 let previewValid = true;
 let invalidPreviewPath = [];
+let soundEnabled = localStorage.getItem('topos_sound_enabled') !== '0';
+let audioCtx = null;
+let audioMaster = null;
+let noiseBuffer = null;
 
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
@@ -42,6 +46,156 @@ function formatClock(seconds) {
   const m = Math.floor((s % 3600) / 60);
   const sec = s % 60;
   return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+}
+
+function updateSoundToggle() {
+  const btn = el('sound-toggle');
+  if (!btn) return;
+  btn.textContent = `Sound: ${soundEnabled ? 'On' : 'Off'}`;
+  btn.classList.toggle('off', !soundEnabled);
+}
+
+function ensureAudio() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  if (!audioCtx) {
+    audioCtx = new AC();
+    audioMaster = audioCtx.createGain();
+    audioMaster.gain.value = 0.18;
+    audioMaster.connect(audioCtx.destination);
+    const length = Math.max(1, Math.floor(audioCtx.sampleRate * 1.25));
+    noiseBuffer = audioCtx.createBuffer(1, length, audioCtx.sampleRate);
+    const data = noiseBuffer.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < length; i++) {
+      const white = Math.random() * 2 - 1;
+      last = (last + 0.03 * white) / 1.03;
+      data[i] = last * 2.2;
+    }
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  return audioCtx;
+}
+
+function unlockAudio() {
+  if (soundEnabled) ensureAudio();
+}
+
+function burstNoise(t, duration, bandStart, bandEnd, gainPeak, q = 0.9) {
+  const ctx = ensureAudio();
+  if (!ctx || !audioMaster) return;
+  const src = ctx.createBufferSource();
+  src.buffer = noiseBuffer;
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.Q.value = q;
+  filter.frequency.setValueAtTime(Math.max(40, bandStart), t);
+  filter.frequency.exponentialRampToValueAtTime(Math.max(45, bandEnd), t + duration);
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, gainPeak), t + Math.min(0.02, duration * 0.35));
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+  src.connect(filter);
+  filter.connect(gain);
+  gain.connect(audioMaster);
+  src.start(t);
+  src.stop(t + duration + 0.02);
+}
+
+function sweepTone(t, duration, startFreq, endFreq, gainPeak, type = 'triangle') {
+  const ctx = ensureAudio();
+  if (!ctx || !audioMaster) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(Math.max(30, startFreq), t);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(31, endFreq), t + duration);
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, gainPeak), t + Math.min(0.018, duration * 0.3));
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+  osc.connect(gain);
+  gain.connect(audioMaster);
+  osc.start(t);
+  osc.stop(t + duration + 0.02);
+}
+
+function playGameSound(kind) {
+  if (!soundEnabled) return;
+  const ctx = ensureAudio();
+  if (!ctx || !audioMaster) return;
+  const t = ctx.currentTime + 0.01;
+  const wobble = 0.97 + Math.random() * 0.06;
+  if (kind === 'place') {
+    burstNoise(t, 0.11, 480 * wobble, 200 * wobble, 0.18, 0.8);
+    sweepTone(t, 0.10, 170 * wobble, 105 * wobble, 0.06, 'triangle');
+    return;
+  }
+  if (kind === 'attack-node') {
+    burstNoise(t, 0.14, 380 * wobble, 145 * wobble, 0.22, 0.85);
+    sweepTone(t, 0.15, 145 * wobble, 72 * wobble, 0.085, 'triangle');
+    return;
+  }
+  if (kind === 'attack-road') {
+    burstNoise(t, 0.09, 900 * wobble, 260 * wobble, 0.17, 0.75);
+    sweepTone(t, 0.08, 250 * wobble, 155 * wobble, 0.045, 'triangle');
+    return;
+  }
+  if (kind === 'fortify') {
+    burstNoise(t, 0.18, 220 * wobble, 760 * wobble, 0.16, 0.65);
+    sweepTone(t, 0.16, 150 * wobble, 285 * wobble, 0.05, 'sine');
+    return;
+  }
+  if (kind === 'entrench') {
+    burstNoise(t, 0.19, 700 * wobble, 190 * wobble, 0.15, 0.72);
+    sweepTone(t, 0.16, 260 * wobble, 125 * wobble, 0.048, 'sine');
+    return;
+  }
+  if (kind === 'king') {
+    burstNoise(t, 0.22, 1200 * wobble, 2400 * wobble, 0.10, 0.55);
+    sweepTone(t, 0.18, 420 * wobble, 980 * wobble, 0.05, 'triangle');
+    sweepTone(t + 0.015, 0.14, 630 * wobble, 1420 * wobble, 0.032, 'sine');
+  }
+}
+
+function roadCellOwnerMap(state) {
+  const map = new Map();
+  if (!state) return map;
+  for (const road of state.roads || []) {
+    for (const cell of road.path.slice(1, -1)) map.set(`${cell[0]},${cell[1]}`, road.owner);
+  }
+  return map;
+}
+
+function detectSoundEvent(prev, next) {
+  if (!prev || !next) return null;
+  const prevLastLog = (prev.log || [])[prev.log ? prev.log.length - 1 : -1] || '';
+  const nextLastLog = (next.log || [])[next.log ? next.log.length - 1 : -1] || '';
+  if (nextLastLog && nextLastLog !== prevLastLog) {
+    if (nextLastLog.startsWith('Fortify complete')) return 'fortify';
+    if (nextLastLog.startsWith('Entrench complete')) return 'entrench';
+  }
+  if (prev.winner === null && next.winner !== null && /castle was destroyed/i.test(next.win_reason || '')) return 'king';
+
+  const actor = prev.current_owner;
+  const prevNodes = new Map((prev.nodes || []).map(n => [`${n.x},${n.y}`, n]));
+  const nextNodes = new Map((next.nodes || []).map(n => [`${n.x},${n.y}`, n]));
+  let enemyNodeRemoved = 0;
+  let ownNodeAdded = 0;
+  for (const [k, n] of prevNodes.entries()) if (n.owner === 1 - actor && !nextNodes.has(k)) enemyNodeRemoved += 1;
+  for (const [k, n] of nextNodes.entries()) if (n.owner === actor && !prevNodes.has(k)) ownNodeAdded += 1;
+
+  const prevRoads = roadCellOwnerMap(prev);
+  const nextRoads = roadCellOwnerMap(next);
+  let enemyRoadRemoved = 0;
+  let ownRoadAdded = 0;
+  for (const [k, owner] of prevRoads.entries()) if (owner === 1 - actor && !nextRoads.has(k)) enemyRoadRemoved += 1;
+  for (const [k, owner] of nextRoads.entries()) if (owner === actor && !prevRoads.has(k)) ownRoadAdded += 1;
+
+  if (enemyNodeRemoved > 0) return 'attack-node';
+  if (enemyRoadRemoved > 0) return 'attack-road';
+  if ((prev.starter_placed || [])[actor] !== (next.starter_placed || [])[actor]) return 'place';
+  if (ownNodeAdded > 0 || ownRoadAdded > 0) return 'place';
+  return null;
 }
 
 function setMode(next) {
@@ -771,6 +925,7 @@ function onBoardClick(evt) {
 }
 
 function applyState(state, message) {
+  const soundEvent = detectSoundEvent(latestState, state);
   latestState = state;
   latestMessage = message || latestMessage;
   previewValid = true;
@@ -782,6 +937,7 @@ function applyState(state, message) {
   renderStatus();
   updateDraftLine();
   draw();
+  if (soundEvent) playGameSound(soundEvent);
 }
 
 function onBoardMouseDown(evt) {
@@ -863,6 +1019,13 @@ el('commit-routes').onclick = commitRoutes;
 el('clear-draft').onclick = () => { clearDraft(); clearRange(); };
 el('end-turn').onclick = () => send({ type: 'end_turn' });
 el('resign').onclick = () => send({ type: 'resign' });
+el('sound-toggle').onclick = () => {
+  soundEnabled = !soundEnabled;
+  localStorage.setItem('topos_sound_enabled', soundEnabled ? '1' : '0');
+  if (soundEnabled) ensureAudio();
+  updateSoundToggle();
+};
+updateSoundToggle();
 setMode('routes');
 resizeCanvas();
 connect();
@@ -879,3 +1042,5 @@ function sendChat(evt) {
 
 const chatForm = el('chat-form');
 if (chatForm) chatForm.addEventListener('submit', sendChat);
+window.addEventListener('pointerdown', unlockAudio, { passive: true });
+window.addEventListener('keydown', unlockAudio, { passive: true });
