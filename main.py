@@ -82,7 +82,7 @@ async def api_generate_map(payload: dict[str, Any]):
     height = max(5, min(80, int(payload.get("height", 30))))
     map_type = str(payload.get("map_type", "Noise") or "Noise")
     if map_type == "Altar":
-        map_data = eng.MapData(ALTAR_MAP["width"], ALTAR_MAP["height"], [row[:] for row in ALTAR_MAP["grid"]])
+        map_data = eng.MapGenerator.normalize_existing(ALTAR_MAP["width"], ALTAR_MAP["height"], [row[:] for row in ALTAR_MAP["grid"]])
     else:
         map_data = eng.MapGenerator.generate(width, height, map_type)
     return JSONResponse({

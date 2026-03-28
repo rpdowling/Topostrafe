@@ -195,7 +195,7 @@ class GameStore:
 
     def _map_from_payload(self, settings: eng.GameSettings, payload: dict[str, Any]) -> eng.MapData:
         if settings.map_type == "Altar":
-            return eng.MapData(int(ALTAR_MAP["width"]), int(ALTAR_MAP["height"]), [[int(c) for c in row] for row in ALTAR_MAP["grid"]])
+            return eng.MapGenerator.normalize_existing(int(ALTAR_MAP["width"]), int(ALTAR_MAP["height"]), [[int(c) for c in row] for row in ALTAR_MAP["grid"]])
         if settings.map_type == "Custom":
             raw = payload.get("custom_map_json", "")
             if not raw:
@@ -210,7 +210,7 @@ class GameStore:
                 for cell in row:
                     if int(cell) not in (1, 2, 3, 4, 5):
                         raise ValueError("Custom map cells must be integers 1..5.")
-            return eng.MapData(width, height, [[int(c) for c in row] for row in grid])
+            return eng.MapGenerator.normalize_existing(width, height, [[int(c) for c in row] for row in grid])
         return eng.MapGenerator.generate(settings.map_width, settings.map_height, settings.map_type)
 
     def create_game(self, payload: dict[str, Any]) -> dict[str, Any]:

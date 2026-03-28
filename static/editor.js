@@ -32,8 +32,25 @@ function forceLowestEdges(data) {
   }
 }
 
+function forceInnerBandGreenOrHigher(data) {
+  if (data.width < 3 || data.height < 3) return;
+  for (let x = 1; x < data.width - 1; x++) {
+    data.grid[1][x] = Math.min(data.grid[1][x], 4);
+    data.grid[data.height - 2][x] = Math.min(data.grid[data.height - 2][x], 4);
+  }
+  for (let y = 1; y < data.height - 1; y++) {
+    data.grid[y][1] = Math.min(data.grid[y][1], 4);
+    data.grid[y][data.width - 2] = Math.min(data.grid[y][data.width - 2], 4);
+  }
+}
+
+function normalizeBoundaryBands(data) {
+  forceLowestEdges(data);
+  forceInnerBandGreenOrHigher(data);
+}
+
 function syncJson() {
-  forceLowestEdges(mapData);
+  normalizeBoundaryBands(mapData);
   el('editor_json').value = JSON.stringify(mapData);
 }
 
@@ -145,7 +162,7 @@ function tryPaint(evt) {
     return;
   }
   mapData.grid[y][x] = next;
-  forceLowestEdges(mapData);
+  normalizeBoundaryBands(mapData);
   syncJson();
   draw();
   lastPainted = [x, y];
@@ -157,7 +174,7 @@ function loadFromJsonText() {
     const parsed = JSON.parse(el('editor_json').value);
     if (!parsed || !parsed.width || !parsed.height || !Array.isArray(parsed.grid)) throw new Error('Invalid map JSON.');
     mapData = deepCopyMap(parsed);
-    forceLowestEdges(mapData);
+    normalizeBoundaryBands(mapData);
     el('editor_width').value = mapData.width;
     el('editor_height').value = mapData.height;
     syncJson();
@@ -203,7 +220,7 @@ function restoreEditorMap() {
   if (!stored) return false;
   try {
     mapData = deepCopyMap(JSON.parse(stored));
-    forceLowestEdges(mapData);
+    normalizeBoundaryBands(mapData);
     el('editor_width').value = mapData.width;
     el('editor_height').value = mapData.height;
     syncJson();

@@ -127,10 +127,20 @@ class MapGenerator:
             grid = MapGenerator._generate_mountains(width, height)
         else:
             grid = MapGenerator._generate_noise(width, height)
-        MapGenerator._force_lowest_edges(grid)
+        MapGenerator._normalize_boundary_bands(grid)
         MapGenerator._enforce_adjacency(grid)
-        MapGenerator._force_lowest_edges(grid)
+        MapGenerator._normalize_boundary_bands(grid)
         return MapData(width, height, grid)
+
+    @staticmethod
+    def normalize_existing(width: int, height: int, grid) -> MapData:
+        fixed = [[clamp(int(cell), 1, 5) for cell in row[:width]] for row in grid[:height]]
+        if len(fixed) != height or any(len(row) != width for row in fixed):
+            raise ValueError("Map grid dimensions do not match width/height.")
+        MapGenerator._normalize_boundary_bands(fixed)
+        MapGenerator._enforce_adjacency(fixed)
+        MapGenerator._normalize_boundary_bands(fixed)
+        return MapData(width, height, fixed)
 
     @staticmethod
     def _generate_noise(width: int, height: int):
@@ -282,6 +292,24 @@ class MapGenerator:
             grid[y][w - 1] = 5
 
     @staticmethod
+    def _force_inner_band_green_or_higher(grid):
+        h = len(grid)
+        w = len(grid[0])
+        if w < 3 or h < 3:
+            return
+        for x in range(1, w - 1):
+            grid[1][x] = min(grid[1][x], 4)
+            grid[h - 2][x] = min(grid[h - 2][x], 4)
+        for y in range(1, h - 1):
+            grid[y][1] = min(grid[y][1], 4)
+            grid[y][w - 2] = min(grid[y][w - 2], 4)
+
+    @staticmethod
+    def _normalize_boundary_bands(grid):
+        MapGenerator._force_lowest_edges(grid)
+        MapGenerator._force_inner_band_green_or_higher(grid)
+
+    @staticmethod
     def _smooth_pass(grid, jitter=0):
         h = len(grid)
         w = len(grid[0])
@@ -305,7 +333,7 @@ class MapGenerator:
         w = len(grid[0])
         for _ in range(w * h * 2):
             changed = False
-            MapGenerator._force_lowest_edges(grid)
+            MapGenerator._normalize_boundary_bands(grid)
             for y in range(h):
                 for x in range(w):
                     if x == 0 or y == 0 or x == w - 1 or y == h - 1:
@@ -318,7 +346,7 @@ class MapGenerator:
                         grid[y][x] = nv
                         changed = True
             if not changed:
-                MapGenerator._force_lowest_edges(grid)
+                MapGenerator._normalize_boundary_bands(grid)
                 return
 
 @dataclass

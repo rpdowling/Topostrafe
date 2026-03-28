@@ -181,15 +181,12 @@ function roadCellOwnerMap(state) {
   return map;
 }
 
-function detectSoundEvent(prev, next, message) {
+function detectSoundEvent(prev, next, message, prevMessage) {
   if (!prev || !next) return null;
   const prevLastLog = (prev.log || [])[prev.log ? prev.log.length - 1 : -1] || '';
   const nextLastLog = (next.log || [])[next.log ? next.log.length - 1 : -1] || '';
   const note = String(message || nextLastLog || '').trim();
-  if (note) {
-    if (note.startsWith('Fortify complete')) return 'fortify';
-    if (note.startsWith('Entrench complete')) return 'entrench';
-  }
+  const priorNote = String(prevMessage || prevLastLog || '').trim();
   if (prev.winner === null && next.winner !== null && /castle was destroyed/i.test(next.win_reason || '')) return 'king';
 
   let mapDelta = 0;
@@ -204,9 +201,11 @@ function detectSoundEvent(prev, next, message) {
       if (prow[x] !== nrow[x]) mapDelta += 1;
     }
   }
-  if (mapDelta > 0) {
-    if (/fortify/i.test(note)) return 'fortify';
-    if (/entrench/i.test(note)) return 'entrench';
+  const actionNoteChanged = note && note !== priorNote;
+  const logAdvanced = nextLastLog && nextLastLog !== prevLastLog;
+  if ((mapDelta > 0 || actionNoteChanged || logAdvanced) && note) {
+    if (note.startsWith('Fortify complete')) return 'fortify';
+    if (note.startsWith('Entrench complete')) return 'entrench';
   }
 
   const actor = prev.current_owner;
@@ -958,7 +957,8 @@ function onBoardClick(evt) {
 }
 
 function applyState(state, message) {
-  const soundEvent = detectSoundEvent(latestState, state, message);
+  const prevMessage = latestMessage;
+  const soundEvent = detectSoundEvent(latestState, state, message, prevMessage);
   latestState = state;
   latestMessage = message || latestMessage;
   previewValid = true;
