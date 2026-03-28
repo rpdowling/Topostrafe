@@ -180,12 +180,16 @@ async def ws_game(websocket: WebSocket, game_id: str):
     except WebSocketDisconnect:
         pass
     finally:
+        disconnect_message = None
         async with conn_lock:
             connections[game_id].discard(websocket)
-            has_other_connections = bool(connections[game_id])
-            if not connections[game_id]:
+            remaining = list(connections.get(game_id, set()))
+            same_player_still_connected = any(ws.query_params.get("player") == player_key for ws in remaining)
+            if not remaining:
                 connections.pop(game_id, None)
-        store.note_connection_closed(game_id, player_key, has_other_connections)
+        disconnect_message = store.note_connection_closed(game_id, player_key, same_player_still_connected)
+        if disconnect_message is not None:
+            await broadcast_state(game_id, disconnect_message)
 
 
 if __name__ == "__main__":

@@ -80,7 +80,6 @@ class GameSession:
 
 
 class GameStore:
-    OPEN_GAME_ABANDON_GRACE_SECONDS = 10.0
 
     def __init__(self):
         self.games: dict[str, GameSession] = {}
@@ -125,17 +124,28 @@ class GameStore:
             if player_key is not None and game.seat_for_key(player_key) is not None:
                 game.abandon_delete_at = None
 
-    def note_connection_closed(self, game_id: str, player_key: str | None, has_other_connections: bool):
+    def note_connection_closed(self, game_id: str, player_key: str | None, same_player_still_connected: bool) -> str | None:
         with self.lock:
             self._prune_expired_open_games_locked()
             game = self.games.get(game_id)
             if game is None:
-                return
-            if has_other_connections:
-                return
+                return None
+            if same_player_still_connected:
+                return None
             seat = game.seat_for_key(player_key)
+            if seat is None:
+                return None
             if seat == 0 and game.status == "open" and not game.vs_bot and game.seat_keys[1] is None:
-                game.abandon_delete_at = time.time() + self.OPEN_GAME_ABANDON_GRACE_SECONDS
+                self.games.pop(game_id, None)
+                return None
+            if game.status == "active" and game.state.winner is None:
+                game.state.players[seat].resigned = True
+                game.state.check_winner()
+                game.status = "finished"
+                msg = f"{game.owner_name(seat)} resigned."
+                game.log.append(msg)
+                return msg
+            return None
 
     def list_public_games(self) -> list[dict[str, Any]]:
         with self.lock:

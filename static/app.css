@@ -233,3 +233,14 @@ button:hover, .button-link:hover { background: var(--button-active); }
 .play-button:hover {
   background: linear-gradient(180deg, #a1f4b2 0%, #46c86d 100%);
 }
+
+
+.quit-link {
+  background: linear-gradient(180deg, #f08f8f 0%, #c53c3c 100%);
+  border-color: #df7a7a;
+  color: #2a0808;
+  font-weight: 700;
+}
+.quit-link:hover {
+  background: linear-gradient(180deg, #f5a1a1 0%, #d34a4a 100%);
+}
