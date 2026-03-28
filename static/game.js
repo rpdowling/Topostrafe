@@ -61,7 +61,7 @@ function ensureAudio() {
   if (!audioCtx) {
     audioCtx = new AC();
     audioMaster = audioCtx.createGain();
-    audioMaster.gain.value = 0.42;
+    audioMaster.gain.value = 0.52;
     audioMaster.connect(audioCtx.destination);
     const length = Math.max(1, Math.floor(audioCtx.sampleRate * 1.25));
     noiseBuffer = audioCtx.createBuffer(1, length, audioCtx.sampleRate);
@@ -144,23 +144,25 @@ function playGameSound(kind) {
     return;
   }
   if (kind === 'attack-node') {
-    burstNoise(t, 0.14, 380 * wobble, 145 * wobble, 0.22, 0.85);
-    sweepTone(t, 0.15, 145 * wobble, 72 * wobble, 0.085, 'triangle');
+    burstNoise(t, 0.12, 520 * wobble, 180 * wobble, 0.22, 0.8);
+    sweepTone(t, 0.11, 190 * wobble, 96 * wobble, 0.075, 'triangle');
     return;
   }
   if (kind === 'attack-road') {
-    burstNoise(t, 0.09, 900 * wobble, 260 * wobble, 0.17, 0.75);
-    sweepTone(t, 0.08, 250 * wobble, 155 * wobble, 0.045, 'triangle');
+    burstNoise(t, 0.085, 1150 * wobble, 340 * wobble, 0.18, 0.72);
+    sweepTone(t, 0.075, 320 * wobble, 185 * wobble, 0.05, 'triangle');
     return;
   }
   if (kind === 'fortify') {
-    burstNoise(t, 0.18, 220 * wobble, 760 * wobble, 0.16, 0.65);
-    sweepTone(t, 0.16, 150 * wobble, 285 * wobble, 0.05, 'sine');
+    burstNoise(t, 0.17, 260 * wobble, 980 * wobble, 0.18, 0.58);
+    sweepTone(t, 0.15, 165 * wobble, 345 * wobble, 0.06, 'sine');
+    burstNoise(t + 0.028, 0.08, 420 * wobble, 1280 * wobble, 0.065, 0.5);
     return;
   }
   if (kind === 'entrench') {
-    burstNoise(t, 0.19, 700 * wobble, 190 * wobble, 0.15, 0.72);
-    sweepTone(t, 0.16, 260 * wobble, 125 * wobble, 0.048, 'sine');
+    burstNoise(t, 0.18, 820 * wobble, 230 * wobble, 0.18, 0.66);
+    sweepTone(t, 0.15, 300 * wobble, 140 * wobble, 0.058, 'sine');
+    burstNoise(t + 0.024, 0.075, 560 * wobble, 210 * wobble, 0.06, 0.6);
     return;
   }
   if (kind === 'king') {
@@ -179,15 +181,33 @@ function roadCellOwnerMap(state) {
   return map;
 }
 
-function detectSoundEvent(prev, next) {
+function detectSoundEvent(prev, next, message) {
   if (!prev || !next) return null;
   const prevLastLog = (prev.log || [])[prev.log ? prev.log.length - 1 : -1] || '';
   const nextLastLog = (next.log || [])[next.log ? next.log.length - 1 : -1] || '';
-  if (nextLastLog && nextLastLog !== prevLastLog) {
-    if (nextLastLog.startsWith('Fortify complete')) return 'fortify';
-    if (nextLastLog.startsWith('Entrench complete')) return 'entrench';
+  const note = String(message || nextLastLog || '').trim();
+  if (note) {
+    if (note.startsWith('Fortify complete')) return 'fortify';
+    if (note.startsWith('Entrench complete')) return 'entrench';
   }
   if (prev.winner === null && next.winner !== null && /castle was destroyed/i.test(next.win_reason || '')) return 'king';
+
+  let mapDelta = 0;
+  const prevGrid = prev.map && prev.map.grid ? prev.map.grid : [];
+  const nextGrid = next.map && next.map.grid ? next.map.grid : [];
+  const h = Math.min(prevGrid.length, nextGrid.length);
+  for (let y = 0; y < h; y++) {
+    const prow = prevGrid[y] || [];
+    const nrow = nextGrid[y] || [];
+    const w = Math.min(prow.length, nrow.length);
+    for (let x = 0; x < w; x++) {
+      if (prow[x] !== nrow[x]) mapDelta += 1;
+    }
+  }
+  if (mapDelta > 0) {
+    if (/fortify/i.test(note)) return 'fortify';
+    if (/entrench/i.test(note)) return 'entrench';
+  }
 
   const actor = prev.current_owner;
   const prevNodes = new Map((prev.nodes || []).map(n => [`${n.x},${n.y}`, n]));
@@ -938,7 +958,7 @@ function onBoardClick(evt) {
 }
 
 function applyState(state, message) {
-  const soundEvent = detectSoundEvent(latestState, state);
+  const soundEvent = detectSoundEvent(latestState, state, message);
   latestState = state;
   latestMessage = message || latestMessage;
   previewValid = true;
