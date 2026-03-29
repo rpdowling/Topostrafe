@@ -49,6 +49,11 @@ function maxRouteSteps() {
   return Math.max(0, Number(latestState.settings.max_link_distance || 0));
 }
 
+function maxSingleLinkCost() {
+  if (!latestState) return 0;
+  return Math.max(0, Number(latestState.settings.max_link_distance || 0));
+}
+
 function formatClock(seconds) {
   const s = Math.max(0, Math.floor(seconds));
   const h = Math.floor(s / 3600);
