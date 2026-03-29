@@ -507,6 +507,9 @@ class GameState:
     def route_traversal_cost(self, route: list) -> int:
         return sum(self.traversal_cost_for_cell(pos) for pos in route[1:])
 
+    def max_route_steps(self) -> int:
+        return max(0, int(self.settings.max_link_distance) - 1)
+
     def can_change_cell_to(self, pos, new_val: int) -> bool:
         x, y = pos
         if not self.map.in_bounds(x, y):
@@ -602,7 +605,7 @@ class GameState:
             best_spent, best_steps = best.get(cur, (10**9, 10**9))
             if spent > best_spent or (spent == best_spent and steps > best_steps):
                 continue
-            if steps >= self.settings.max_link_distance:
+            if steps >= self.max_route_steps():
                 continue
             for nxt in valid_neighbors4(cur[0], cur[1], self.map.width, self.map.height):
                 if self.map.get(*nxt) < min_allowed:
@@ -704,7 +707,7 @@ class GameState:
                 return False, "Route and new node may only go to equal, lower, or one level higher terrain from the source.", None
 
             length = len(route) - 1
-            if length > self.settings.max_link_distance:
+            if length >= self.settings.max_link_distance:
                 return False, f"Max route length is {self.settings.max_link_distance}.", None
             total_cost += self.route_traversal_cost(route)
             sources.append(src)
@@ -979,7 +982,7 @@ class HeuristicBot:
     def generate_candidates(self, state: GameState):
         owner = self.owner
         opponent = 1 - owner
-        max_len = min(state.remaining_path, state.settings.max_link_distance, 8)
+        max_len = min(state.remaining_path, state.max_route_steps(), 8)
         if max_len <= 0:
             return []
         connected_all = list(state.connected_to_castle(owner))
@@ -1281,7 +1284,7 @@ class HeuristicBot:
         enemy_nodes = state.connected_to_castle(enemy)
         enemy_pressure = 0
         for pos in enemy_nodes:
-            if manhattan(pos, castle) <= state.settings.max_link_distance and state.can_attack_from(pos, castle):
+            if manhattan(pos, castle) < state.settings.max_link_distance and state.can_attack_from(pos, castle):
                 enemy_pressure += max(1, 4 - min(3, manhattan(pos, castle)))
         return 3.0 * castle_degree + 4.0 * adjacent_nodes - 5.0 * enemy_pressure
 
@@ -1305,8 +1308,8 @@ class HeuristicBot:
         total = 0.0
         for pos in state.connected_to_castle(owner):
             d = manhattan(pos, enemy_castle)
-            if d <= state.settings.max_link_distance and state.can_attack_from(pos, enemy_castle):
-                total += max(1, state.settings.max_link_distance + 1 - d)
+            if d < state.settings.max_link_distance and state.can_attack_from(pos, enemy_castle):
+                total += max(1, state.settings.max_link_distance - d)
         return total
 
     def redundancy_score(self, state: GameState, owner: int):

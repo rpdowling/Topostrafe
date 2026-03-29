@@ -44,6 +44,11 @@ function traversalCostForElevation(elev) { return ({5:2, 4:1, 3:2, 2:2, 1:3}[Num
 function traversalCostForCell(cell) { return traversalCostForElevation(mapElev(cell)); }
 function routeTraversalCost(route) { return route.slice(1).reduce((sum, cell) => sum + traversalCostForCell(cell), 0); }
 
+function maxRouteSteps() {
+  if (!latestState) return 0;
+  return Math.max(0, Number(latestState.settings.max_link_distance || 0) - 1);
+}
+
 function formatClock(seconds) {
   const s = Math.max(0, Math.floor(seconds));
   const h = Math.floor(s / 3600);
@@ -309,7 +314,7 @@ function evaluateRoutesLocal(routes, options = {}) {
     if (!routeBuildAllowedLocal(src, route)) return { ok: false, message: 'Route and new node may only go to equal, lower, or one level higher terrain from the source.' };
 
     const length = route.length - 1;
-    if (length > latestState.settings.max_link_distance) return { ok: false, message: `Max route length is ${latestState.settings.max_link_distance}.` };
+    if (length >= latestState.settings.max_link_distance) return { ok: false, message: `Max route length is ${latestState.settings.max_link_distance}.` };
     totalCost += routeTraversalCost(route);
     sources.push(keyOf(src));
 
@@ -713,7 +718,7 @@ function practicalRangeData(src, radius, showUnattackableTargets) {
     const [cur, spent, steps] = queue.shift();
     const curBest = best.get(keyOf(cur));
     if (!curBest || spent > curBest.cost || (spent === curBest.cost && steps > curBest.steps)) continue;
-    if (steps >= latestState.settings.max_link_distance) continue;
+    if (steps >= maxRouteSteps()) continue;
     for (const nxt of neighbors4(cur)) {
       const nk = keyOf(nxt);
       if (mapElev(nxt) < minAllowed) continue;
