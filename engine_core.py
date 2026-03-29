@@ -507,6 +507,9 @@ class GameState:
     def route_traversal_cost(self, route: list) -> int:
         return sum(self.traversal_cost_for_cell(pos) for pos in route[1:])
 
+    def max_single_link_cost(self) -> int:
+        return max(0, int(self.settings.max_link_distance))
+
     def max_route_steps(self) -> int:
         return max(0, int(self.settings.max_link_distance))
 
@@ -707,8 +710,8 @@ class GameState:
                 return False, "Route and new node may only go to equal, lower, or one level higher terrain from the source.", None
 
             route_cost = self.route_traversal_cost(route)
-            if route_cost > self.settings.max_link_distance:
-                return False, f"Max single link traversal cost is {self.settings.max_link_distance}.", None
+            if route_cost > self.max_single_link_cost():
+                return False, f"Max single link traversal cost is {self.max_single_link_cost()}.", None
             total_cost += route_cost
             sources.append(src)
 

@@ -314,7 +314,7 @@ function evaluateRoutesLocal(routes, options = {}) {
     if (!routeBuildAllowedLocal(src, route)) return { ok: false, message: 'Route and new node may only go to equal, lower, or one level higher terrain from the source.' };
 
     const routeCost = routeTraversalCost(route);
-    if (routeCost > latestState.settings.max_link_distance) return { ok: false, message: `Max single link traversal cost is ${latestState.settings.max_link_distance}.` };
+    if (routeCost > maxSingleLinkCost()) return { ok: false, message: `Max single link traversal cost is ${maxSingleLinkCost()}.` };
     totalCost += routeCost;
     sources.push(keyOf(src));
 
@@ -584,6 +584,15 @@ function extendActiveRouteTo(cell) {
       return false;
     }
     const candidate = [...activeRoute, [step[0], step[1]]];
+    if (routeTraversalCost(candidate) > maxSingleLinkCost()) {
+      invalidPreviewPath = candidate;
+      previewValid = false;
+      latestMessage = `Max single link traversal cost is ${maxSingleLinkCost()}.`;
+      renderStatus();
+      updateDraftLine();
+      draw();
+      return false;
+    }
     const legality = evaluateRoutesLocal([...pendingRoutes, candidate], { allowPartialLastRoute: true });
     if (!legality.ok) {
       invalidPreviewPath = candidate;
@@ -761,7 +770,7 @@ function practicalRangeCells(src, radius, showUnattackableTargets) {
 
 function ownRangeRadius() {
   if (!latestState) return 0;
-  return Math.max(0, Math.min(localRemainingBudget(), Number(latestState.settings.max_link_distance || 0)));
+  return Math.max(0, Math.min(localRemainingBudget(), maxSingleLinkCost()));
 }
 
 function otherRangeRadius() {
