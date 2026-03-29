@@ -1203,11 +1203,21 @@ function draw() {
   }
 
   if (entrenchSource) {
-    const [cx, cy] = cellCenter(entrenchSource);
     ctx.save();
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = Math.max(2, s * 0.08);
-    ctx.strokeRect(cx - s * 0.35, cy - s * 0.35, s * 0.7, s * 0.7);
+    ctx.lineWidth = Math.max(2, s * 0.07);
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const tx = entrenchSource[0] + dx;
+        const ty = entrenchSource[1] + dy;
+        if (!inBounds(tx, ty)) continue;
+        const [cx, cy] = cellCenter([tx, ty]);
+        ctx.fillStyle = 'rgba(0,0,0,0.10)';
+        ctx.strokeStyle = 'rgba(0,0,0,0.70)';
+        ctx.fillRect(cx - s * 0.38, cy - s * 0.38, s * 0.76, s * 0.76);
+        ctx.strokeRect(cx - s * 0.38, cy - s * 0.38, s * 0.76, s * 0.76);
+      }
+    }
     ctx.restore();
   }
 }
