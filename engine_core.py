@@ -508,7 +508,7 @@ class GameState:
         return sum(self.traversal_cost_for_cell(pos) for pos in route[1:])
 
     def max_route_steps(self) -> int:
-        return max(0, int(self.settings.max_link_distance) - 1)
+        return max(0, int(self.settings.max_link_distance))
 
     def can_change_cell_to(self, pos, new_val: int) -> bool:
         x, y = pos
@@ -707,7 +707,7 @@ class GameState:
                 return False, "Route and new node may only go to equal, lower, or one level higher terrain from the source.", None
 
             length = len(route) - 1
-            if length >= self.settings.max_link_distance:
+            if length > self.settings.max_link_distance:
                 return False, f"Max route length is {self.settings.max_link_distance}.", None
             total_cost += self.route_traversal_cost(route)
             sources.append(src)
