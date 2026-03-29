@@ -46,7 +46,7 @@ function routeTraversalCost(route) { return route.slice(1).reduce((sum, cell) =>
 
 function maxRouteSteps() {
   if (!latestState) return 0;
-  return Math.max(0, Number(latestState.settings.max_link_distance || 0) - 1);
+  return Math.max(0, Number(latestState.settings.max_link_distance || 0));
 }
 
 function formatClock(seconds) {
@@ -314,7 +314,7 @@ function evaluateRoutesLocal(routes, options = {}) {
     if (!routeBuildAllowedLocal(src, route)) return { ok: false, message: 'Route and new node may only go to equal, lower, or one level higher terrain from the source.' };
 
     const length = route.length - 1;
-    if (length >= latestState.settings.max_link_distance) return { ok: false, message: `Max route length is ${latestState.settings.max_link_distance}.` };
+    if (length > latestState.settings.max_link_distance) return { ok: false, message: `Max route length is ${latestState.settings.max_link_distance}.` };
     totalCost += routeTraversalCost(route);
     sources.push(keyOf(src));
 
