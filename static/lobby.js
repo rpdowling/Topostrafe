@@ -98,6 +98,7 @@ function collectPayload() {
     vs_bot: el('vs_bot').checked,
     join_code: el('join_code').value.trim(),
     custom_map_json: el('custom_map_json').value.trim(),
+    size_preset: el('size_preset').value,
   };
   for (const key of settingKeys) {
     const node = el(key);

@@ -21,6 +21,11 @@ ELEVATION_COLORS = {
 PLAYER_COLORS = {0: "#ff00ff", 1: "#ffffff"}
 PLAYER_OUTLINES = {0: "#2b0030", 1: "#000000"}
 MAP_TYPES = ["Three Mountains", "Altar", "Noise", "Ridges", "Plains", "Mountains", "Custom"]
+SIZE_PRESETS = {
+    "small": {"map_width": 10, "map_height": 10, "max_link_distance": 5, "path_count": 6},
+    "medium": {"map_width": 20, "map_height": 20, "max_link_distance": 10, "path_count": 11},
+    "large": {"map_width": 30, "map_height": 30, "max_link_distance": 15, "path_count": 16},
+}
 
 
 def _short_id(n: int = 8) -> str:
@@ -171,6 +176,7 @@ class GameStore:
 
     def _settings_from_payload(self, payload: dict[str, Any]) -> eng.GameSettings:
         base = eng.GameSettings()
+        preset_name = str(payload.get("size_preset", "")).strip().lower()
         data = {}
         for field in base.__dict__.keys():
             val = payload.get(field, getattr(base, field))
@@ -184,6 +190,8 @@ class GameStore:
             data["map_type"] = base.map_type
         if not data["map_type"]:
             data["map_type"] = "Three Mountains"
+        if preset_name in SIZE_PRESETS:
+            data.update(SIZE_PRESETS[preset_name])
         data["map_width"] = max(5, min(80, int(data["map_width"])))
         data["map_height"] = max(5, min(80, int(data["map_height"])))
         data["cell_size"] = max(8, min(80, int(data["cell_size"])))
@@ -216,7 +224,10 @@ class GameStore:
     def create_game(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
             self._prune_expired_open_games_locked()
-            settings = self._settings_from_payload(payload.get("settings", {}))
+            settings_payload = dict(payload.get("settings", {}))
+            if "size_preset" in payload and "size_preset" not in settings_payload:
+                settings_payload["size_preset"] = payload.get("size_preset")
+            settings = self._settings_from_payload(settings_payload)
             map_data = self._map_from_payload(settings, payload)
             game_id = _short_id(8)
             player_key = _token(24)
