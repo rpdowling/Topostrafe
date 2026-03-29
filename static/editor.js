@@ -188,13 +188,16 @@ function loadFromJsonText() {
 
 function downloadJson() {
   syncJson();
-  const blob = new Blob([JSON.stringify(mapData, null, 2)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify(mapData, null, 2)], { type: 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = 'topostrafe_map.json';
+  a.setAttribute('type', 'application/json');
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function useInLobby() {
