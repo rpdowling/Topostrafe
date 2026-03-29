@@ -728,57 +728,45 @@ function practicalRangeData(src, radius, showUnattackableTargets) {
   const reach = new Map();
   const best = new Map([[keyOf(src), { cost: 0, steps: 0 }]]);
   const queue = [[src, 0, 0]];
-
   while (queue.length) {
-    queue.sort((a, b) => (a[1] - b[1]) || (a[2] - b[2]));
     const [cur, spent, steps] = queue.shift();
     const curBest = best.get(keyOf(cur));
-    if (!curBest || spent !== curBest.cost || steps !== curBest.steps) continue;
+    if (!curBest || spent > curBest.cost || (spent === curBest.cost && steps > curBest.steps)) continue;
     if (steps >= maxRouteSteps()) continue;
-
     for (const nxt of neighbors4(cur)) {
       const nk = keyOf(nxt);
       if (mapElev(nxt) < minAllowed) continue;
       const nextSteps = steps + 1;
       const nextCost = spent + traversalCostForCell(nxt);
       if (nextCost > radius) continue;
-
       const prev = best.get(nk);
       if (prev && (nextCost > prev.cost || (nextCost === prev.cost && nextSteps >= prev.steps))) continue;
       best.set(nk, { cost: nextCost, steps: nextSteps });
-
       const otherNode = nodeAt(nxt);
       if (otherNode && !sameCell(nxt, src)) {
         if (otherNode.owner === node.owner) {
           reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
         } else {
           const protectedNode = isConnectedToCastle(nxt);
-          if (showUnattackableTargets || !protectedNode || canAttackFrom(src, nxt)) {
-            reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
-          }
+          if (showUnattackableTargets || !protectedNode || canAttackFrom(src, nxt)) reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
         }
         continue;
       }
-
       const road = roadAt(nxt);
       if (road) {
         if (road.owner === node.owner) {
           reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
         } else {
           const protectedRoad = roadIsConnectedToCastle(road);
-          if (showUnattackableTargets || !protectedRoad || canAttackFrom(src, nxt)) {
-            reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
-          }
+          if (showUnattackableTargets || !protectedRoad || canAttackFrom(src, nxt)) reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
         }
         continue;
       }
-
       reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
-      queue.push([[nxt[0], nxt[1]], nextCost, nextSteps]);
+      queue.push([nxt, nextCost, nextSteps]);
     }
   }
-
-  return Array.from(reach.values()).sort((a, b) => a.dist - b.dist || a.cell[1] - b.cell[1] || a.cell[0] - b.cell[0]);
+  return Array.from(reach.values());
 }
 
 function practicalRangeCells(src, radius, showUnattackableTargets) {
@@ -1036,14 +1024,6 @@ function onBoardMouseMove(evt) {
   if (!pointerDown || !latestState || !isMyTurn() || mode !== 'routes' || !activeRoute.length) return;
   const cell = hitCell(evt);
   if (!cell) return;
-  const last = activeRoute[activeRoute.length - 1];
-  if (invalidPreviewPath.length && sameCell(cell, last)) {
-    invalidPreviewPath = [];
-    previewValid = true;
-    updateDraftLine();
-    draw();
-    return;
-  }
   if (extendActiveRouteTo(cell)) pointerDragged = true;
 }
 
