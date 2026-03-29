@@ -220,7 +220,7 @@ class GameStore:
                 for cell in row:
                     if int(cell) not in (1, 2, 3, 4, 5):
                         raise ValueError("Custom map cells must be integers 1..5.")
-            return eng.MapGenerator.normalize_existing(width, height, [[int(c) for c in row] for row in grid])
+            return eng.MapData(width, height, [[int(c) for c in row] for row in grid])
         return eng.MapGenerator.generate(settings.map_width, settings.map_height, settings.map_type)
 
     def create_game(self, payload: dict[str, Any]) -> dict[str, Any]:
