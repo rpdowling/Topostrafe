@@ -20,7 +20,8 @@
       <form id="create-form" class="stack gap-12">
         <div class="actions menu-actions">
           <button id="play-button" class="play-button" type="submit">Play</button>
-          <a class="button-link menu-secondary" href="/editor">Map Editor</a>
+          <a class="button-link menu-secondary menu-editor-button" href="/editor">Map Editor</a>
+          <button id="bot-button" class="menu-secondary menu-bot-button" type="button">Play vs Bot (In Dev.)</button>
           <span id="create-status" class="muted"></span>
         </div>
 
@@ -73,7 +74,7 @@
         <div class="grid two compact-checks">
           <label class="check"><input id="time_limit_enabled" type="checkbox" /><span>Use Time Limit</span></label>
           <label class="check"><input id="is_private" type="checkbox" /><span>Private Game</span></label>
-          <label class="check"><input id="vs_bot" type="checkbox" /><span>Play vs Bot</span></label>
+          <input id="vs_bot" type="checkbox" hidden />
           <label class="check"><input id="retake_rule" type="checkbox" /><span>Retake Lock</span></label>
           <label class="check"><input id="inherited_attack_rule" type="checkbox" /><span>Shared Attack Privilege</span></label>
           <label class="check"><input id="show_unattackable_range_targets" type="checkbox" /><span>Show Unattackable Targets</span></label>

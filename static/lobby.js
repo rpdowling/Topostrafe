@@ -123,6 +123,17 @@ function collectPayload() {
   return payload;
 }
 
+
+function submitBotGame() {
+  el('vs_bot').checked = true;
+  setStatus('');
+  el('create-form').requestSubmit();
+}
+
+function submitNormalGame() {
+  el('vs_bot').checked = false;
+}
+
 async function createGame(evt) {
   evt.preventDefault();
   setStatus('Creating…');
@@ -217,6 +228,8 @@ buildForm();
 restoreEditorMap();
 hookFileLoader();
 hookSizePreset();
+el('play-button').addEventListener('click', submitNormalGame);
+el('bot-button').addEventListener('click', submitBotGame);
 el('create-form').addEventListener('submit', createGame);
 el('join-private-form').addEventListener('submit', joinPrivate);
 refreshGames();
