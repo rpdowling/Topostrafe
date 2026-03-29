@@ -50,7 +50,7 @@ class GameSettings:
             f"Retake lock: {'On' if self.retake_rule else 'Off'}",
             f"Shared attack privilege: {'On' if self.inherited_attack_rule else 'Off'}",
             f"Show unattackable range targets: {'On' if self.show_unattackable_range_targets else 'Off'}",
-            f"Entrench: {'On' if self.entrench_rule else 'Off'}",
+            f"Sap: {'On' if self.entrench_rule else 'Off'}",
             f"Fortify: {'On' if self.fortify_rule else 'Off'}",
             f"Require move confirmation: {'On' if self.require_move_confirmation else 'Off'}",
             "Attack rule: must attack downhill",
@@ -497,6 +497,16 @@ class GameState:
         min_allowed = max(1, src_elev - 1)
         return all(self.map.get(x, y) >= min_allowed for x, y in route[1:])
 
+    @staticmethod
+    def traversal_cost_for_elevation(elev: int) -> int:
+        return {5: 2, 4: 1, 3: 2, 2: 2, 1: 3}.get(int(elev), 2)
+
+    def traversal_cost_for_cell(self, pos) -> int:
+        return self.traversal_cost_for_elevation(self.map.get(*pos))
+
+    def route_traversal_cost(self, route: list) -> int:
+        return sum(self.traversal_cost_for_cell(pos) for pos in route[1:])
+
     def can_change_cell_to(self, pos, new_val: int) -> bool:
         x, y = pos
         if not self.map.in_bounds(x, y):
@@ -511,24 +521,24 @@ class GameState:
         if self.winner is not None:
             return False, "Game over."
         if not self.settings.entrench_rule:
-            return False, "Entrench is disabled."
+            return False, "Sap is disabled."
         if src not in self.nodes or self.nodes[src].owner != self.current_owner:
             return False, "Select your own node first."
         if not self.can_build_from(src, self.current_owner):
             return False, "Cannot act from nodes disconnected from your castle."
         if not adjacent8(src, target):
-            return False, "Entrench must target an adjacent or diagonal square."
+            return False, "Sap must target an adjacent or diagonal square."
         if not self.map.in_bounds(*target):
             return False, "Out of bounds."
         cur = self.map.get(*target)
         if cur >= 5:
             return False, "That square is already at the lowest elevation."
         if any(self.map.get(nx, ny) not in (cur, cur + 1) for nx, ny in valid_neighbors4(target[0], target[1], self.map.width, self.map.height)):
-            return False, "Entrench requires all four adjacent squares to match the target square's current elevation."
+            return False, "Sap requires all four adjacent squares to match the target square's current elevation."
         new_val = cur + 1
         if not self.can_change_cell_to(target, new_val):
-            return False, "Entrench would violate the adjacent elevation rule."
-        return True, "Entrench ready. Confirm or click the square again."
+            return False, "Sap would violate the adjacent elevation rule."
+        return True, "Sap ready. Confirm or click the square again."
 
     def commit_entrench(self, src, target):
         ok, msg = self.preview_entrench(src, target)
@@ -536,7 +546,7 @@ class GameState:
             return False, msg
         self.map.set(target[0], target[1], self.map.get(*target) + 1)
         self.check_winner()
-        return True, "Entrench complete."
+        return True, "Sap complete."
 
     def fortify_eligible_road_cells(self, road: Road):
         if road is None:
@@ -584,39 +594,47 @@ class GameState:
         if node is None or radius <= 0:
             return []
         min_allowed = max(1, self.map.get(*src) - 1)
-        seen = {src}
-        reach = set()
-        q = deque([(src, 0)])
+        reach = {}
+        best = {src: (0, 0)}
+        q = deque([(0, 0, src)])
         while q:
-            cur, dist = q.popleft()
-            if dist >= radius:
+            spent, steps, cur = q.popleft()
+            best_spent, best_steps = best.get(cur, (10**9, 10**9))
+            if spent > best_spent or (spent == best_spent and steps > best_steps):
+                continue
+            if steps >= self.settings.max_link_distance:
                 continue
             for nxt in valid_neighbors4(cur[0], cur[1], self.map.width, self.map.height):
-                if nxt in seen:
-                    continue
                 if self.map.get(*nxt) < min_allowed:
                     continue
-                seen.add(nxt)
+                next_steps = steps + 1
+                next_spent = spent + self.traversal_cost_for_cell(nxt)
+                if next_spent > radius:
+                    continue
+                prev = best.get(nxt)
+                if prev is not None and (next_spent > prev[0] or (next_spent == prev[0] and next_steps >= prev[1])):
+                    continue
+                best[nxt] = (next_spent, next_steps)
                 other_node = self.nodes.get(nxt)
                 if other_node is not None and nxt != src:
                     if other_node.owner == node.owner:
-                        reach.add(nxt)
+                        reach[nxt] = (next_spent, next_steps)
                     else:
                         protected = self.is_connected_to_castle(nxt)
                         if show_unattackable_targets or (not protected) or self.can_attack_from(src, nxt):
-                            reach.add(nxt)
+                            reach[nxt] = (next_spent, next_steps)
                     continue
                 road = self.road_at(nxt)
                 if road is not None:
                     if road.owner == node.owner:
-                        reach.add(nxt)
+                        reach[nxt] = (next_spent, next_steps)
                     else:
                         protected = self.road_is_connected_to_castle(road)
                         if show_unattackable_targets or (not protected) or self.can_attack_from(src, nxt):
-                            reach.add(nxt)
+                            reach[nxt] = (next_spent, next_steps)
                     continue
-                reach.add(nxt)
-                q.append((nxt, dist + 1))
+                reach[nxt] = (next_spent, next_steps)
+                q.append((next_spent, next_steps, nxt))
         return sorted(reach)
 
     def is_retake_blocked(self, pos, owner: int) -> bool:
@@ -661,7 +679,7 @@ class GameState:
             return False, "Place your starter first.", None
 
         dest = routes[0][-1]
-        total_length = 0
+        total_cost = 0
         sources = []
         temp_occupied = set()
         connected_sources = self.connected_to_castle(self.current_owner)
@@ -688,7 +706,7 @@ class GameState:
             length = len(route) - 1
             if length > self.settings.max_link_distance:
                 return False, f"Max route length is {self.settings.max_link_distance}.", None
-            total_length += length
+            total_cost += self.route_traversal_cost(route)
             sources.append(src)
 
             for pos in route[1:-1]:
@@ -702,8 +720,8 @@ class GameState:
 
         if len(set(sources)) != len(sources):
             return False, "Use each source node at most once this turn.", None
-        if total_length > self.remaining_path:
-            return False, "Not enough path remaining this turn.", None
+        if total_cost > self.remaining_path:
+            return False, "Not enough traversal cost remaining this turn.", None
 
         dest_node = self.nodes.get(dest)
         dest_road = self.road_at(dest)
@@ -738,7 +756,7 @@ class GameState:
             "dest_node": dest_node,
             "dest_road": dest_road,
             "target_road": target_road,
-            "total_length": total_length,
+            "total_cost": total_cost,
             "mode": mode,
             "routes": [route[:] for route in routes],
         }
@@ -771,7 +789,7 @@ class GameState:
             if len(route) > 2:
                 self._create_road(route, self.current_owner)
 
-        self.remaining_path -= summary["total_length"]
+        self.remaining_path -= summary["total_cost"]
         self._cull_isolated(0)
         self._cull_isolated(1)
         self.check_winner()

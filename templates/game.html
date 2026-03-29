@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=4" />
+  <link rel="stylesheet" href="/static/app.css?v=5" />
 </head>
 <body>
   <div class="page game-layout">
@@ -28,6 +28,16 @@
           <div class="legend-item"><span class="legend-swatch legend-mid"></span><span>Mid</span></div>
           <div class="legend-item"><span class="legend-swatch legend-low"></span><span>Low</span></div>
           <div class="legend-item"><span class="legend-swatch legend-lowest"></span><span>Lowest</span></div>
+        </div>
+      </div>
+      <div class="elevation-legend top-12">
+        <h2>Traversal Cost</h2>
+        <div class="legend-list">
+          <div class="legend-item"><span class="legend-swatch legend-lowest"></span><span>2</span></div>
+          <div class="legend-item"><span class="legend-swatch legend-low"></span><span>1</span></div>
+          <div class="legend-item"><span class="legend-swatch legend-mid"></span><span>2</span></div>
+          <div class="legend-item"><span class="legend-swatch legend-high"></span><span>2</span></div>
+          <div class="legend-item"><span class="legend-swatch legend-highest"></span><span>3</span></div>
         </div>
       </div>
     </section>
@@ -64,9 +74,9 @@
         <div>
           <h2>Actions</h2>
           <div class="mode-buttons">
-            <button id="mode-routes" type="button">Routes</button>
-            <button id="mode-entrench" type="button">Entrench</button>
-            <button id="mode-fortify" type="button">Fortify</button>
+            <button id="mode-routes" class="mode-icon mode-routes-btn" type="button" title="Routes" aria-label="Routes"><svg viewBox="0 0 64 32" aria-hidden="true"><path d="M8 16 H40" class="icon-stroke icon-dashed"/><circle cx="51" cy="16" r="7" class="icon-outline"/></svg></button>
+            <button id="mode-entrench" class="mode-icon mode-sap-btn" type="button" title="Sap" aria-label="Sap"><svg viewBox="0 0 64 32" aria-hidden="true"><path d="M8 14 H24 V22 H40 V14 H56" class="icon-stroke"/></svg></button>
+            <button id="mode-fortify" class="mode-icon mode-fortify-btn" type="button" title="Fortify" aria-label="Fortify"><svg viewBox="0 0 64 32" aria-hidden="true"><path d="M8 18 H24 V10 H40 V18 H56" class="icon-stroke"/></svg></button>
           </div>
           <div class="stack gap-8 top-8">
             <button id="finish-route" type="button">Finish Route</button>
@@ -96,6 +106,6 @@
   <script>
     window.TOPOS_GAME_ID = "{{ game_id }}";
   </script>
-  <script src="/static/game.js?v=3"></script>
+  <script src="/static/game.js?v=4"></script>
 </body>
 </html>

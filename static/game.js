@@ -40,6 +40,10 @@ function orthAdj(a, b) { return Math.abs(a[0]-b[0]) + Math.abs(a[1]-b[1]) === 1;
 function keyOf(cell) { return `${cell[0]},${cell[1]}`; }
 function parseKey(key) { const [x, y] = key.split(',').map(Number); return [x, y]; }
 
+function traversalCostForElevation(elev) { return ({5:2, 4:1, 3:2, 2:2, 1:3}[Number(elev)] ?? 2); }
+function traversalCostForCell(cell) { return traversalCostForElevation(mapElev(cell)); }
+function routeTraversalCost(route) { return route.slice(1).reduce((sum, cell) => sum + traversalCostForCell(cell), 0); }
+
 function formatClock(seconds) {
   const s = Math.max(0, Math.floor(seconds));
   const h = Math.floor(s / 3600);
@@ -205,7 +209,7 @@ function detectSoundEvent(prev, next, message, prevMessage) {
   const logAdvanced = nextLastLog && nextLastLog !== prevLastLog;
   if ((mapDelta > 0 || actionNoteChanged || logAdvanced) && note) {
     if (note.startsWith('Fortify complete')) return 'fortify';
-    if (note.startsWith('Entrench complete')) return 'entrench';
+    if (note.startsWith('Sap complete')) return 'entrench';
   }
 
   const actor = prev.current_owner;
@@ -255,8 +259,8 @@ function roadAt(cell) {
 }
 
 function localPendingLength(extraRoute = null) {
-  let total = pendingRoutes.reduce((sum, route) => sum + Math.max(0, route.length - 1), 0);
-  if (extraRoute) total += Math.max(0, extraRoute.length - 1);
+  let total = pendingRoutes.reduce((sum, route) => sum + routeTraversalCost(route), 0);
+  if (extraRoute) total += routeTraversalCost(extraRoute);
   return total;
 }
 
@@ -279,7 +283,7 @@ function evaluateRoutesLocal(routes, options = {}) {
 
   const allowPartialLastRoute = !!options.allowPartialLastRoute;
   const dest = pendingDestination ? [pendingDestination[0], pendingDestination[1]] : routes[0][routes[0].length - 1];
-  let totalLength = 0;
+  let totalCost = 0;
   const sources = [];
   const tempOccupied = new Set();
   const connectedSources = connectedToCastle(mySeat);
@@ -306,7 +310,7 @@ function evaluateRoutesLocal(routes, options = {}) {
 
     const length = route.length - 1;
     if (length > latestState.settings.max_link_distance) return { ok: false, message: `Max route length is ${latestState.settings.max_link_distance}.` };
-    totalLength += length;
+    totalCost += routeTraversalCost(route);
     sources.push(keyOf(src));
 
     for (const pos of route.slice(1, -1)) {
@@ -321,7 +325,7 @@ function evaluateRoutesLocal(routes, options = {}) {
   }
 
   if (new Set(sources).size !== sources.length) return { ok: false, message: 'Use each source node at most once this turn.' };
-  if (totalLength > latestState.remaining_path) return { ok: false, message: 'Not enough path remaining this turn.' };
+  if (totalCost > latestState.remaining_path) return { ok: false, message: 'Not enough traversal cost remaining this turn.' };
 
   if (!partialLastRoute) {
     const destNode = nodeAt(dest);
@@ -413,10 +417,10 @@ function commitRoutes() {
 function updateDraftLine() {
   const bits = [];
   bits.push(`Mode: ${mode}`);
-  if (activeRoute.length) bits.push(`Active route len ${activeRoute.length - 1}`);
-  if (pendingRoutes.length) bits.push(`Pending routes ${pendingRoutes.length}`);
+  if (activeRoute.length) bits.push(`Active route cost ${routeTraversalCost(activeRoute)}`);
+  if (pendingRoutes.length) bits.push(`Pending routes ${pendingRoutes.length} · cost ${localPendingLength()}`);
   if (pendingDestination) bits.push(`Dest ${pendingDestination[0]},${pendingDestination[1]}`);
-  if (entrenchSource) bits.push(`Entrench src ${entrenchSource[0]},${entrenchSource[1]}`);
+  if (entrenchSource) bits.push(`Sap src ${entrenchSource[0]},${entrenchSource[1]}`);
   el('draft-line').textContent = bits.join(' · ') || 'No draft.';
 }
 
@@ -702,40 +706,45 @@ function practicalRangeData(src, radius, showUnattackableTargets) {
   const node = nodeAt(src);
   if (!node || radius <= 0) return [];
   const minAllowed = Math.max(1, mapElev(src) - 1);
-  const seen = new Set([keyOf(src)]);
   const reach = new Map();
-  const queue = [[src, 0]];
+  const best = new Map([[keyOf(src), { cost: 0, steps: 0 }]]);
+  const queue = [[src, 0, 0]];
   while (queue.length) {
-    const [cur, dist] = queue.shift();
-    if (dist >= radius) continue;
+    const [cur, spent, steps] = queue.shift();
+    const curBest = best.get(keyOf(cur));
+    if (!curBest || spent > curBest.cost || (spent === curBest.cost && steps > curBest.steps)) continue;
+    if (steps >= latestState.settings.max_link_distance) continue;
     for (const nxt of neighbors4(cur)) {
       const nk = keyOf(nxt);
-      if (seen.has(nk)) continue;
       if (mapElev(nxt) < minAllowed) continue;
-      seen.add(nk);
-      const nextDist = dist + 1;
+      const nextSteps = steps + 1;
+      const nextCost = spent + traversalCostForCell(nxt);
+      if (nextCost > radius) continue;
+      const prev = best.get(nk);
+      if (prev && (nextCost > prev.cost || (nextCost === prev.cost && nextSteps >= prev.steps))) continue;
+      best.set(nk, { cost: nextCost, steps: nextSteps });
       const otherNode = nodeAt(nxt);
       if (otherNode && !sameCell(nxt, src)) {
         if (otherNode.owner === node.owner) {
-          reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextDist });
+          reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
         } else {
           const protectedNode = isConnectedToCastle(nxt);
-          if (showUnattackableTargets || !protectedNode || canAttackFrom(src, nxt)) reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextDist });
+          if (showUnattackableTargets || !protectedNode || canAttackFrom(src, nxt)) reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
         }
         continue;
       }
       const road = roadAt(nxt);
       if (road) {
         if (road.owner === node.owner) {
-          reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextDist });
+          reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
         } else {
           const protectedRoad = roadIsConnectedToCastle(road);
-          if (showUnattackableTargets || !protectedRoad || canAttackFrom(src, nxt)) reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextDist });
+          if (showUnattackableTargets || !protectedRoad || canAttackFrom(src, nxt)) reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
         }
         continue;
       }
-      reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextDist });
-      queue.push([nxt, nextDist]);
+      reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
+      queue.push([nxt, nextCost, nextSteps]);
     }
   }
   return Array.from(reach.values());
@@ -747,12 +756,12 @@ function practicalRangeCells(src, radius, showUnattackableTargets) {
 
 function ownRangeRadius() {
   if (!latestState) return 0;
-  return Math.min(Math.max(0, localRemainingBudget()), latestState.settings.max_link_distance);
+  return Math.max(0, localRemainingBudget());
 }
 
 function otherRangeRadius() {
   if (!latestState) return 0;
-  return Math.min(latestState.settings.path_count, latestState.settings.max_link_distance);
+  return latestState.settings.path_count;
 }
 
 function setRangeFromNode(cell) {

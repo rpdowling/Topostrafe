@@ -123,6 +123,54 @@ button:hover, .button-link:hover { background: var(--button-active); }
 .chat-panel, .sidebar { min-width: 0; }
 .mode-buttons { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
 .mode-buttons button.active { outline: 2px solid var(--accent); }
+
+.mode-buttons .mode-icon {
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mode-buttons .mode-icon svg {
+  width: 34px;
+  height: 18px;
+  overflow: visible;
+}
+.mode-buttons .mode-icon .icon-stroke {
+  fill: none;
+  stroke: #111111;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.mode-buttons .mode-icon .icon-dashed {
+  stroke-dasharray: 6 5;
+}
+.mode-buttons .mode-icon .icon-outline {
+  fill: none;
+  stroke: #111111;
+  stroke-width: 4;
+}
+.mode-routes-btn {
+  background: linear-gradient(180deg, #9fe8aa 0%, #41ae57 100%);
+  border-color: #7bd08a;
+}
+.mode-routes-btn:hover { background: linear-gradient(180deg, #b3f0bc 0%, #55bf69 100%); }
+.mode-sap-btn {
+  background: linear-gradient(180deg, #f0a2a2 0%, #c84b4b 100%);
+  border-color: #dc8585;
+}
+.mode-sap-btn:hover { background: linear-gradient(180deg, #f5b2b2 0%, #d55f5f 100%); }
+.mode-fortify-btn {
+  background: linear-gradient(180deg, #9dc3f6 0%, #4f7fd1 100%);
+  border-color: #84ace6;
+}
+.mode-fortify-btn:hover { background: linear-gradient(180deg, #afcff8 0%, #6291df 100%); }
+.mode-buttons button.active.mode-routes-btn,
+.mode-buttons button.active.mode-sap-btn,
+.mode-buttons button.active.mode-fortify-btn {
+  outline: 2px solid rgba(255,255,255,0.78);
+  outline-offset: 0;
+}
 .stat-grid { gap: 8px; }
 .stat {
   padding: 10px;
