@@ -4,6 +4,7 @@ import secrets
 import string
 import threading
 import time
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -70,6 +71,7 @@ class GameSession:
     log: list[str] = field(default_factory=list)
     chat: list[dict[str, Any]] = field(default_factory=list)
     abandon_delete_at: float | None = None
+    pending_premoves: dict[int, dict[str, Any] | None] = field(default_factory=lambda: {0: None, 1: None})
 
     def __post_init__(self):
         if not self.time_remaining:
@@ -401,6 +403,7 @@ class GameStore:
                 "retake_locks": [{"x": x, "y": y, "blocked_owner": blocked} for (x, y), blocked in state.retake_locks.items()],
                 "log": game.log[-16:],
                 "chat": game.chat[-100:],
+                "my_premove": (seat is not None and game.pending_premoves.get(seat) is not None),
             }
 
     def add_chat_message(self, game_id: str, player_key: str | None, text: str) -> None:
@@ -434,6 +437,94 @@ class GameStore:
     def _start_next_turn(self, game: GameSession):
         game.turn_started_at = time.monotonic() if game.status == "active" else None
 
+    def _normalize_action_payload(self, action: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(action, dict):
+            raise ValueError("Invalid action.")
+        t = str(action.get("type", "")).strip()
+        if t not in {"starter", "routes", "fortify", "entrench", "end_turn", "resign"}:
+            raise ValueError("Unknown action.")
+        if t == "starter":
+            return {"type": "starter", "x": int(action["x"]), "y": int(action["y"])}
+        if t == "routes":
+            routes = []
+            for route in action.get("routes", []):
+                routes.append([(int(x), int(y)) for x, y in route])
+            return {"type": "routes", "routes": routes}
+        if t == "fortify":
+            return {"type": "fortify", "x": int(action["x"]), "y": int(action["y"])}
+        if t == "entrench":
+            src = action["src"]
+            target = action["target"]
+            return {"type": "entrench", "src": (int(src[0]), int(src[1])), "target": (int(target[0]), int(target[1]))}
+        return {"type": t}
+
+    def _execute_turn_action(self, game: GameSession, seat: int, action: dict[str, Any]) -> str:
+        t = action.get("type")
+        if t == "resign":
+            game.state.players[seat].resigned = True
+            game.state.check_winner()
+            game.status = "finished"
+            return f"{game.owner_name(seat)} resigned."
+
+        self._consume_active_turn_time(game)
+        if game.state.winner is not None:
+            return game.state.win_reason
+
+        auto_end_turn = False
+        if t == "starter":
+            ok, msg = game.state.commit_starter(int(action["x"]), int(action["y"]))
+            auto_end_turn = ok
+        elif t == "routes":
+            routes = action.get("routes", [])
+            ok, msg = game.state.commit_routes(routes)
+            auto_end_turn = ok
+        elif t == "fortify":
+            ok, msg = game.state.commit_fortify((int(action["x"]), int(action["y"])))
+            auto_end_turn = ok
+        elif t == "entrench":
+            src = action["src"]
+            target = action["target"]
+            ok, msg = game.state.commit_entrench((int(src[0]), int(src[1])), (int(target[0]), int(target[1])))
+            auto_end_turn = ok
+        elif t == "end_turn":
+            ok, msg = game.state.end_turn()
+            if ok:
+                self._start_next_turn(game)
+        else:
+            raise ValueError("Unknown action.")
+
+        if not ok:
+            raise ValueError(msg)
+
+        if auto_end_turn and game.state.winner is None:
+            ok2, msg2 = game.state.end_turn()
+            if ok2:
+                self._start_next_turn(game)
+                msg = f"{msg} {msg2}".strip()
+
+        if game.state.winner is not None:
+            game.status = "finished"
+        elif t != "end_turn":
+            game.turn_started_at = time.monotonic() if game.settings.time_limit_enabled else game.turn_started_at
+        return msg
+
+    def _apply_due_premoves(self, game: GameSession) -> list[str]:
+        notes: list[str] = []
+        loops = 0
+        while game.status == "active" and game.state.winner is None and loops < 4:
+            seat = game.state.current_owner
+            queued = game.pending_premoves.get(seat)
+            if not queued:
+                break
+            game.pending_premoves[seat] = None
+            try:
+                msg = self._execute_turn_action(game, seat, deepcopy(queued))
+                notes.append(f"{game.owner_name(seat)} premove: {msg}")
+            except Exception:
+                notes.append(f"{game.owner_name(seat)} premove discarded.")
+            loops += 1
+        return notes
+
     def apply_action(self, game_id: str, player_key: str | None, action: dict[str, Any]) -> str:
         with self.lock:
             self._prune_expired_open_games_locked()
@@ -442,61 +533,26 @@ class GameStore:
                 raise ValueError("Game not found.")
             self._check_timeout_passively(game)
             t = action.get("type")
-            if t == "resign":
-                seat = game.seat_for_key(player_key)
-                if seat is None:
-                    raise ValueError("Invalid player key.")
-                if game.state.winner is not None:
-                    raise ValueError("Game is already finished.")
-                game.state.players[seat].resigned = True
-                game.state.check_winner()
-                game.status = "finished"
-                msg = f"{game.owner_name(seat)} resigned."
-                game.log.append(msg)
-                return msg
+            seat = game.seat_for_key(player_key)
+            if seat is None:
+                raise ValueError("Invalid player key.")
+            if t == "premove":
+                if game.status != "active" or game.state.winner is not None:
+                    raise ValueError("Game is not active.")
+                if seat == game.state.current_owner:
+                    raise ValueError("It is your turn already.")
+                queued = self._normalize_action_payload(action.get("action", {}))
+                if queued.get("type") == "resign":
+                    raise ValueError("Cannot premove resign.")
+                game.pending_premoves[seat] = queued
+                return "Premove queued."
 
-            self._assert_player_turn(game, player_key)
-            self._consume_active_turn_time(game)
-            if game.state.winner is not None:
-                return game.state.win_reason
-
-            auto_end_turn = False
-            if t == "starter":
-                ok, msg = game.state.commit_starter(int(action["x"]), int(action["y"]))
-                auto_end_turn = ok
-            elif t == "routes":
-                routes = [[(int(x), int(y)) for x, y in route] for route in action.get("routes", [])]
-                ok, msg = game.state.commit_routes(routes)
-                auto_end_turn = ok
-            elif t == "fortify":
-                ok, msg = game.state.commit_fortify((int(action["x"]), int(action["y"])))
-                auto_end_turn = ok
-            elif t == "entrench":
-                src = tuple(action["src"])
-                target = tuple(action["target"])
-                ok, msg = game.state.commit_entrench((int(src[0]), int(src[1])), (int(target[0]), int(target[1])))
-                auto_end_turn = ok
-            elif t == "end_turn":
-                ok, msg = game.state.end_turn()
-                if ok:
-                    self._start_next_turn(game)
-            else:
-                raise ValueError("Unknown action.")
-
-            if not ok:
-                raise ValueError(msg)
-
-            if auto_end_turn and game.state.winner is None:
-                ok2, msg2 = game.state.end_turn()
-                if ok2:
-                    self._start_next_turn(game)
-                    msg = f"{msg} {msg2}".strip()
-
-            if game.state.winner is not None:
-                game.status = "finished"
-            elif t != "end_turn":
-                game.turn_started_at = time.monotonic() if game.settings.time_limit_enabled else game.turn_started_at
-
+            if seat != game.state.current_owner and t != "resign":
+                raise ValueError("It is not your turn.")
+            msg = self._execute_turn_action(game, seat, self._normalize_action_payload(action))
+            extra_notes = self._apply_due_premoves(game)
+            if extra_notes:
+                msg = f"{msg} {' '.join(extra_notes)}".strip()
             game.log.append(msg)
             return msg
 

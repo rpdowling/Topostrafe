@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=5" />
+  <link rel="stylesheet" href="/static/app.css?v=6" />
 </head>
 <body>
   <div class="page game-layout">
@@ -65,8 +65,8 @@
         </div>
 
         <div class="grid two stat-grid">
-          <div class="stat"><span>Player 1</span><strong id="clock0">00:00</strong></div>
-          <div class="stat"><span>Player 2</span><strong id="clock1">00:00</strong></div>
+          <div class="stat turn-stat" id="stat-player0"><span>Player 1</span><strong id="clock0">00:00</strong></div>
+          <div class="stat turn-stat" id="stat-player1"><span>Player 2</span><strong id="clock1">00:00</strong></div>
           <div class="stat"><span>Remaining Path</span><strong id="remaining-path">0</strong></div>
           <div class="stat"><span>Your Seat</span><strong id="seat-line">Spectator</strong></div>
         </div>
@@ -102,10 +102,11 @@
 
 
   <button id="sound-toggle" type="button" class="sound-toggle floating-sound-toggle">Sound: On</button>
+  <div id="route-pill" class="route-pill hidden"></div>
 
   <script>
     window.TOPOS_GAME_ID = "{{ game_id }}";
   </script>
-  <script src="/static/game.js?v=11"></script>
+  <script src="/static/game.js?v=12"></script>
 </body>
 </html>

@@ -323,3 +323,35 @@ button:hover, .button-link:hover { background: var(--button-active); }
 .quit-link:hover {
   background: linear-gradient(180deg, #f5a1a1 0%, #d34a4a 100%);
 }
+
+.turn-stat.active-turn {
+  border-color: rgba(118,208,255,0.82);
+  box-shadow: 0 0 0 2px rgba(118,208,255,0.22), inset 0 1px 0 rgba(255,255,255,0.05);
+  background: linear-gradient(180deg, rgba(64,96,127,0.38) 0%, rgba(32,43,58,1) 100%);
+}
+.turn-stat.active-turn span,
+.turn-stat.active-turn strong {
+  color: #eef8ff;
+}
+.route-pill {
+  position: fixed;
+  z-index: 55;
+  pointer-events: none;
+  min-width: 124px;
+  max-width: 220px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(9,13,18,0.9);
+  color: #edf3fa;
+  font-size: 12px;
+  line-height: 1.25;
+  box-shadow: 0 10px 28px rgba(0,0,0,0.34);
+  backdrop-filter: blur(3px);
+}
+.route-pill.hidden { display: none; }
+.route-pill .route-pill-top { font-weight: 700; }
+.route-pill .route-pill-sub { color: var(--muted); margin-top: 2px; }
+.route-pill.ok { border-color: rgba(95, 222, 124, 0.35); }
+.route-pill.attack { border-color: rgba(255, 122, 122, 0.4); }
+.route-pill.invalid { border-color: rgba(255,255,255,0.42); }
