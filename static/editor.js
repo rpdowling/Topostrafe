@@ -1,4 +1,5 @@
 const defaults = window.TOPOS_DEFAULTS;
+const mapTypeLabels = defaults.map_type_labels || {};
 const ELEVATION_COLORS = {1:'#d73027',2:'#fc8d59',3:'#fee08b',4:'#91cf60',5:'#4575b4'};
 const canvas = document.getElementById('editor-board');
 const ctx = canvas.getContext('2d');
@@ -207,7 +208,7 @@ function buildForm() {
   defaults.map_types.filter((name) => name !== 'Custom').forEach((name) => {
     const opt = document.createElement('option');
     opt.value = name;
-    opt.textContent = name;
+    opt.textContent = mapTypeLabels[name] || name;
     sel.appendChild(opt);
   });
   el('editor_map_type').value = defaults.settings.map_type || 'River';

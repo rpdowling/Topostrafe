@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 
 from store import GameStore
 import engine_core as eng
-from preset_maps import RULES_TEXT, ALTAR_MAP, RIVER_MAP
+from preset_maps import RULES_TEXT, ALTAR_MAP, RIVER_MAP, THREE_BRIDGES_MAP, MOSAIC_MAP
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -85,6 +85,10 @@ async def api_generate_map(payload: dict[str, Any]):
         map_data = eng.MapGenerator.normalize_existing(RIVER_MAP["width"], RIVER_MAP["height"], [row[:] for row in RIVER_MAP["grid"]])
     elif map_type == "Altar":
         map_data = eng.MapGenerator.normalize_existing(ALTAR_MAP["width"], ALTAR_MAP["height"], [row[:] for row in ALTAR_MAP["grid"]])
+    elif map_type == "Three Bridges":
+        map_data = eng.MapGenerator.normalize_existing(THREE_BRIDGES_MAP["width"], THREE_BRIDGES_MAP["height"], [row[:] for row in THREE_BRIDGES_MAP["grid"]])
+    elif map_type == "Mosaic":
+        map_data = eng.MapGenerator.normalize_existing(MOSAIC_MAP["width"], MOSAIC_MAP["height"], [row[:] for row in MOSAIC_MAP["grid"]])
     else:
         map_data = eng.MapGenerator.generate(width, height, map_type)
     return JSONResponse({

@@ -2,6 +2,13 @@ const defaults = window.TOPOS_DEFAULTS;
 const settings = defaults.settings;
 const settingKeys = Object.keys(settings);
 
+const mapTypeLabels = defaults.map_type_labels || {};
+
+function displayMapType(name) {
+  return mapTypeLabels[name] || name;
+}
+
+
 function el(id) {
   return document.getElementById(id);
 }
@@ -27,7 +34,7 @@ function buildForm() {
   defaults.map_types.forEach((name) => {
     const opt = document.createElement('option');
     opt.value = name;
-    opt.textContent = name;
+    opt.textContent = displayMapType(name);
     mapType.appendChild(opt);
   });
   for (const [key, value] of Object.entries(settings)) {
@@ -149,7 +156,7 @@ async function refreshGames() {
       const row = document.createElement('div');
       row.className = 'game-row';
       const left = document.createElement('div');
-      left.innerHTML = `<strong>${game.game_id}</strong><small>${game.map_type} · ${game.size}</small><small>Path ${game.path_count} · Link ${game.max_link_distance} · ${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
+      left.innerHTML = `<strong>${game.game_id}</strong><small>${displayMapType(game.map_type)} · ${game.size}</small><small>Path ${game.path_count} · Link ${game.max_link_distance} · ${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
       const btn = document.createElement('button');
       btn.textContent = 'Join';
       btn.onclick = async () => {

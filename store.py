@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import engine_core as eng
-from preset_maps import ALTAR_MAP, RIVER_MAP
+from preset_maps import ALTAR_MAP, RIVER_MAP, THREE_BRIDGES_MAP, MOSAIC_MAP
 
 
 ELEVATION_COLORS = {
@@ -20,7 +20,19 @@ ELEVATION_COLORS = {
 }
 PLAYER_COLORS = {0: "#ff00ff", 1: "#ffffff"}
 PLAYER_OUTLINES = {0: "#2b0030", 1: "#000000"}
-MAP_TYPES = ["River", "Three Mountains", "Altar", "Noise", "Ridges", "Plains", "Mountains", "Custom"]
+MAP_TYPES = ["River", "Three Bridges", "Mosaic", "Three Mountains", "Noise", "Ridges", "Plains", "Mountains", "Altar", "Custom"]
+MAP_TYPE_LABELS = {
+    "River": "River",
+    "Three Bridges": "Three Bridges",
+    "Mosaic": "Mosaic",
+    "Three Mountains": "Three Mountains (randomized)",
+    "Noise": "Noise (randomized)",
+    "Ridges": "Ridges (randomized)",
+    "Plains": "Plains",
+    "Mountains": "Mountains (randomized)",
+    "Altar": "Altar",
+    "Custom": "Custom",
+}
 SIZE_PRESETS = {
     "small": {"map_width": 10, "map_height": 10, "max_link_distance": 5, "path_count": 6},
     "medium": {"map_width": 20, "map_height": 20, "max_link_distance": 10, "path_count": 11},
@@ -96,6 +108,7 @@ class GameStore:
         return {
             "settings": d.__dict__.copy(),
             "map_types": MAP_TYPES,
+            "map_type_labels": MAP_TYPE_LABELS,
             "elevation_colors": ELEVATION_COLORS,
             "player_colors": PLAYER_COLORS,
         }
@@ -206,6 +219,10 @@ class GameStore:
             return eng.MapGenerator.normalize_existing(int(RIVER_MAP["width"]), int(RIVER_MAP["height"]), [[int(c) for c in row] for row in RIVER_MAP["grid"]])
         if settings.map_type == "Altar":
             return eng.MapGenerator.normalize_existing(int(ALTAR_MAP["width"]), int(ALTAR_MAP["height"]), [[int(c) for c in row] for row in ALTAR_MAP["grid"]])
+        if settings.map_type == "Three Bridges":
+            return eng.MapGenerator.normalize_existing(int(THREE_BRIDGES_MAP["width"]), int(THREE_BRIDGES_MAP["height"]), [[int(c) for c in row] for row in THREE_BRIDGES_MAP["grid"]])
+        if settings.map_type == "Mosaic":
+            return eng.MapGenerator.normalize_existing(int(MOSAIC_MAP["width"]), int(MOSAIC_MAP["height"]), [[int(c) for c in row] for row in MOSAIC_MAP["grid"]])
         if settings.map_type == "Custom":
             raw = payload.get("custom_map_json", "")
             if not raw:
