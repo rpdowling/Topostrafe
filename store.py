@@ -404,6 +404,7 @@ class GameStore:
                 "log": game.log[-16:],
                 "chat": game.chat[-100:],
                 "my_premove": (seat is not None and game.pending_premoves.get(seat) is not None),
+                "my_premove_action": (deepcopy(game.pending_premoves.get(seat)) if seat is not None else None),
             }
 
     def add_chat_message(self, game_id: str, player_key: str | None, text: str) -> None:
@@ -536,6 +537,14 @@ class GameStore:
             seat = game.seat_for_key(player_key)
             if seat is None:
                 raise ValueError("Invalid player key.")
+            if t == "clear_premove":
+                if game.status != "active" or game.state.winner is not None:
+                    raise ValueError("Game is not active.")
+                if game.pending_premoves.get(seat) is None:
+                    return "No premove queued."
+                game.pending_premoves[seat] = None
+                return "Premove cleared."
+
             if t == "premove":
                 if game.status != "active" or game.state.winner is not None:
                     raise ValueError("Game is not active.")

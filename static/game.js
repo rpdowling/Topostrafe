@@ -281,12 +281,57 @@ function currentTurnBudgetForSeat() {
   return isMyTurn() ? Number(latestState.remaining_path || 0) : Number(latestState.settings.path_count || 0);
 }
 
+function normalizePremoveAction(action) {
+  if (!action || typeof action !== 'object') return null;
+  if (action.type === 'starter') return { type: 'starter', x: Number(action.x), y: Number(action.y) };
+  if (action.type === 'fortify') return { type: 'fortify', x: Number(action.x), y: Number(action.y) };
+  if (action.type === 'entrench') return { type: 'entrench', src: [Number(action.src[0]), Number(action.src[1])], target: [Number(action.target[0]), Number(action.target[1])] };
+  if (action.type === 'routes') return { type: 'routes', routes: (action.routes || []).map(route => route.map(c => [Number(c[0]), Number(c[1])])) };
+  if (action.type === 'end_turn') return { type: 'end_turn' };
+  return { type: String(action.type || '') };
+}
+
+function premoveActionsEqual(a, b) {
+  const na = normalizePremoveAction(a);
+  const nb = normalizePremoveAction(b);
+  return JSON.stringify(na) === JSON.stringify(nb);
+}
+
+function myPremoveAction() {
+  return latestState ? normalizePremoveAction(latestState.my_premove_action) : null;
+}
+
+function premoveHitCell(cell) {
+  const action = myPremoveAction();
+  if (!action || !cell) return false;
+  if (action.type === 'starter') return Number(action.x) === cell[0] && Number(action.y) === cell[1];
+  if (action.type === 'fortify') return Number(action.x) === cell[0] && Number(action.y) === cell[1];
+  if (action.type === 'entrench') {
+    const src = action.src || [];
+    const target = action.target || [];
+    if (target.length === 2 && Number(target[0]) === cell[0] && Number(target[1]) === cell[1]) return true;
+    if (src.length === 2 && Math.max(Math.abs(cell[0] - Number(src[0])), Math.abs(cell[1] - Number(src[1]))) === 1) return true;
+    return false;
+  }
+  if (action.type === 'routes') {
+    return (action.routes || []).some(route => route.some(c => Number(c[0]) === cell[0] && Number(c[1]) === cell[1]));
+  }
+  return false;
+}
+
 function sendGameAction(payload) {
   if (isMyTurn()) {
     send(payload);
     return;
   }
   if (!canDraftOrQueue()) return;
+  const queued = myPremoveAction();
+  if (queued && premoveActionsEqual(queued, payload)) {
+    send({ type: 'clear_premove' });
+    latestMessage = 'Premove cleared.';
+    renderStatus();
+    return;
+  }
   send({ type: 'premove', action: payload });
   latestMessage = 'Premove queued.';
   renderStatus();
@@ -1113,6 +1158,63 @@ function drawRoute(path, color, width = 4, dashed = false) {
   ctx.restore();
 }
 
+function drawPremoveOverlay() {
+  const action = myPremoveAction();
+  if (!action || !latestState || latestState.winner !== null) return;
+  const s = boardGeom.cell;
+  const seat = latestState.my_seat;
+  const base = seat === 0 ? 'rgba(255,0,255,0.50)' : 'rgba(255,255,255,0.70)';
+  const fill = seat === 0 ? 'rgba(255,0,255,0.10)' : 'rgba(255,255,255,0.10)';
+  ctx.save();
+  ctx.setLineDash([5, 4]);
+  ctx.lineWidth = Math.max(2, s * 0.08);
+  ctx.strokeStyle = base;
+  ctx.fillStyle = fill;
+  if (action.type === 'starter') {
+    const [cx, cy] = cellCenter([action.x, action.y]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(6, s * 0.34), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  } else if (action.type === 'routes') {
+    for (const route of (action.routes || [])) {
+      drawRoute(route, base, Math.max(3, s * 0.15), true);
+    }
+    const routes = action.routes || [];
+    const lastRoute = routes.length ? routes[routes.length - 1] : null;
+    if (lastRoute && lastRoute.length) {
+      const [cx, cy] = cellCenter(lastRoute[lastRoute.length - 1]);
+      ctx.beginPath();
+      ctx.arc(cx, cy, Math.max(5, s * 0.30), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  } else if (action.type === 'fortify') {
+    const road = roadAt([action.x, action.y]);
+    if (road) drawRoute(road.path, base, Math.max(3, s * 0.14), true);
+    ctx.fillRect(boardGeom.ox + action.x * s + 2, boardGeom.oy + action.y * s + 2, s - 4, s - 4);
+    ctx.strokeRect(boardGeom.ox + action.x * s + 2, boardGeom.oy + action.y * s + 2, s - 4, s - 4);
+  } else if (action.type === 'entrench') {
+    const src = action.src || [];
+    const target = action.target || [];
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const tx = Number(src[0]) + dx;
+        const ty = Number(src[1]) + dy;
+        if (!inBounds(tx, ty)) continue;
+        ctx.fillRect(boardGeom.ox + tx * s + 2, boardGeom.oy + ty * s + 2, s - 4, s - 4);
+        ctx.strokeRect(boardGeom.ox + tx * s + 2, boardGeom.oy + ty * s + 2, s - 4, s - 4);
+      }
+    }
+    if (target.length === 2) {
+      ctx.fillRect(boardGeom.ox + Number(target[0]) * s + 2, boardGeom.oy + Number(target[1]) * s + 2, s - 4, s - 4);
+      ctx.strokeRect(boardGeom.ox + Number(target[0]) * s + 2, boardGeom.oy + Number(target[1]) * s + 2, s - 4, s - 4);
+    }
+  }
+  ctx.restore();
+}
+
 function draw() {
   const rect = canvas.getBoundingClientRect();
   ctx.clearRect(0, 0, rect.width, rect.height);
@@ -1144,6 +1246,7 @@ function draw() {
   }
 
   latestState.roads.forEach(road => drawRoute(road.path, PLAYER_COLORS[road.owner], Math.max(3, s * 0.18), false));
+  drawPremoveOverlay();
   pendingRoutes.forEach(route => drawRoute(route, '#101010', Math.max(3, s * 0.18), true));
   if (activeRoute.length >= 2) drawRoute(activeRoute, previewValid ? '#111111' : '#ffffff', Math.max(3, s * 0.18), true);
   if (invalidPreviewPath.length >= 2) drawRoute(invalidPreviewPath, '#ffffff', Math.max(4, s * 0.22), true);
@@ -1233,6 +1336,14 @@ function onBoardClick(evt) {
   const mySeat = latestState.my_seat;
   if (mySeat === null) return;
 
+  if (!isMyTurn() && myPremoveAction() && premoveHitCell(cell)) {
+    send({ type: 'clear_premove' });
+    latestMessage = 'Premove cleared.';
+    renderStatus();
+    clearDraft();
+    return;
+  }
+
   if (mode === 'routes') {
     const clickedNode = nodeAt(cell);
     if (clickedNode) setRangeFromNode(cell);
@@ -1254,7 +1365,7 @@ function onBoardClick(evt) {
     if (!entrenchSource) {
       if (node && node.owner === mySeat) {
         entrenchSource = cell;
-        setRangeFromNode(cell);
+        clearRange();
         updateDraftLine();
         draw();
       }
