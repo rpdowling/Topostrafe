@@ -1336,7 +1336,7 @@ function onBoardClick(evt) {
   const mySeat = latestState.my_seat;
   if (mySeat === null) return;
 
-  if (!isMyTurn() && myPremoveAction() && premoveHitCell(cell)) {
+  if (!isMyTurn() && myPremoveAction()) {
     send({ type: 'clear_premove' });
     latestMessage = 'Premove cleared.';
     renderStatus();
