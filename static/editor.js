@@ -210,7 +210,7 @@ function buildForm() {
     opt.textContent = name;
     sel.appendChild(opt);
   });
-  el('editor_map_type').value = defaults.settings.map_type || 'Altar';
+  el('editor_map_type').value = defaults.settings.map_type || 'River';
   el('editor_width').value = defaults.settings.map_width || 30;
   el('editor_height').value = defaults.settings.map_height || 30;
 }

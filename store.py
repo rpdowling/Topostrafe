@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import engine_core as eng
-from preset_maps import ALTAR_MAP
+from preset_maps import ALTAR_MAP, RIVER_MAP
 
 
 ELEVATION_COLORS = {
@@ -20,7 +20,7 @@ ELEVATION_COLORS = {
 }
 PLAYER_COLORS = {0: "#ff00ff", 1: "#ffffff"}
 PLAYER_OUTLINES = {0: "#2b0030", 1: "#000000"}
-MAP_TYPES = ["Three Mountains", "Altar", "Noise", "Ridges", "Plains", "Mountains", "Custom"]
+MAP_TYPES = ["River", "Three Mountains", "Altar", "Noise", "Ridges", "Plains", "Mountains", "Custom"]
 SIZE_PRESETS = {
     "small": {"map_width": 10, "map_height": 10, "max_link_distance": 5, "path_count": 6},
     "medium": {"map_width": 20, "map_height": 20, "max_link_distance": 10, "path_count": 11},
@@ -92,7 +92,7 @@ class GameStore:
 
     def defaults(self) -> dict[str, Any]:
         d = eng.GameSettings()
-        d.map_type = "Three Mountains"
+        d.map_type = "River"
         return {
             "settings": d.__dict__.copy(),
             "map_types": MAP_TYPES,
@@ -189,7 +189,7 @@ class GameStore:
         if data["map_type"] not in MAP_TYPES:
             data["map_type"] = base.map_type
         if not data["map_type"]:
-            data["map_type"] = "Three Mountains"
+            data["map_type"] = "River"
         if preset_name in SIZE_PRESETS:
             data.update(SIZE_PRESETS[preset_name])
         data["map_width"] = max(5, min(80, int(data["map_width"])))
@@ -202,6 +202,8 @@ class GameStore:
         return eng.GameSettings(**data)
 
     def _map_from_payload(self, settings: eng.GameSettings, payload: dict[str, Any]) -> eng.MapData:
+        if settings.map_type == "River":
+            return eng.MapGenerator.normalize_existing(int(RIVER_MAP["width"]), int(RIVER_MAP["height"]), [[int(c) for c in row] for row in RIVER_MAP["grid"]])
         if settings.map_type == "Altar":
             return eng.MapGenerator.normalize_existing(int(ALTAR_MAP["width"]), int(ALTAR_MAP["height"]), [[int(c) for c in row] for row in ALTAR_MAP["grid"]])
         if settings.map_type == "Custom":

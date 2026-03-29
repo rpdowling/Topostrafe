@@ -15,7 +15,7 @@ class GameSettings:
     map_width: int = 30
     map_height: int = 30
     cell_size: int = 50
-    map_type: str = "Three Mountains"
+    map_type: str = "River"
     path_count: int = 16
     max_link_distance: int = 15
     start_band: int = 1
