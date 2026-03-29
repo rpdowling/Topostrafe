@@ -313,9 +313,9 @@ function evaluateRoutesLocal(routes, options = {}) {
     }
     if (!routeBuildAllowedLocal(src, route)) return { ok: false, message: 'Route and new node may only go to equal, lower, or one level higher terrain from the source.' };
 
-    const length = route.length - 1;
-    if (length > latestState.settings.max_link_distance) return { ok: false, message: `Max route length is ${latestState.settings.max_link_distance}.` };
-    totalCost += routeTraversalCost(route);
+    const routeCost = routeTraversalCost(route);
+    if (routeCost > latestState.settings.max_link_distance) return { ok: false, message: `Max single link traversal cost is ${latestState.settings.max_link_distance}.` };
+    totalCost += routeCost;
     sources.push(keyOf(src));
 
     for (const pos of route.slice(1, -1)) {
@@ -761,7 +761,7 @@ function practicalRangeCells(src, radius, showUnattackableTargets) {
 
 function ownRangeRadius() {
   if (!latestState) return 0;
-  return Math.max(0, localRemainingBudget());
+  return Math.max(0, Math.min(localRemainingBudget(), Number(latestState.settings.max_link_distance || 0)));
 }
 
 function otherRangeRadius() {

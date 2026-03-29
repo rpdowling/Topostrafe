@@ -706,10 +706,10 @@ class GameState:
             if not self.route_build_allowed(src, route):
                 return False, "Route and new node may only go to equal, lower, or one level higher terrain from the source.", None
 
-            length = len(route) - 1
-            if length > self.settings.max_link_distance:
-                return False, f"Max route length is {self.settings.max_link_distance}.", None
-            total_cost += self.route_traversal_cost(route)
+            route_cost = self.route_traversal_cost(route)
+            if route_cost > self.settings.max_link_distance:
+                return False, f"Max single link traversal cost is {self.settings.max_link_distance}.", None
+            total_cost += route_cost
             sources.append(src)
 
             for pos in route[1:-1]:
