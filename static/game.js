@@ -672,6 +672,28 @@ function sapTargetFromRoute(route) {
   return [end[0] + dx, end[1] + dy];
 }
 
+function isFortNode(node) {
+  return !!(node && node.fort);
+}
+
+function isSapSourceNode(node) {
+  return !!(node && (node.sapper || node.fort));
+}
+
+function drawDiamondMarker(cx, cy, radius, fillStyle, strokeStyle, lineWidth) {
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - radius);
+  ctx.lineTo(cx + radius, cy);
+  ctx.lineTo(cx, cy + radius);
+  ctx.lineTo(cx - radius, cy);
+  ctx.closePath();
+  ctx.fillStyle = fillStyle;
+  ctx.strokeStyle = strokeStyle;
+  ctx.lineWidth = lineWidth;
+  ctx.fill();
+  ctx.stroke();
+}
+
 function evaluateEntrenchRouteLocal(route) {
   if (!latestState) return { ok: false, message: 'No state.' };
   if (latestState.winner !== null) return { ok: false, message: 'Game over.' };
@@ -682,6 +704,7 @@ function evaluateEntrenchRouteLocal(route) {
   const src = route[0];
   const srcNode = nodeAt(src);
   if (!srcNode || srcNode.owner !== mySeat) return { ok: false, message: 'Select your own node first.' };
+  if (!isSapSourceNode(srcNode)) return { ok: false, message: 'Sap must start from a Fort or an existing sapper node.' };
   if (!connectedToCastle(mySeat).has(keyOf(src))) return { ok: false, message: 'Cannot act from nodes disconnected from your castle.' };
   if (new Set(route.map(keyOf)).size !== route.length) return { ok: false, message: 'A route cannot revisit cells.' };
   for (let i = 0; i < route.length - 1; i++) if (Math.abs(route[i][0]-route[i+1][0]) + Math.abs(route[i][1]-route[i+1][1]) !== 1) return { ok: false, message: 'Route must move orthogonally one cell at a time.' };
@@ -1377,9 +1400,15 @@ function drawPremoveOverlay() {
   } else if (action.type === 'fortify') {
     ctx.setLineDash([5, 4]);
     const road = roadAt([action.x, action.y]);
-    if (road) drawRoute(road.path, base, Math.max(3, s * 0.14), true);
-    ctx.fillRect(boardGeom.ox + action.x * s + 2, boardGeom.oy + action.y * s + 2, s - 4, s - 4);
-    ctx.strokeRect(boardGeom.ox + action.x * s + 2, boardGeom.oy + action.y * s + 2, s - 4, s - 4);
+    const node = nodeAt([action.x, action.y]);
+    if (road) {
+      drawRoute(road.path, base, Math.max(3, s * 0.14), true);
+      ctx.fillRect(boardGeom.ox + action.x * s + 2, boardGeom.oy + action.y * s + 2, s - 4, s - 4);
+      ctx.strokeRect(boardGeom.ox + action.x * s + 2, boardGeom.oy + action.y * s + 2, s - 4, s - 4);
+    } else if (node) {
+      const [cx, cy] = cellCenter([action.x, action.y]);
+      drawDiamondMarker(cx, cy, Math.max(6, s * 0.34), fill, base, Math.max(2, s * 0.08));
+    }
   }
   ctx.restore();
 }
@@ -1420,11 +1449,15 @@ function drawNodesOverlay() {
       ctx.lineTo(cx + Math.cos(ang + 2.45) * rr, cy + Math.sin(ang + 2.45) * rr);
       ctx.lineTo(cx + Math.cos(ang - 2.45) * rr, cy + Math.sin(ang - 2.45) * rr);
       ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } else if (isFortNode(node)) {
+      drawDiamondMarker(cx, cy, r, PLAYER_COLORS[node.owner], PLAYER_OUTLINES[node.owner], Math.max(2, s * 0.11));
     } else {
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
     }
-    ctx.fill();
-    ctx.stroke();
     if (node.starter) {
       ctx.beginPath();
       ctx.fillStyle = '#000000';
@@ -1591,6 +1624,12 @@ function onBoardClick(evt) {
     const node = nodeAt(cell);
     if (!activeRoute.length) {
       if (node && node.owner === mySeat) {
+        if (!isSapSourceNode(node)) {
+          latestMessage = 'Sap must start from a Fort or an existing sapper node.';
+          renderStatus();
+          draw();
+          return;
+        }
         clearRouteOnlyState();
         activeRoute = [cell];
         setRangeFromNode(cell);
@@ -1719,6 +1758,7 @@ function onBoardMouseDown(evt) {
   if (!activeRoute.length) {
     const node = nodeAt(cell);
     if (node && node.owner === mySeat) {
+      if (mode === 'entrench' && !isSapSourceNode(node)) return;
       activeRoute = [cell];
       setRangeFromNode(cell);
       updateDraftLine();
