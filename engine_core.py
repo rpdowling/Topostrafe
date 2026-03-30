@@ -28,7 +28,7 @@ class GameSettings:
     sap_adj_ignore: bool = True
     fortify_rule: bool = True
     low_point_restrict: bool = True
-    north_shading: bool = False
+    north_shading: bool = True
     require_move_confirmation: bool = False
 
     bot_castle_survival: int = 65

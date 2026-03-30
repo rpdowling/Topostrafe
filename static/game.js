@@ -1372,8 +1372,8 @@ function draw() {
         const northElev = map.grid[y - 1][x];
         const diff = elev - northElev;
         if (diff > 0) {
-          const shadeFrac = Math.min(0.25, 0.02 + 0.06 * diff);
-          const shadeAlpha = Math.min(0.28, 0.05 + 0.05 * diff);
+          const shadeFrac = Math.min(0.50, 0.06 + 0.11 * diff);
+          const shadeAlpha = Math.min(0.34, 0.06 + 0.055 * diff);
           ctx.fillStyle = `rgba(0,0,0,${shadeAlpha.toFixed(3)})`;
           ctx.fillRect(ox + x * s, oy + y * s, s, Math.max(1, s * shadeFrac));
         }
