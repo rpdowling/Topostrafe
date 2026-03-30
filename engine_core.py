@@ -927,10 +927,24 @@ class GameState:
         self.check_winner()
         return True, "Move placed."
 
-    def _create_road(self, path: list, owner: int, sapper: bool = False, expires_on_owner: int | None = None):
+    def _create_road(
+        self,
+        path: list,
+        owner: int,
+        sapper: bool = False,
+        expires_on_owner: int | None = None,
+        expires_on_turn: int | None = None,
+    ):
         if len(path) <= 2:
             return
-        road = Road(self.next_road_id, owner, path[:], sapper=sapper, expires_on_owner=expires_on_owner)
+        road = Road(
+            self.next_road_id,
+            owner,
+            path[:],
+            sapper=sapper,
+            expires_on_owner=expires_on_owner,
+            expires_on_turn=expires_on_turn,
+        )
         self.next_road_id += 1
         self.roads[road.road_id] = road
         for pos in road.cells:
@@ -943,11 +957,14 @@ class GameState:
         left = road.path[: idx + 1]
         right = road.path[idx:]
         owner = road.owner
+        sapper = getattr(road, "sapper", False)
+        expires_on_owner = getattr(road, "expires_on_owner", None)
+        expires_on_turn = getattr(road, "expires_on_turn", None)
         self._remove_road(road.road_id)
         if len(left) > 2:
-            self._create_road(left, owner)
+            self._create_road(left, owner, sapper=sapper, expires_on_owner=expires_on_owner, expires_on_turn=expires_on_turn)
         if len(right) > 2:
-            self._create_road(right, owner)
+            self._create_road(right, owner, sapper=sapper, expires_on_owner=expires_on_owner, expires_on_turn=expires_on_turn)
 
     def _remove_road(self, road_id: int):
         road = self.roads.pop(road_id, None)
