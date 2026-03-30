@@ -11,9 +11,23 @@
 </head>
 <body>
   <div class="page two-col">
-    <section class="panel">
-      <h1 class="site-title">Topostrafe</h1>
-      <p class="muted">Create a public game, a private code game, or a bot game.</p>
+    <section class="panel menu-panel">
+      <div class="hero-card">
+        <div class="hero-bg" aria-hidden="true"></div>
+        <div class="hero-content">
+          <h1 class="site-title">Topostrafe</h1>
+          <p class="hero-subtitle">Terrain strategy. Live duels. Custom maps.</p>
+
+          <div class="actions menu-actions hero-actions">
+            <button id="play-button" class="play-button" type="submit" form="create-form">Play</button>
+            <div class="menu-subactions">
+              <button id="bot-button" class="menu-secondary menu-bot-button" type="button" form="create-form">Play vs Bot (In Dev.)</button>
+              <a class="button-link menu-secondary menu-editor-button" href="/editor">Map Editor</a>
+            </div>
+            <span id="create-status" class="muted"></span>
+          </div>
+        </div>
+      </div>
 
       <details open class="rules-box">
         <summary>Rules</summary>
@@ -21,15 +35,6 @@
       </details>
 
       <form id="create-form" class="stack gap-12">
-        <div class="actions menu-actions">
-          <button id="play-button" class="play-button" type="submit">Play</button>
-          <div class="menu-subactions">
-            <button id="bot-button" class="menu-secondary menu-bot-button" type="button">Play vs Bot (In Dev.)</button>
-            <a class="button-link menu-secondary menu-editor-button" href="/editor">Map Editor</a>
-          </div>
-          <span id="create-status" class="muted"></span>
-        </div>
-
         <div class="grid two">
           <label>
             <span>Map</span>

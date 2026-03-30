@@ -87,7 +87,7 @@ async def api_generate_map(payload: dict[str, Any]):
         map_data = eng.MapData(PRISON_MAP["width"], PRISON_MAP["height"], [row[:] for row in PRISON_MAP["grid"]])
     elif map_type == "Altar":
         map_data = eng.MapData(ALTAR_MAP["width"], ALTAR_MAP["height"], [row[:] for row in ALTAR_MAP["grid"]])
-    elif map_type == "Mosaic":
+    elif map_type == "Bridges":
         map_data = eng.MapData(MOSAIC_MAP["width"], MOSAIC_MAP["height"], [row[:] for row in MOSAIC_MAP["grid"]])
     else:
         map_data = eng.MapGenerator.generate(width, height, map_type)

@@ -21,11 +21,11 @@ ELEVATION_COLORS = {
 }
 PLAYER_COLORS = {0: "#ff00ff", 1: "#ffffff"}
 PLAYER_OUTLINES = {0: "#2b0030", 1: "#000000"}
-MAP_TYPES = ["River", "Prison", "Mosaic", "Three Mountains", "Noise", "Ridges", "Plains", "Mountains", "Altar", "Custom"]
+MAP_TYPES = ["River", "Prison", "Bridges", "Three Mountains", "Noise", "Ridges", "Plains", "Mountains", "Altar", "Custom"]
 MAP_TYPE_LABELS = {
     "River": "River",
     "Prison": "Prison",
-    "Mosaic": "Mosaic",
+    "Bridges": "Bridges",
     "Three Mountains": "Three Mountains (randomized)",
     "Noise": "Noise (randomized)",
     "Ridges": "Ridges (randomized)",
@@ -223,7 +223,7 @@ class GameStore:
             return eng.MapData(int(PRISON_MAP["width"]), int(PRISON_MAP["height"]), [[int(c) for c in row] for row in PRISON_MAP["grid"]])
         if settings.map_type == "Altar":
             return eng.MapData(int(ALTAR_MAP["width"]), int(ALTAR_MAP["height"]), [[int(c) for c in row] for row in ALTAR_MAP["grid"]])
-        if settings.map_type == "Mosaic":
+        if settings.map_type == "Bridges":
             return eng.MapData(int(MOSAIC_MAP["width"]), int(MOSAIC_MAP["height"]), [[int(c) for c in row] for row in MOSAIC_MAP["grid"]])
         if settings.map_type == "Custom":
             raw = payload.get("custom_map_json", "")
