@@ -616,16 +616,20 @@ function clearRange() {
   rangeColor = null;
 }
 
-function clearDraft() {
+function clearRouteOnlyState() {
   activeRoute = [];
   pendingRoutes = [];
   pendingDestination = null;
-  entrenchSource = null;
   previewValid = true;
   invalidPreviewPath = [];
   invalidateAutoPath();
-  updateDraftLine();
   clearRoutePill();
+}
+
+function clearDraft() {
+  clearRouteOnlyState();
+  entrenchSource = null;
+  updateDraftLine();
   draw();
 }
 
@@ -1279,10 +1283,14 @@ function draw() {
   }
 
   latestState.roads.forEach(road => drawRoute(road.path, PLAYER_COLORS[road.owner], Math.max(3, s * 0.18), false));
+  const queuedOverlayAction = myPremoveAction();
+  const suppressRouteDraftOverlays = mode === 'entrench' || (queuedOverlayAction && queuedOverlayAction.type === 'entrench');
   drawPremoveOverlay();
-  pendingRoutes.forEach(route => drawRoute(route, '#101010', Math.max(3, s * 0.18), true));
-  if (activeRoute.length >= 2) drawRoute(activeRoute, previewValid ? '#111111' : '#ffffff', Math.max(3, s * 0.18), true);
-  if (invalidPreviewPath.length >= 2) drawRoute(invalidPreviewPath, '#ffffff', Math.max(4, s * 0.22), true);
+  if (!suppressRouteDraftOverlays) {
+    pendingRoutes.forEach(route => drawRoute(route, '#101010', Math.max(3, s * 0.18), true));
+    if (activeRoute.length >= 2) drawRoute(activeRoute, previewValid ? '#111111' : '#ffffff', Math.max(3, s * 0.18), true);
+    if (invalidPreviewPath.length >= 2) drawRoute(invalidPreviewPath, '#ffffff', Math.max(4, s * 0.22), true);
+  }
 
   latestState.retake_locks.forEach(lock => {
     const [cx, cy] = cellCenter([lock.x, lock.y]);
@@ -1326,7 +1334,7 @@ function draw() {
   });
   drawAnimations();
 
-  if (pendingDestination) {
+  if (!suppressRouteDraftOverlays && pendingDestination) {
     const [cx, cy] = cellCenter(pendingDestination);
     ctx.save();
     ctx.strokeStyle = '#101010';
@@ -1390,6 +1398,7 @@ function onBoardClick(evt) {
     const node = nodeAt(cell);
     if (!entrenchSource) {
       if (node && node.owner === mySeat) {
+        clearRouteOnlyState();
         entrenchSource = cell;
         clearRange();
         updateDraftLine();
@@ -1399,6 +1408,7 @@ function onBoardClick(evt) {
     }
     if (Math.max(Math.abs(cell[0] - entrenchSource[0]), Math.abs(cell[1] - entrenchSource[1])) === 1) {
       sendGameAction({ type: 'entrench', src: entrenchSource, target: cell });
+      clearRouteOnlyState();
       entrenchSource = null;
       updateDraftLine();
       draw();
@@ -1452,6 +1462,12 @@ function applyState(state, message) {
   previewValid = true;
   invalidPreviewPath = [];
   invalidateAutoPath();
+  const queuedNow = myPremoveAction();
+  if (queuedNow && queuedNow.type === 'entrench') {
+    clearRouteOnlyState();
+    entrenchSource = null;
+    clearRange();
+  }
   if (rangeAnchor) {
     if (nodeAt(rangeAnchor)) setRangeFromNode(rangeAnchor);
     else clearRange();
