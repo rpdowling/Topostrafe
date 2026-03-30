@@ -1231,47 +1231,38 @@ function drawPremoveOverlay() {
     if (road) drawRoute(road.path, base, Math.max(3, s * 0.14), true);
     ctx.fillRect(boardGeom.ox + action.x * s + 2, boardGeom.oy + action.y * s + 2, s - 4, s - 4);
     ctx.strokeRect(boardGeom.ox + action.x * s + 2, boardGeom.oy + action.y * s + 2, s - 4, s - 4);
-  } else if (action.type === 'entrench') {
-    ctx.restore();
-    const src = action.src || [];
-    const target = action.target || [];
-    if (src.length === 2) {
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue;
-          const tx = Number(src[0]) + dx;
-          const ty = Number(src[1]) + dy;
-          if (!inBounds(tx, ty)) continue;
-          drawCellBracket([tx, ty], 'rgba(210,40,40,0.45)', Math.max(2, s * 0.08), 4, 0.26);
-        }
-      }
-    }
-    if (target.length === 2) drawCellBracket([Number(target[0]), Number(target[1])], 'rgba(255,255,255,0.92)', Math.max(2, s * 0.10), 3, 0.30);
-    return;
   }
   ctx.restore();
+}
+
+function drawEntrenchPremoveOverlayAfterNodes() {
+  const action = myPremoveAction();
+  if (!action || action.type !== 'entrench' || !latestState || latestState.winner !== null) return;
+  const s = boardGeom.cell;
+  const src = action.src || [];
+  const target = action.target || [];
+  if (src.length === 2) {
+    const [cx, cy] = cellCenter([Number(src[0]), Number(src[1])]);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(210,40,40,0.85)';
+    ctx.lineWidth = Math.max(2, s * 0.10);
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(6, s * 0.38), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+  if (target.length === 2) {
+    drawCellBracket([Number(target[0]), Number(target[1])], 'rgba(255,255,255,0.92)', Math.max(2, s * 0.10), 3, 0.30);
+  }
 }
 
 function drawNodesOverlay() {
   if (!latestState) return;
   const s = boardGeom.cell;
-  const queued = myPremoveAction();
-  const emphasizeNodes = !!(queued && queued.type === 'entrench');
   latestState.nodes.forEach(node => {
     const [cx, cy] = cellCenter([node.x, node.y]);
     const r = Math.max(5, s * 0.34);
     ctx.save();
-    if (emphasizeNodes) {
-      ctx.beginPath();
-      ctx.fillStyle = 'rgba(0,0,0,0.92)';
-      ctx.arc(cx, cy, r + Math.max(2, s * 0.08), 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-      ctx.lineWidth = Math.max(2, s * 0.09);
-      ctx.arc(cx, cy, r + Math.max(1, s * 0.04), 0, Math.PI * 2);
-      ctx.stroke();
-    }
     ctx.beginPath();
     ctx.fillStyle = PLAYER_COLORS[node.owner];
     ctx.strokeStyle = PLAYER_OUTLINES[node.owner];
@@ -1378,6 +1369,7 @@ function draw() {
   }
 
   drawNodesOverlay();
+  drawEntrenchPremoveOverlayAfterNodes();
 }
 
 function onBoardClick(evt) {
