@@ -1370,7 +1370,7 @@ function draw() {
         if (dx === 0 && dy === 0) continue;
         const tx = entrenchSource[0] + dx;
         const ty = entrenchSource[1] + dy;
-        if (!inBounds(tx, ty)) continue;
+        if (tx < 0 || ty < 0 || tx >= map.width || ty >= map.height) continue;
         drawCellBracket([tx, ty], 'rgba(210,40,40,0.95)', Math.max(2, s * 0.08), 3, 0.28);
       }
     }
