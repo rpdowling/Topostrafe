@@ -391,3 +391,17 @@ button:hover, .button-link:hover { background: var(--button-active); }
   min-width: 176px;
   border-radius: 999px;
 }
+
+.menu-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+.menu-subactions {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+.menu-subactions > * {
+  flex: 0 1 46%;
+}
