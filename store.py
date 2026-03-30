@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import engine_core as eng
-from preset_maps import ALTAR_MAP, RIVER_MAP, THREE_BRIDGES_MAP
+from preset_maps import ALTAR_MAP, PRISON_MAP, RIVER_MAP, THREE_BRIDGES_MAP
 
 
 ELEVATION_COLORS = {
@@ -21,9 +21,10 @@ ELEVATION_COLORS = {
 }
 PLAYER_COLORS = {0: "#ff00ff", 1: "#ffffff"}
 PLAYER_OUTLINES = {0: "#2b0030", 1: "#000000"}
-MAP_TYPES = ["River", "Mosaic", "Three Mountains", "Noise", "Ridges", "Plains", "Mountains", "Altar", "Custom"]
+MAP_TYPES = ["River", "Prison", "Mosaic", "Three Mountains", "Noise", "Ridges", "Plains", "Mountains", "Altar", "Custom"]
 MAP_TYPE_LABELS = {
     "River": "River",
+    "Prison": "Prison",
     "Mosaic": "Mosaic",
     "Three Mountains": "Three Mountains (randomized)",
     "Noise": "Noise (randomized)",
@@ -218,6 +219,8 @@ class GameStore:
     def _map_from_payload(self, settings: eng.GameSettings, payload: dict[str, Any]) -> eng.MapData:
         if settings.map_type == "River":
             return eng.MapGenerator.normalize_existing(int(RIVER_MAP["width"]), int(RIVER_MAP["height"]), [[int(c) for c in row] for row in RIVER_MAP["grid"]])
+        if settings.map_type == "Prison":
+            return eng.MapGenerator.normalize_existing(int(PRISON_MAP["width"]), int(PRISON_MAP["height"]), [[int(c) for c in row] for row in PRISON_MAP["grid"]])
         if settings.map_type == "Altar":
             return eng.MapGenerator.normalize_existing(int(ALTAR_MAP["width"]), int(ALTAR_MAP["height"]), [[int(c) for c in row] for row in ALTAR_MAP["grid"]])
         if settings.map_type == "Mosaic":
