@@ -259,6 +259,15 @@ function setMode(next) {
     el(id).classList.toggle('active', id === `mode-${next}`);
   }
   if (mode !== 'entrench') entrenchSource = null;
+  if (mode === 'entrench') {
+    activeRoute = [];
+    pendingRoutes = [];
+    pendingDestination = null;
+    invalidPreviewPath = [];
+    previewValid = true;
+    invalidateAutoPath();
+    clearRange();
+  }
   updateDraftLine();
   clearRoutePill();
   draw();
@@ -1158,6 +1167,28 @@ function drawRoute(path, color, width = 4, dashed = false) {
   ctx.restore();
 }
 
+function drawCellBracket(cell, color, width = 2, inset = 4, lenFrac = 0.24) {
+  if (!cell) return;
+  const s = boardGeom.cell;
+  const x = boardGeom.ox + Number(cell[0]) * s + inset;
+  const y = boardGeom.oy + Number(cell[1]) * s + inset;
+  const w = s - inset * 2;
+  const h = s - inset * 2;
+  const lx = Math.max(4, w * lenFrac);
+  const ly = Math.max(4, h * lenFrac);
+  ctx.save();
+  ctx.setLineDash([]);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  ctx.moveTo(x, y + ly); ctx.lineTo(x, y); ctx.lineTo(x + lx, y);
+  ctx.moveTo(x + w - lx, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + ly);
+  ctx.moveTo(x + w, y + h - ly); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - lx, y + h);
+  ctx.moveTo(x + lx, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - ly);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawPremoveOverlay() {
   const action = myPremoveAction();
   if (!action || !latestState || latestState.winner !== null) return;
@@ -1166,11 +1197,11 @@ function drawPremoveOverlay() {
   const base = seat === 0 ? 'rgba(255,0,255,0.50)' : 'rgba(255,255,255,0.70)';
   const fill = seat === 0 ? 'rgba(255,0,255,0.10)' : 'rgba(255,255,255,0.10)';
   ctx.save();
-  ctx.setLineDash([5, 4]);
   ctx.lineWidth = Math.max(2, s * 0.08);
   ctx.strokeStyle = base;
   ctx.fillStyle = fill;
   if (action.type === 'starter') {
+    ctx.setLineDash([5, 4]);
     const [cx, cy] = cellCenter([action.x, action.y]);
     ctx.beginPath();
     ctx.arc(cx, cy, Math.max(6, s * 0.34), 0, Math.PI * 2);
@@ -1183,6 +1214,7 @@ function drawPremoveOverlay() {
     const routes = action.routes || [];
     const lastRoute = routes.length ? routes[routes.length - 1] : null;
     if (lastRoute && lastRoute.length) {
+      ctx.setLineDash([5, 4]);
       const [cx, cy] = cellCenter(lastRoute[lastRoute.length - 1]);
       ctx.beginPath();
       ctx.arc(cx, cy, Math.max(5, s * 0.30), 0, Math.PI * 2);
@@ -1190,29 +1222,28 @@ function drawPremoveOverlay() {
       ctx.stroke();
     }
   } else if (action.type === 'fortify') {
+    ctx.setLineDash([5, 4]);
     const road = roadAt([action.x, action.y]);
     if (road) drawRoute(road.path, base, Math.max(3, s * 0.14), true);
     ctx.fillRect(boardGeom.ox + action.x * s + 2, boardGeom.oy + action.y * s + 2, s - 4, s - 4);
     ctx.strokeRect(boardGeom.ox + action.x * s + 2, boardGeom.oy + action.y * s + 2, s - 4, s - 4);
   } else if (action.type === 'entrench') {
+    ctx.restore();
     const src = action.src || [];
     const target = action.target || [];
-    ctx.fillStyle = 'rgba(0,0,0,0)';
-    ctx.strokeStyle = base;
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        if (dx === 0 && dy === 0) continue;
-        const tx = Number(src[0]) + dx;
-        const ty = Number(src[1]) + dy;
-        if (!inBounds(tx, ty)) continue;
-        ctx.strokeRect(boardGeom.ox + tx * s + 3, boardGeom.oy + ty * s + 3, s - 6, s - 6);
+    if (src.length === 2) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const tx = Number(src[0]) + dx;
+          const ty = Number(src[1]) + dy;
+          if (!inBounds(tx, ty)) continue;
+          drawCellBracket([tx, ty], 'rgba(210,40,40,0.45)', Math.max(2, s * 0.08), 4, 0.26);
+        }
       }
     }
-    if (target.length === 2) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-      ctx.lineWidth = Math.max(2, s * 0.10);
-      ctx.strokeRect(boardGeom.ox + Number(target[0]) * s + 3, boardGeom.oy + Number(target[1]) * s + 3, s - 6, s - 6);
-    }
+    if (target.length === 2) drawCellBracket([Number(target[0]), Number(target[1])], 'rgba(255,255,255,0.92)', Math.max(2, s * 0.10), 3, 0.30);
+    return;
   }
   ctx.restore();
 }
@@ -1308,21 +1339,15 @@ function draw() {
   }
 
   if (entrenchSource) {
-    ctx.save();
-    ctx.lineWidth = Math.max(2, s * 0.08);
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         if (dx === 0 && dy === 0) continue;
         const tx = entrenchSource[0] + dx;
         const ty = entrenchSource[1] + dy;
         if (!inBounds(tx, ty)) continue;
-        ctx.strokeStyle = 'rgba(210,40,40,0.95)';
-        ctx.strokeRect(ox + tx * s + 3, oy + ty * s + 3, s - 6, s - 6);
-        ctx.fillStyle = 'rgba(210,40,40,0.08)';
-        ctx.fillRect(ox + tx * s + 4, oy + ty * s + 4, s - 8, s - 8);
+        drawCellBracket([tx, ty], 'rgba(210,40,40,0.95)', Math.max(2, s * 0.08), 3, 0.28);
       }
     }
-    ctx.restore();
   }
 }
 
