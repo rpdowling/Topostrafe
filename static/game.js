@@ -84,7 +84,10 @@ function lowPointRestrictEnabled() {
 }
 
 function routeStepAllowed(prevElev, nextElev, srcElev = prevElev) {
-  if (lowPointRestrictEnabled()) return nextElev >= Math.max(1, prevElev - 1);
+  if (lowPointRestrictEnabled()) {
+    const overallCap = Math.max(1, srcElev - 1);
+    return nextElev >= Math.max(overallCap, prevElev - 1);
+  }
   return nextElev >= Math.max(1, srcElev - 1);
 }
 

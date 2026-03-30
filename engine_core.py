@@ -504,10 +504,11 @@ class GameState:
         if not self.settings.low_point_restrict:
             min_allowed = max(1, src_elev - 1)
             return all(self.map.get(x, y) >= min_allowed for x, y in route[1:])
+        overall_cap = max(1, src_elev - 1)
         prev_elev = src_elev
         for x, y in route[1:]:
             elev = self.map.get(x, y)
-            if elev < max(1, prev_elev - 1):
+            if elev < max(overall_cap, prev_elev - 1):
                 return False
             prev_elev = elev
         return True
