@@ -115,6 +115,8 @@ class MapData:
         return MapData(data["width"], data["height"], data["grid"])
 
 class MapGenerator:
+    RANDOMIZED_ADJACENCY_TYPES = {"Noise", "Ridges", "Three Mountains", "Mountains"}
+
     @staticmethod
     def generate(width: int, height: int, map_type: str) -> MapData:
         if map_type == "Ridges":
@@ -128,8 +130,9 @@ class MapGenerator:
         else:
             grid = MapGenerator._generate_noise(width, height)
         MapGenerator._normalize_boundary_bands(grid)
-        MapGenerator._enforce_adjacency(grid)
-        MapGenerator._normalize_boundary_bands(grid)
+        if map_type in MapGenerator.RANDOMIZED_ADJACENCY_TYPES:
+            MapGenerator._enforce_adjacency(grid)
+            MapGenerator._normalize_boundary_bands(grid)
         return MapData(width, height, grid)
 
     @staticmethod
