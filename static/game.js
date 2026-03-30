@@ -1197,19 +1197,21 @@ function drawPremoveOverlay() {
   } else if (action.type === 'entrench') {
     const src = action.src || [];
     const target = action.target || [];
+    ctx.fillStyle = 'rgba(0,0,0,0)';
+    ctx.strokeStyle = base;
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         if (dx === 0 && dy === 0) continue;
         const tx = Number(src[0]) + dx;
         const ty = Number(src[1]) + dy;
         if (!inBounds(tx, ty)) continue;
-        ctx.fillRect(boardGeom.ox + tx * s + 2, boardGeom.oy + ty * s + 2, s - 4, s - 4);
-        ctx.strokeRect(boardGeom.ox + tx * s + 2, boardGeom.oy + ty * s + 2, s - 4, s - 4);
+        ctx.strokeRect(boardGeom.ox + tx * s + 3, boardGeom.oy + ty * s + 3, s - 6, s - 6);
       }
     }
     if (target.length === 2) {
-      ctx.fillRect(boardGeom.ox + Number(target[0]) * s + 2, boardGeom.oy + Number(target[1]) * s + 2, s - 4, s - 4);
-      ctx.strokeRect(boardGeom.ox + Number(target[0]) * s + 2, boardGeom.oy + Number(target[1]) * s + 2, s - 4, s - 4);
+      ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+      ctx.lineWidth = Math.max(2, s * 0.10);
+      ctx.strokeRect(boardGeom.ox + Number(target[0]) * s + 3, boardGeom.oy + Number(target[1]) * s + 3, s - 6, s - 6);
     }
   }
   ctx.restore();
@@ -1307,18 +1309,17 @@ function draw() {
 
   if (entrenchSource) {
     ctx.save();
-    ctx.lineWidth = Math.max(2, s * 0.07);
+    ctx.lineWidth = Math.max(2, s * 0.08);
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         if (dx === 0 && dy === 0) continue;
         const tx = entrenchSource[0] + dx;
         const ty = entrenchSource[1] + dy;
         if (!inBounds(tx, ty)) continue;
-        const [cx, cy] = cellCenter([tx, ty]);
-        ctx.fillStyle = 'rgba(0,0,0,0.10)';
-        ctx.strokeStyle = 'rgba(0,0,0,0.70)';
-        ctx.fillRect(cx - s * 0.38, cy - s * 0.38, s * 0.76, s * 0.76);
-        ctx.strokeRect(cx - s * 0.38, cy - s * 0.38, s * 0.76, s * 0.76);
+        ctx.strokeStyle = 'rgba(210,40,40,0.95)';
+        ctx.strokeRect(ox + tx * s + 3, oy + ty * s + 3, s - 6, s - 6);
+        ctx.fillStyle = 'rgba(210,40,40,0.08)';
+        ctx.fillRect(ox + tx * s + 4, oy + ty * s + 4, s - 8, s - 8);
       }
     }
     ctx.restore();
