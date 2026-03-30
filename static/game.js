@@ -89,6 +89,10 @@ function lowPointRestrictEnabled() {
   return !!(latestState && latestState.settings && latestState.settings.low_point_restrict);
 }
 
+function northShadingEnabled() {
+  return !!(latestState && latestState.settings && latestState.settings.north_shading);
+}
+
 function routeStepAllowed(prevElev, nextElev, srcElev = prevElev) {
   if (lowPointRestrictEnabled()) {
     const overallCap = Math.max(1, srcElev - 1);
@@ -1358,10 +1362,22 @@ function draw() {
   const { cell: s, ox, oy } = boardGeom;
   const map = latestState.map;
 
+  const useNorthShading = northShadingEnabled();
   for (let y = 0; y < map.height; y++) {
     for (let x = 0; x < map.width; x++) {
-      ctx.fillStyle = ELEVATION_COLORS[map.grid[y][x]] || '#888';
+      const elev = map.grid[y][x];
+      ctx.fillStyle = ELEVATION_COLORS[elev] || '#888';
       ctx.fillRect(ox + x * s, oy + y * s, s, s);
+      if (useNorthShading && y > 0) {
+        const northElev = map.grid[y - 1][x];
+        const diff = elev - northElev;
+        if (diff > 0) {
+          const shadeFrac = Math.min(0.25, 0.02 + 0.06 * diff);
+          const shadeAlpha = Math.min(0.28, 0.05 + 0.05 * diff);
+          ctx.fillStyle = `rgba(0,0,0,${shadeAlpha.toFixed(3)})`;
+          ctx.fillRect(ox + x * s, oy + y * s, s, Math.max(1, s * shadeFrac));
+        }
+      }
       ctx.strokeStyle = 'rgba(0,0,0,0.16)';
       ctx.strokeRect(ox + x * s, oy + y * s, s, s);
     }

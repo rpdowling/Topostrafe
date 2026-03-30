@@ -28,6 +28,7 @@ class GameSettings:
     sap_adj_ignore: bool = True
     fortify_rule: bool = True
     low_point_restrict: bool = True
+    north_shading: bool = False
     require_move_confirmation: bool = False
 
     bot_castle_survival: int = 65
@@ -56,6 +57,7 @@ class GameSettings:
             f"Sap Adj. Ignore: {'On' if self.sap_adj_ignore else 'Off'}",
             f"Fortify: {'On' if self.fortify_rule else 'Off'}",
             f"Low Point Restrict: {'On' if self.low_point_restrict else 'Off'}",
+            f"North Shading: {'On' if self.north_shading else 'Off'}",
             f"Require move confirmation: {'On' if self.require_move_confirmation else 'Off'}",
             "Attack rule: must attack downhill",
             "unless target group is cut off",
