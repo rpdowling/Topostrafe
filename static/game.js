@@ -1252,6 +1252,37 @@ function drawPremoveOverlay() {
   ctx.restore();
 }
 
+function drawNodesOverlay() {
+  if (!latestState) return;
+  const s = boardGeom.cell;
+  latestState.nodes.forEach(node => {
+    const [cx, cy] = cellCenter([node.x, node.y]);
+    ctx.save();
+    ctx.beginPath();
+    ctx.fillStyle = PLAYER_COLORS[node.owner];
+    ctx.strokeStyle = PLAYER_OUTLINES[node.owner];
+    ctx.lineWidth = Math.max(2, s * 0.11);
+    ctx.arc(cx, cy, Math.max(5, s * 0.34), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    if (node.starter) {
+      ctx.beginPath();
+      ctx.fillStyle = '#000000';
+      ctx.arc(cx, cy, Math.max(2, s * 0.10), 0, Math.PI * 2);
+      ctx.fill();
+      if (threatenedCastles[node.owner]) {
+        const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 180);
+        ctx.strokeStyle = `rgba(255,80,80,${0.35 + 0.35 * pulse})`;
+        ctx.lineWidth = Math.max(2, s * 0.10);
+        ctx.beginPath();
+        ctx.arc(cx, cy, Math.max(7, s * (0.40 + 0.05 * pulse)), 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  });
+}
+
 function draw() {
   const rect = canvas.getBoundingClientRect();
   ctx.clearRect(0, 0, rect.width, rect.height);
@@ -1306,32 +1337,6 @@ function draw() {
     ctx.restore();
   });
 
-  latestState.nodes.forEach(node => {
-    const [cx, cy] = cellCenter([node.x, node.y]);
-    ctx.save();
-    ctx.beginPath();
-    ctx.fillStyle = PLAYER_COLORS[node.owner];
-    ctx.strokeStyle = PLAYER_OUTLINES[node.owner];
-    ctx.lineWidth = Math.max(2, s * 0.11);
-    ctx.arc(cx, cy, Math.max(5, s * 0.34), 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    if (node.starter) {
-      ctx.beginPath();
-      ctx.fillStyle = '#000000';
-      ctx.arc(cx, cy, Math.max(2, s * 0.10), 0, Math.PI * 2);
-      ctx.fill();
-      if (threatenedCastles[node.owner]) {
-        const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 180);
-        ctx.strokeStyle = `rgba(255,80,80,${0.35 + 0.35 * pulse})`;
-        ctx.lineWidth = Math.max(2, s * 0.10);
-        ctx.beginPath();
-        ctx.arc(cx, cy, Math.max(7, s * (0.40 + 0.05 * pulse)), 0, Math.PI * 2);
-        ctx.stroke();
-      }
-    }
-    ctx.restore();
-  });
   drawAnimations();
 
   if (!suppressRouteDraftOverlays && pendingDestination) {
@@ -1357,6 +1362,8 @@ function draw() {
       }
     }
   }
+
+  drawNodesOverlay();
 }
 
 function onBoardClick(evt) {
