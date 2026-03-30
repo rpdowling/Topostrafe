@@ -405,3 +405,33 @@ button:hover, .button-link:hover { background: var(--button-active); }
 .menu-subactions > * {
   flex: 0 1 46%;
 }
+
+
+.site-title {
+  font-family: "Roboto", "Avenir Next", "Segoe UI", sans-serif;
+  font-size: clamp(2.2rem, 4vw, 2.9rem);
+  font-weight: 800;
+  letter-spacing: 0.025em;
+  margin-bottom: 10px;
+}
+
+.menu-actions {
+  align-items: center;
+}
+.menu-actions #create-status {
+  align-self: center;
+}
+.play-button {
+  align-self: center;
+}
+.menu-subactions {
+  width: auto;
+  margin: 0 auto;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+}
+.menu-subactions > * {
+  flex: 0 0 auto;
+}
