@@ -47,8 +47,8 @@ function buildForm() {
 
 
 const SIZE_PRESETS = {
-  small: { map_width: 10, map_height: 10, max_link_distance: 5, path_count: 6 },
-  medium: { map_width: 20, map_height: 20, max_link_distance: 10, path_count: 11 },
+  small: { map_width: 14, map_height: 14, max_link_distance: 7, path_count: 8 },
+  medium: { map_width: 22, map_height: 22, max_link_distance: 11, path_count: 12 },
   large: { map_width: 30, map_height: 30, max_link_distance: 15, path_count: 16 },
 };
 

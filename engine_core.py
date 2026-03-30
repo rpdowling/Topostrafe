@@ -504,24 +504,41 @@ class GameState:
         if not self.settings.low_point_restrict:
             min_allowed = max(1, src_elev - 1)
             return all(self.map.get(x, y) >= min_allowed for x, y in route[1:])
-        low_point = src_elev
+        prev_elev = src_elev
         for x, y in route[1:]:
             elev = self.map.get(x, y)
-            if elev < max(1, low_point - 1):
+            if elev < max(1, prev_elev - 1):
                 return False
-            if elev > low_point:
-                low_point = elev
+            prev_elev = elev
         return True
 
     @staticmethod
     def traversal_cost_for_elevation(elev: int) -> int:
         return {5: 2, 4: 1, 3: 2, 2: 2, 1: 3}.get(int(elev), 2)
 
+    def cliff_surcharge_unit(self) -> int:
+        import math
+        return max(1, int(math.ceil(self.settings.path_count / 4)))
+
+    def cliff_extra_cost_between(self, prev_pos, next_pos) -> int:
+        prev_elev = self.map.get(*prev_pos)
+        next_elev = self.map.get(*next_pos)
+        drop = next_elev - prev_elev
+        if drop <= 1:
+            return 0
+        return (drop - 1) * self.cliff_surcharge_unit()
+
     def traversal_cost_for_cell(self, pos) -> int:
         return self.traversal_cost_for_elevation(self.map.get(*pos))
 
+    def traversal_edge_cost(self, prev_pos, next_pos) -> int:
+        return self.traversal_cost_for_cell(next_pos) + self.cliff_extra_cost_between(prev_pos, next_pos)
+
     def route_traversal_cost(self, route: list) -> int:
-        return sum(self.traversal_cost_for_cell(pos) for pos in route[1:])
+        total = 0
+        for i in range(1, len(route)):
+            total += self.traversal_edge_cost(route[i - 1], route[i])
+        return total
 
     def max_single_link_cost(self) -> int:
         return max(0, int(self.settings.max_link_distance))
@@ -620,38 +637,35 @@ class GameState:
             return []
 
         src_elev = self.map.get(*src)
-        start_low = src_elev
         reach = {}
-        best = {(src, start_low): (0, 0)}
-        pq = [(0, 0, src, start_low)]
+        best = {src: (0, 0)}
+        pq = [(0, 0, src)]
 
         while pq:
-            spent, steps, cur, low_point = heapq.heappop(pq)
-            best_spent, best_steps = best.get((cur, low_point), (10**9, 10**9))
+            spent, steps, cur = heapq.heappop(pq)
+            best_spent, best_steps = best.get(cur, (10**9, 10**9))
             if spent > best_spent or (spent == best_spent and steps > best_steps):
                 continue
             if steps >= self.max_route_steps():
                 continue
 
+            cur_elev = self.map.get(*cur)
             for nxt in valid_neighbors4(cur[0], cur[1], self.map.width, self.map.height):
                 elev = self.map.get(*nxt)
                 if self.settings.low_point_restrict:
-                    if elev < max(1, low_point - 1):
+                    if elev < max(1, cur_elev - 1):
                         continue
-                    next_low = max(low_point, elev)
                 else:
                     if elev < max(1, src_elev - 1):
                         continue
-                    next_low = start_low
                 next_steps = steps + 1
-                next_spent = spent + self.traversal_cost_for_cell(nxt)
+                next_spent = spent + self.traversal_edge_cost(cur, nxt)
                 if next_spent > radius:
                     continue
-                state_key = (nxt, next_low)
-                prev = best.get(state_key)
+                prev = best.get(nxt)
                 if prev is not None and (next_spent > prev[0] or (next_spent == prev[0] and next_steps >= prev[1])):
                     continue
-                best[state_key] = (next_spent, next_steps)
+                best[nxt] = (next_spent, next_steps)
                 prev_reach = reach.get(nxt)
                 if prev_reach is None or next_spent < prev_reach[0] or (next_spent == prev_reach[0] and next_steps < prev_reach[1]):
                     reach[nxt] = (next_spent, next_steps)
@@ -676,7 +690,7 @@ class GameState:
                     reach.pop(nxt, None)
                     continue
 
-                heapq.heappush(pq, (next_spent, next_steps, nxt, next_low))
+                heapq.heappush(pq, (next_spent, next_steps, nxt))
         return sorted(reach)
 
     def is_retake_blocked(self, pos, owner: int) -> bool:
@@ -743,7 +757,7 @@ class GameState:
             if any(manhattan(route[i], route[i + 1]) != 1 for i in range(len(route) - 1)):
                 return False, "Route must move orthogonally one cell at a time.", None
             if not self.route_build_allowed(src, route):
-                return False, "Route and new node may only go to equal, lower, or one level higher terrain from the source.", None
+                return False, "Routes can only climb one elevation at a time; climb back up through intermediate elevations.", None
 
             route_cost = self.route_traversal_cost(route)
             if route_cost > self.max_single_link_cost():
