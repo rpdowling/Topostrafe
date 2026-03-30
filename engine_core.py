@@ -362,12 +362,17 @@ class MapGenerator:
 class Node:
     owner: int
     starter: bool = False
+    sapper: bool = False
+    sap_dir: tuple | None = None
+    expires_on_owner: int | None = None
 
 @dataclass
 class Road:
     road_id: int
     owner: int
     path: list
+    sapper: bool = False
+    expires_on_owner: int | None = None
 
     @property
     def length(self) -> int:
@@ -501,19 +506,40 @@ class GameState:
     def can_attack_from(self, src, dst) -> bool:
         return self.attack_elevation_for_source(src) < self.map.get(*dst)
 
-    def route_build_allowed(self, src, route: list) -> bool:
+    def is_direct_cliff_jump(self, prev_pos, next_pos, src, is_last_edge: bool, route_len: int) -> bool:
+        prev_elev = self.map.get(*prev_pos)
+        next_elev = self.map.get(*next_pos)
+        return prev_pos == src and is_last_edge and route_len == 2 and (next_elev - prev_elev) > 1
+
+    def route_build_allowed(self, src, route: list, allow_final_cliff_jump: bool = False) -> bool:
         src_elev = self.map.get(*src)
-        if not self.settings.low_point_restrict:
-            min_allowed = max(1, src_elev - 1)
-            return all(self.map.get(x, y) >= min_allowed for x, y in route[1:])
-        overall_cap = max(1, src_elev - 1)
+        prev = src
         prev_elev = src_elev
-        for x, y in route[1:]:
-            elev = self.map.get(x, y)
-            if elev < max(overall_cap, prev_elev - 1):
+        overall_cap = max(1, src_elev - 1)
+        for idx, pos in enumerate(route[1:], start=1):
+            elev = self.map.get(*pos)
+            is_last = idx == len(route) - 1
+            allow_direct = allow_final_cliff_jump and self.is_direct_cliff_jump(prev, pos, src, is_last, len(route))
+            if abs(elev - prev_elev) > 1 and not allow_direct:
                 return False
+            if elev < overall_cap:
+                return False
+            if self.settings.low_point_restrict and elev < prev_elev - 1:
+                return False
+            prev = pos
             prev_elev = elev
         return True
+
+    def route_has_cliff_jump(self, src, route: list) -> bool:
+        prev = src
+        for idx, pos in enumerate(route[1:], start=1):
+            if self.is_direct_cliff_jump(prev, pos, src, idx == len(route) - 1, len(route)):
+                return True
+            prev = pos
+        return False
+
+    def road_path_is_elevation_legal(self, path: list) -> bool:
+        return all(abs(self.map.get(*path[i]) - self.map.get(*path[i - 1])) <= 1 for i in range(1, len(path)))
 
     @staticmethod
     def traversal_cost_for_elevation(elev: int) -> int:
@@ -534,13 +560,19 @@ class GameState:
     def traversal_cost_for_cell(self, pos) -> int:
         return self.traversal_cost_for_elevation(self.map.get(*pos))
 
-    def traversal_edge_cost(self, prev_pos, next_pos) -> int:
-        return self.traversal_cost_for_cell(next_pos) + self.cliff_extra_cost_between(prev_pos, next_pos)
+    def traversal_edge_cost(self, prev_pos, next_pos, src=None, is_last_edge=False, route_len=None) -> int:
+        base = self.traversal_cost_for_cell(next_pos)
+        if src is not None and route_len is not None and self.is_direct_cliff_jump(prev_pos, next_pos, src, is_last_edge, route_len):
+            return base + self.cliff_extra_cost_between(prev_pos, next_pos)
+        return base
 
     def route_traversal_cost(self, route: list) -> int:
         total = 0
+        if not route:
+            return 0
+        src = route[0]
         for i in range(1, len(route)):
-            total += self.traversal_edge_cost(route[i - 1], route[i])
+            total += self.traversal_edge_cost(route[i - 1], route[i], src=src, is_last_edge=(i == len(route) - 1), route_len=len(route))
         return total
 
     def max_single_link_cost(self) -> int:
@@ -559,35 +591,81 @@ class GameState:
             return False
         return all(abs(new_val - self.map.get(nx, ny)) <= 1 for nx, ny in valid_neighbors4(x, y, self.map.width, self.map.height))
 
-    def preview_entrench(self, src, target):
+    def preview_entrench(self, route: list):
         if self.winner is not None:
-            return False, "Game over."
+            return False, "Game over.", None
         if not self.settings.entrench_rule:
-            return False, "Sap is disabled."
+            return False, "Sap is disabled.", None
+        if not route or len(route) < 2:
+            return False, "Sap route too short.", None
+        src = route[0]
         if src not in self.nodes or self.nodes[src].owner != self.current_owner:
-            return False, "Select your own node first."
+            return False, "Select your own node first.", None
         if not self.can_build_from(src, self.current_owner):
-            return False, "Cannot act from nodes disconnected from your castle."
-        if not adjacent8(src, target):
-            return False, "Sap must target an adjacent or diagonal square."
+            return False, "Cannot act from nodes disconnected from your castle.", None
+        if len(set(route)) != len(route):
+            return False, "A route cannot revisit cells.", None
+        if any(not self.map.in_bounds(x, y) for x, y in route):
+            return False, "Out of bounds.", None
+        if any(manhattan(route[i], route[i + 1]) != 1 for i in range(len(route) - 1)):
+            return False, "Route must move orthogonally one cell at a time.", None
+        if not self.route_build_allowed(src, route, allow_final_cliff_jump=True):
+            return False, "Sap route violates elevation restrictions.", None
+        if self.route_has_cliff_jump(src, route) and len(route) != 2:
+            return False, "Only a direct adjacent cliff jump may cross a non-adjacent elevation.", None
+        dest = route[-1]
+        if dest in self.nodes or self.road_at(dest) is not None:
+            return False, "Sap endpoint must be an empty square.", None
+        for pos in route[1:-1]:
+            if pos in self.nodes or self.road_at(pos) is not None:
+                return False, "Sap route cannot cross nodes or paths.", None
+        route_cost = self.route_traversal_cost(route)
+        if route_cost > self.max_single_link_cost():
+            return False, f"Max single link traversal cost is {self.max_single_link_cost()}.", None
+        if route_cost > self.remaining_path:
+            return False, "Not enough traversal cost remaining this turn.", None
+        if len(route) < 2:
+            return False, "Sap route too short.", None
+        dx = route[-1][0] - route[-2][0]
+        dy = route[-1][1] - route[-2][1]
+        target = (route[-1][0] + dx, route[-1][1] + dy)
         if not self.map.in_bounds(*target):
-            return False, "Out of bounds."
+            return False, "Sap target is out of bounds.", None
+        if target in self.nodes:
+            return False, "Sap cannot target a node square.", None
         cur = self.map.get(*target)
         if cur >= 5:
-            return False, "That square is already at the lowest elevation."
+            return False, "That square is already at the lowest elevation.", None
         new_val = cur + 1
-        if not self.settings.sap_adj_ignore:
-            if any(self.map.get(nx, ny) not in (cur, cur + 1) for nx, ny in valid_neighbors4(target[0], target[1], self.map.width, self.map.height)):
-                return False, "Sap requires all four adjacent squares to match the target square's current elevation."
-            if not self.can_change_cell_to(target, new_val):
-                return False, "Sap would violate the adjacent elevation rule."
-        return True, "Sap ready. Confirm or click the square again."
+        if not self.settings.sap_adj_ignore and not self.can_change_cell_to(target, new_val):
+            return False, "Sap would violate the adjacent elevation rule.", None
+        summary = {"route": [p[:] for p in route], "dest": dest, "target": target, "sap_dir": (dx, dy), "cost": route_cost}
+        return True, "Sap ready. Confirm to commit.", summary
 
-    def commit_entrench(self, src, target):
-        ok, msg = self.preview_entrench(src, target)
+    def cut_illegal_roads(self):
+        removed = False
+        for rid, road in list(self.roads.items()):
+            if not self.road_path_is_elevation_legal(road.path):
+                self._remove_road(rid)
+                removed = True
+        if removed:
+            self._cull_isolated(0)
+            self._cull_isolated(1)
+        return removed
+
+    def commit_entrench(self, route: list):
+        ok, msg, summary = self.preview_entrench(route)
         if not ok:
             return False, msg
+        dest = summary["dest"]
+        target = summary["target"]
+        dx, dy = summary["sap_dir"]
         self.map.set(target[0], target[1], self.map.get(*target) + 1)
+        self.nodes[dest] = Node(self.current_owner, starter=False, sapper=True, sap_dir=(dx, dy), expires_on_owner=self.current_owner)
+        if len(summary["route"]) > 2:
+            self._create_road(summary["route"], self.current_owner, sapper=True, expires_on_owner=self.current_owner)
+        self.remaining_path -= summary["cost"]
+        self.cut_illegal_roads()
         self.check_winner()
         return True, "Sap complete."
 
@@ -639,7 +717,6 @@ class GameState:
         if node is None or radius <= 0:
             return []
 
-        src_elev = self.map.get(*src)
         reach = {}
         best = {src: (0, 0)}
         pq = [(0, 0, src)]
@@ -652,17 +729,15 @@ class GameState:
             if steps >= self.max_route_steps():
                 continue
 
-            cur_elev = self.map.get(*cur)
             for nxt in valid_neighbors4(cur[0], cur[1], self.map.width, self.map.height):
-                elev = self.map.get(*nxt)
-                if self.settings.low_point_restrict:
-                    if elev < max(1, cur_elev - 1):
-                        continue
-                else:
-                    if elev < max(1, src_elev - 1):
-                        continue
                 next_steps = steps + 1
-                next_spent = spent + self.traversal_edge_cost(cur, nxt)
+                is_last = True
+                allow_cliff = (cur == src and steps == 0)
+                if not self.route_build_allowed(src, [src, nxt] if allow_cliff else [src, cur, nxt], allow_final_cliff_jump=allow_cliff):
+                    continue
+                if abs(self.map.get(*cur) - self.map.get(*nxt)) > 1 and not allow_cliff:
+                    continue
+                next_spent = spent + self.traversal_edge_cost(cur, nxt, src=src, is_last_edge=True, route_len=(2 if allow_cliff else 3))
                 if next_spent > radius:
                     continue
                 prev = best.get(nxt)
@@ -675,24 +750,14 @@ class GameState:
 
                 other_node = self.nodes.get(nxt)
                 if other_node is not None and nxt != src:
-                    if other_node.owner == node.owner:
-                        continue
-                    protected = self.is_connected_to_castle(nxt)
-                    if show_unattackable_targets or (not protected) or self.can_attack_from(src, nxt):
-                        continue
-                    reach.pop(nxt, None)
                     continue
 
                 road = self.road_at(nxt)
                 if road is not None:
-                    if road.owner == node.owner:
-                        continue
-                    protected = self.road_is_connected_to_castle(road)
-                    if show_unattackable_targets or (not protected) or self.can_attack_from(src, nxt):
-                        continue
-                    reach.pop(nxt, None)
                     continue
 
+                if abs(self.map.get(*cur) - self.map.get(*nxt)) > 1:
+                    continue
                 heapq.heappush(pq, (next_spent, next_steps, nxt))
         return sorted(reach)
 
@@ -759,8 +824,11 @@ class GameState:
                 return False, "Out of bounds.", None
             if any(manhattan(route[i], route[i + 1]) != 1 for i in range(len(route) - 1)):
                 return False, "Route must move orthogonally one cell at a time.", None
-            if not self.route_build_allowed(src, route):
-                return False, "Routes can only climb one elevation at a time; climb back up through intermediate elevations.", None
+            if not self.route_build_allowed(src, route, allow_final_cliff_jump=True):
+                return False, "Routes must respect elevation adjacency except for a direct adjacent cliff jump from the source node.", None
+            if self.route_has_cliff_jump(src, route):
+                if len(route) != 2:
+                    return False, "Only a direct adjacent cliff jump may cross a non-adjacent elevation.", None
 
             route_cost = self.route_traversal_cost(route)
             if route_cost > self.max_single_link_cost():
@@ -784,6 +852,9 @@ class GameState:
 
         dest_node = self.nodes.get(dest)
         dest_road = self.road_at(dest)
+        if any(self.route_has_cliff_jump(route[0], route) for route in routes):
+            if dest_node is not None or dest_road is not None:
+                return False, "A cliff jump can only be used to place a new adjacent node.", None
         mode = "build"
         target_road = None
 
@@ -854,10 +925,10 @@ class GameState:
         self.check_winner()
         return True, "Move placed."
 
-    def _create_road(self, path: list, owner: int):
+    def _create_road(self, path: list, owner: int, sapper: bool = False, expires_on_owner: int | None = None):
         if len(path) <= 2:
             return
-        road = Road(self.next_road_id, owner, path[:])
+        road = Road(self.next_road_id, owner, path[:], sapper=sapper, expires_on_owner=expires_on_owner)
         self.next_road_id += 1
         self.roads[road.road_id] = road
         for pos in road.cells:
@@ -926,11 +997,20 @@ class GameState:
             for pos in remove:
                 self._remove_node(pos)
 
+    def _expire_sappers_for_owner(self, owner: int):
+        for rid, road in list(self.roads.items()):
+            if road.expires_on_owner == owner:
+                self._remove_road(rid)
+        for pos, node in list(self.nodes.items()):
+            if node.expires_on_owner == owner:
+                self._remove_node(pos)
+
     def end_turn(self):
         if self.winner is not None:
             return False, "Game over."
         old_owner = self.current_owner
         self.current_owner = self.other_owner()
+        self._expire_sappers_for_owner(self.current_owner)
         self.remaining_path = self.settings.path_count
         self._expire_retake_locks(old_owner)
         self._cull_isolated(0)

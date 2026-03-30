@@ -369,11 +369,11 @@ class GameStore:
             seat = game.seat_for_key(player_key)
             state = game.state
             nodes = [
-                {"x": x, "y": y, "owner": node.owner, "starter": node.starter}
+                {"x": x, "y": y, "owner": node.owner, "starter": node.starter, "sapper": bool(getattr(node, "sapper", False)), "sap_dir": list(getattr(node, "sap_dir", []) or [] )}
                 for (x, y), node in sorted(state.nodes.items())
             ]
             roads = [
-                {"road_id": road.road_id, "owner": road.owner, "path": [[x, y] for (x, y) in road.path]}
+                {"road_id": road.road_id, "owner": road.owner, "path": [[x, y] for (x, y) in road.path], "sapper": bool(getattr(road, "sapper", False))}
                 for road in sorted(state.roads.values(), key=lambda r: r.road_id)
             ]
             return {
@@ -457,9 +457,10 @@ class GameStore:
         if t == "fortify":
             return {"type": "fortify", "x": int(action["x"]), "y": int(action["y"])}
         if t == "entrench":
-            src = action["src"]
-            target = action["target"]
-            return {"type": "entrench", "src": (int(src[0]), int(src[1])), "target": (int(target[0]), int(target[1]))}
+            route = []
+            for cell in action.get("route", []):
+                route.append((int(cell[0]), int(cell[1])))
+            return {"type": "entrench", "route": route}
         return {"type": t}
 
     def _execute_turn_action(self, game: GameSession, seat: int, action: dict[str, Any]) -> str:
@@ -486,9 +487,7 @@ class GameStore:
             ok, msg = game.state.commit_fortify((int(action["x"]), int(action["y"])))
             auto_end_turn = ok
         elif t == "entrench":
-            src = action["src"]
-            target = action["target"]
-            ok, msg = game.state.commit_entrench((int(src[0]), int(src[1])), (int(target[0]), int(target[1])))
+            ok, msg = game.state.commit_entrench(action.get("route", []))
             auto_end_turn = ok
         elif t == "end_turn":
             ok, msg = game.state.end_turn()

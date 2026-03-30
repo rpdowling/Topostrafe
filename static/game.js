@@ -62,10 +62,22 @@ function cliffExtraCostBetween(fromCell, toCell) {
   return (drop - 1) * cliffSurchargeUnit();
 }
 function traversalCostForCell(cell) { return traversalCostForElevation(mapElev(cell)); }
-function traversalEdgeCost(fromCell, toCell) { return traversalCostForCell(toCell) + cliffExtraCostBetween(fromCell, toCell); }
+function isDirectCliffJump(fromCell, toCell, srcCell, isLastEdge = false, routeLen = 0) {
+  if (!fromCell || !toCell || !srcCell) return false;
+  const fromElev = mapElev(fromCell);
+  const toElev = mapElev(toCell);
+  return sameCell(fromCell, srcCell) && isLastEdge && routeLen === 2 && (toElev - fromElev) > 1;
+}
+function traversalEdgeCost(fromCell, toCell, srcCell = null, isLastEdge = false, routeLen = 0) {
+  let total = traversalCostForCell(toCell);
+  if (srcCell && isDirectCliffJump(fromCell, toCell, srcCell, isLastEdge, routeLen)) total += cliffExtraCostBetween(fromCell, toCell);
+  return total;
+}
 function routeTraversalCost(route) {
   let total = 0;
-  for (let i = 1; i < route.length; i++) total += traversalEdgeCost(route[i - 1], route[i]);
+  if (!route || !route.length) return 0;
+  const srcCell = route[0];
+  for (let i = 1; i < route.length; i++) total += traversalEdgeCost(route[i - 1], route[i], srcCell, i === route.length - 1, route.length);
   return total;
 }
 
@@ -93,12 +105,14 @@ function northShadingEnabled() {
   return !!(latestState && latestState.settings && latestState.settings.north_shading);
 }
 
-function routeStepAllowed(prevElev, nextElev, srcElev = prevElev) {
-  if (lowPointRestrictEnabled()) {
-    const overallCap = Math.max(1, srcElev - 1);
-    return nextElev >= Math.max(overallCap, prevElev - 1);
+function routeStepAllowed(prevElev, nextElev, srcElev = prevElev, allowDirectCliff = false) {
+  if (Math.abs(nextElev - prevElev) > 1) {
+    if (!(allowDirectCliff && (nextElev - prevElev) > 1)) return false;
   }
-  return nextElev >= Math.max(1, srcElev - 1);
+  const overallCap = Math.max(1, srcElev - 1);
+  if (nextElev < overallCap) return false;
+  if (lowPointRestrictEnabled() && nextElev < prevElev - 1) return false;
+  return true;
 }
 
 function formatClock(seconds) {
@@ -332,7 +346,7 @@ function normalizePremoveAction(action) {
   if (!action || typeof action !== 'object') return null;
   if (action.type === 'starter') return { type: 'starter', x: Number(action.x), y: Number(action.y) };
   if (action.type === 'fortify') return { type: 'fortify', x: Number(action.x), y: Number(action.y) };
-  if (action.type === 'entrench') return { type: 'entrench', src: [Number(action.src[0]), Number(action.src[1])], target: [Number(action.target[0]), Number(action.target[1])] };
+  if (action.type === 'entrench') return { type: 'entrench', route: (action.route || []).map(c => [Number(c[0]), Number(c[1])]) };
   if (action.type === 'routes') return { type: 'routes', routes: (action.routes || []).map(route => route.map(c => [Number(c[0]), Number(c[1])])) };
   if (action.type === 'end_turn') return { type: 'end_turn' };
   return { type: String(action.type || '') };
@@ -354,11 +368,7 @@ function premoveHitCell(cell) {
   if (action.type === 'starter') return Number(action.x) === cell[0] && Number(action.y) === cell[1];
   if (action.type === 'fortify') return Number(action.x) === cell[0] && Number(action.y) === cell[1];
   if (action.type === 'entrench') {
-    const src = action.src || [];
-    const target = action.target || [];
-    if (target.length === 2 && Number(target[0]) === cell[0] && Number(target[1]) === cell[1]) return true;
-    if (src.length === 2 && Math.max(Math.abs(cell[0] - Number(src[0])), Math.abs(cell[1] - Number(src[1]))) === 1) return true;
-    return false;
+    return (action.route || []).some(c => Number(c[0]) === cell[0] && Number(c[1]) === cell[1]);
   }
   if (action.type === 'routes') {
     return (action.routes || []).some(route => route.some(c => Number(c[0]) === cell[0] && Number(c[1]) === cell[1]));
@@ -490,7 +500,8 @@ function evaluateRoutesLocal(routes, options = {}) {
         return { ok: false, message: 'Route must move orthogonally one cell at a time.' };
       }
     }
-    if (!routeBuildAllowedLocal(src, route)) return { ok: false, message: 'Routes can only climb one elevation at a time; climb back up through intermediate elevations.' };
+    if (!routeBuildAllowedLocal(src, route, true)) return { ok: false, message: 'Routes must respect elevation adjacency except for a direct adjacent cliff jump from the source node.' };
+    if (routeHasCliffJumpLocal(src, route) && route.length !== 2) return { ok: false, message: 'Only a direct adjacent cliff jump may cross a non-adjacent elevation.' };
 
     const routeCost = routeTraversalCost(route);
     if (routeCost > maxSingleLinkCost()) return { ok: false, message: `Max single link traversal cost is ${maxSingleLinkCost()}.` };
@@ -514,6 +525,7 @@ function evaluateRoutesLocal(routes, options = {}) {
   if (!partialLastRoute) {
     const destNode = nodeAt(dest);
     const destRoad = roadAt(dest);
+    if (routes.some(route => routeHasCliffJumpLocal(route[0], route)) && (destNode || destRoad)) return { ok: false, message: 'A cliff jump can only be used to place a new adjacent node.' };
     if (destNode && destNode.owner !== mySeat) {
       if (latestState.settings.retake_rule && latestState.retake_locks.some(lock => lock.blocked_owner === mySeat && lock.x === dest[0] && lock.y === dest[1])) {
         return { ok: false, message: 'Retake blocked on that node this turn.' };
@@ -539,12 +551,26 @@ function evaluateRoutesLocal(routes, options = {}) {
   return { ok: true, message: 'Ready. Confirm to commit.' };
 }
 
-function routeBuildAllowedLocal(src, route) {
+function routeHasCliffJumpLocal(src, route) {
+  let prev = src;
+  for (let i = 1; i < route.length; i++) {
+    if (isDirectCliffJump(prev, route[i], src, i === route.length - 1, route.length)) return true;
+    prev = route[i];
+  }
+  return false;
+}
+
+function routeBuildAllowedLocal(src, route, allowFinalCliffJump = false) {
   const srcElev = mapElev(src);
+  let prev = src;
   let prevElev = srcElev;
-  for (const pos of route.slice(1)) {
+  for (let i = 1; i < route.length; i++) {
+    const pos = route[i];
     const elev = mapElev(pos);
-    if (!routeStepAllowed(prevElev, elev, srcElev)) return false;
+    const isLast = i === route.length - 1;
+    const allowDirect = allowFinalCliffJump && isDirectCliffJump(prev, pos, src, isLast, route.length);
+    if (!routeStepAllowed(prevElev, elev, srcElev, allowDirect)) return false;
+    prev = pos;
     prevElev = elev;
   }
   return true;
@@ -562,9 +588,11 @@ function findShortestRoute(src, dst, options = {}) {
   const seat = playerSeat();
   if (seat === null) return null;
   if (!options.ignorePending && pendingDestination && !sameCell(dst, pendingDestination)) return null;
-  if (!options.ignorePending && sourceAlreadyUsed(src)) return null;
+  if (!options.ignorePending && mode === 'routes' && sourceAlreadyUsed(src)) return null;
   const srcElev = mapElev(src);
   const targetKey = keyOf(dst);
+  const requireEmptyDest = !!options.requireEmptyDest;
+  if (requireEmptyDest && (nodeAt(dst) || roadAt(dst))) return null;
   const limitCost = Math.max(0, Math.min(maxSingleLinkCost(), options.limitCost ?? localRemainingBudget()));
   const limitSteps = Math.max(0, maxRouteSteps());
   const best = new Map([[keyOf(src), { cost: 0, steps: 0 }]]);
@@ -585,16 +613,18 @@ function findShortestRoute(src, dst, options = {}) {
     const curElev = mapElev(cur);
     for (const nxt of neighbors4(cur)) {
       const elev = mapElev(nxt);
-      if (!routeStepAllowed(curElev, elev, srcElev)) continue;
+      const allowCliff = sameCell(cur, src) && steps === 0 && sameCell(nxt, dst);
+      if (!routeStepAllowed(curElev, elev, srcElev, allowCliff)) continue;
       const nk = keyOf(nxt);
       if (!sameCell(nxt, dst) && cellOccupiedForRoute(nxt, targetKey)) continue;
       const nextSteps = steps + 1;
-      const nextCost = spent + traversalEdgeCost(cur, nxt);
+      const nextCost = spent + traversalEdgeCost(cur, nxt, src, sameCell(nxt, dst), nextSteps);
       if (nextSteps > limitSteps || nextCost > limitCost) continue;
       const prevRec = best.get(nk);
       if (prevRec && (nextCost > prevRec.cost || (nextCost === prevRec.cost && nextSteps >= prevRec.steps))) continue;
       best.set(nk, { cost: nextCost, steps: nextSteps });
       prev.set(nk, stateKey);
+      if (Math.abs(elev - curElev) > 1) continue;
       queue.push([[nxt[0], nxt[1]], nextCost, nextSteps]);
     }
   }
@@ -631,6 +661,43 @@ function classifyRouteResult(path, opts = {}) {
     else { result = 'Attack path'; variant = 'attack'; }
   }
   return { title: result, sub: costSummary, variant };
+}
+
+function sapTargetFromRoute(route) {
+  if (!route || route.length < 2) return null;
+  const end = route[route.length - 1];
+  const prev = route[route.length - 2];
+  const dx = end[0] - prev[0];
+  const dy = end[1] - prev[1];
+  return [end[0] + dx, end[1] + dy];
+}
+
+function evaluateEntrenchRouteLocal(route) {
+  if (!latestState) return { ok: false, message: 'No state.' };
+  if (latestState.winner !== null) return { ok: false, message: 'Game over.' };
+  const mySeat = playerSeat();
+  if (mySeat === null) return { ok: false, message: 'Player seat unavailable.' };
+  if (!latestState.starter_placed[mySeat]) return { ok: false, message: 'Place your starter first.' };
+  if (!route || route.length < 2) return { ok: false, message: 'Sap route too short.' };
+  const src = route[0];
+  const srcNode = nodeAt(src);
+  if (!srcNode || srcNode.owner !== mySeat) return { ok: false, message: 'Select your own node first.' };
+  if (!connectedToCastle(mySeat).has(keyOf(src))) return { ok: false, message: 'Cannot act from nodes disconnected from your castle.' };
+  if (new Set(route.map(keyOf)).size !== route.length) return { ok: false, message: 'A route cannot revisit cells.' };
+  for (let i = 0; i < route.length - 1; i++) if (Math.abs(route[i][0]-route[i+1][0]) + Math.abs(route[i][1]-route[i+1][1]) !== 1) return { ok: false, message: 'Route must move orthogonally one cell at a time.' };
+  if (!routeBuildAllowedLocal(src, route, true)) return { ok: false, message: 'Sap route violates elevation restrictions.' };
+  if (routeHasCliffJumpLocal(src, route) && route.length !== 2) return { ok: false, message: 'Only a direct adjacent cliff jump may cross a non-adjacent elevation.' };
+  const dest = route[route.length - 1];
+  if (nodeAt(dest) || roadAt(dest)) return { ok: false, message: 'Sap endpoint must be an empty square.' };
+  for (const pos of route.slice(1, -1)) { if (nodeAt(pos) || roadAt(pos)) return { ok: false, message: 'Sap route cannot cross nodes or paths.' }; }
+  const cost = routeTraversalCost(route);
+  if (cost > maxSingleLinkCost()) return { ok: false, message: `Max single link traversal cost is ${maxSingleLinkCost()}.` };
+  if (cost > currentTurnBudgetForSeat()) return { ok: false, message: 'Not enough traversal cost remaining this turn.' };
+  const target = sapTargetFromRoute(route);
+  if (!target || target[0] < 0 || target[1] < 0 || target[0] >= latestState.map.width || target[1] >= latestState.map.height) return { ok: false, message: 'Sap target is out of bounds.' };
+  if (nodeAt(target)) return { ok: false, message: 'Sap cannot target a node square.' };
+  if (mapElev(target) >= 5) return { ok: false, message: 'That square is already at the lowest elevation.' };
+  return { ok: true, message: 'Sap ready.' };
 }
 
 function updateHoverPreview(cell, clientX, clientY) {
@@ -723,7 +790,7 @@ function updateDraftLine() {
   if (activeRoute.length) bits.push(`Active route cost ${routeTraversalCost(activeRoute)}`);
   if (pendingRoutes.length) bits.push(`Pending routes ${pendingRoutes.length} · cost ${localPendingLength()}`);
   if (pendingDestination) bits.push(`Dest ${pendingDestination[0]},${pendingDestination[1]}`);
-  if (entrenchSource) bits.push(`Sap src ${entrenchSource[0]},${entrenchSource[1]}`);
+  if (mode === 'entrench' && activeRoute.length) bits.push(`Sap route cost ${routeTraversalCost(activeRoute)}`);
   el('draft-line').textContent = bits.join(' · ') || 'No draft.';
 }
 
@@ -1296,22 +1363,10 @@ function drawPremoveOverlay() {
 function drawEntrenchPremoveOverlayAfterNodes() {
   const action = myPremoveAction();
   if (!action || action.type !== 'entrench' || !latestState || latestState.winner !== null) return;
-  const s = boardGeom.cell;
-  const src = action.src || [];
-  const target = action.target || [];
-  if (src.length === 2) {
-    const [cx, cy] = cellCenter([Number(src[0]), Number(src[1])]);
-    ctx.save();
-    ctx.strokeStyle = 'rgba(210,40,40,0.85)';
-    ctx.lineWidth = Math.max(2, s * 0.10);
-    ctx.beginPath();
-    ctx.arc(cx, cy, Math.max(6, s * 0.38), 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
-  }
-  if (target.length === 2) {
-    drawCellBracket([Number(target[0]), Number(target[1])], 'rgba(255,255,255,0.92)', Math.max(2, s * 0.10), 3, 0.30);
-  }
+  const route = action.route || [];
+  if (route.length >= 2) drawRoute(route, 'rgba(210,40,40,0.70)', Math.max(3, boardGeom.cell * 0.16), true);
+  const target = sapTargetFromRoute(route);
+  if (target) drawCellBracket(target, 'rgba(255,255,255,0.92)', Math.max(2, boardGeom.cell * 0.10), 3, 0.30);
 }
 
 function drawNodesOverlay() {
@@ -1332,7 +1387,18 @@ function drawNodesOverlay() {
     ctx.fillStyle = PLAYER_COLORS[node.owner];
     ctx.strokeStyle = PLAYER_OUTLINES[node.owner];
     ctx.lineWidth = Math.max(2, s * 0.11);
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    if (node.sapper && Array.isArray(node.sap_dir) && node.sap_dir.length === 2) {
+      const dx = Number(node.sap_dir[0]);
+      const dy = Number(node.sap_dir[1]);
+      const ang = Math.atan2(dy, dx);
+      const rr = Math.max(6, s * 0.38);
+      ctx.moveTo(cx + Math.cos(ang) * rr, cy + Math.sin(ang) * rr);
+      ctx.lineTo(cx + Math.cos(ang + 2.45) * rr, cy + Math.sin(ang + 2.45) * rr);
+      ctx.lineTo(cx + Math.cos(ang - 2.45) * rr, cy + Math.sin(ang - 2.45) * rr);
+      ctx.closePath();
+    } else {
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    }
     ctx.fill();
     ctx.stroke();
     if (node.starter) {
@@ -1434,15 +1500,22 @@ function draw() {
     ctx.restore();
   }
 
-  if (entrenchSource) {
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        if (dx === 0 && dy === 0) continue;
-        const tx = entrenchSource[0] + dx;
-        const ty = entrenchSource[1] + dy;
-        if (tx < 0 || ty < 0 || tx >= map.width || ty >= map.height) continue;
-        drawCellBracket([tx, ty], 'rgba(210,40,40,0.95)', Math.max(2, s * 0.08), 3, 0.28);
+  if (mode === 'entrench') {
+    if (activeRoute.length >= 2) {
+      drawRoute(activeRoute, previewValid ? 'rgba(180,30,30,0.95)' : '#ffffff', Math.max(3, s * 0.18), true);
+      const sapTarget = sapTargetFromRoute(activeRoute);
+      if (sapTarget && sapTarget[0] >= 0 && sapTarget[1] >= 0 && sapTarget[0] < map.width && sapTarget[1] < map.height) {
+        drawCellBracket(sapTarget, 'rgba(210,40,40,0.95)', Math.max(2, s * 0.08), 3, 0.28);
       }
+    } else if (activeRoute.length === 1) {
+      const [cx, cy] = cellCenter(activeRoute[0]);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(210,40,40,0.85)';
+      ctx.lineWidth = Math.max(2, s * 0.10);
+      ctx.beginPath();
+      ctx.arc(cx, cy, Math.max(6, s * 0.38), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
     }
   }
 
@@ -1491,21 +1564,43 @@ function onBoardClick(evt) {
   }
   if (mode === 'entrench') {
     const node = nodeAt(cell);
-    if (!entrenchSource) {
+    if (!activeRoute.length) {
       if (node && node.owner === mySeat) {
         clearRouteOnlyState();
-        entrenchSource = cell;
-        clearRange();
+        activeRoute = [cell];
+        setRangeFromNode(cell);
         updateDraftLine();
         draw();
       }
       return;
     }
-    if (Math.max(Math.abs(cell[0] - entrenchSource[0]), Math.abs(cell[1] - entrenchSource[1])) === 1) {
-      sendGameAction({ type: 'entrench', src: entrenchSource, target: cell });
-      clearRouteOnlyState();
-      entrenchSource = null;
-      updateDraftLine();
+    if (sameCell(cell, activeRoute[0])) {
+      clearDraft();
+      clearRange();
+      return;
+    }
+    if (activeRoute.length === 1 && !pointerDragged) {
+      const autoPath = findShortestRoute(activeRoute[0], cell, { requireEmptyDest: true, ignorePending: true });
+      if (autoPath) {
+        activeRoute = autoPath.map(p => [p[0], p[1]]);
+        const check = evaluateEntrenchRouteLocal(activeRoute);
+        if (check.ok) {
+          sendGameAction({ type: 'entrench', route: activeRoute });
+          clearDraft();
+          clearRange();
+        } else {
+          latestMessage = check.message;
+          renderStatus();
+          draw();
+        }
+      }
+      return;
+    }
+    const changed = extendActiveRouteTo(cell);
+    if (changed) {
+      const check = evaluateEntrenchRouteLocal(activeRoute);
+      previewValid = !!check.ok;
+      if (!check.ok) { latestMessage = check.message; renderStatus(); }
       draw();
     }
     return;
@@ -1578,7 +1673,7 @@ function applyState(state, message) {
 function onBoardMouseDown(evt) {
   pointerDown = true;
   pointerDragged = false;
-  if (!latestState || !canDraftOrQueue() || mode !== 'routes') return;
+  if (!latestState || !canDraftOrQueue() || (mode !== 'routes' && mode !== 'entrench')) return;
   const cell = hitCell(evt);
   if (!cell) return;
   const mySeat = latestState.my_seat;
@@ -1595,7 +1690,7 @@ function onBoardMouseDown(evt) {
 }
 
 function onBoardMouseMove(evt) {
-  if (!pointerDown || !latestState || !canDraftOrQueue() || mode !== 'routes' || !activeRoute.length) return;
+  if (!pointerDown || !latestState || !canDraftOrQueue() || (mode !== 'routes' && mode !== 'entrench') || !activeRoute.length) return;
   const cell = hitCell(evt);
   if (!cell) return;
   const last = activeRoute[activeRoute.length - 1];
@@ -1617,7 +1712,19 @@ function onBoardMouseUp() {
       suppressClick = false;
       suppressClickTimer = null;
     }, 0);
-    finishRoute();
+    if (mode === 'entrench') {
+      const check = evaluateEntrenchRouteLocal(activeRoute);
+      if (check.ok) {
+        sendGameAction({ type: 'entrench', route: activeRoute });
+        clearDraft();
+        clearRange();
+      } else {
+        latestMessage = check.message;
+        renderStatus();
+      }
+    } else {
+      finishRoute();
+    }
   }
   pointerDown = false;
   pointerDragged = false;
