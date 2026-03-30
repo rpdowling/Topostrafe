@@ -26,6 +26,7 @@ class GameSettings:
     show_unattackable_range_targets: bool = False
     entrench_rule: bool = True
     fortify_rule: bool = True
+    low_point_restrict: bool = True
     require_move_confirmation: bool = False
 
     bot_castle_survival: int = 65
@@ -52,6 +53,7 @@ class GameSettings:
             f"Show unattackable range targets: {'On' if self.show_unattackable_range_targets else 'Off'}",
             f"Sap: {'On' if self.entrench_rule else 'Off'}",
             f"Fortify: {'On' if self.fortify_rule else 'Off'}",
+            f"Low Point Restrict: {'On' if self.low_point_restrict else 'Off'}",
             f"Require move confirmation: {'On' if self.require_move_confirmation else 'Off'}",
             "Attack rule: must attack downhill",
             "unless target group is cut off",
@@ -497,8 +499,17 @@ class GameState:
 
     def route_build_allowed(self, src, route: list) -> bool:
         src_elev = self.map.get(*src)
-        min_allowed = max(1, src_elev - 1)
-        return all(self.map.get(x, y) >= min_allowed for x, y in route[1:])
+        if not self.settings.low_point_restrict:
+            min_allowed = max(1, src_elev - 1)
+            return all(self.map.get(x, y) >= min_allowed for x, y in route[1:])
+        low_point = src_elev
+        for x, y in route[1:]:
+            elev = self.map.get(x, y)
+            if elev < max(1, low_point - 1):
+                return False
+            if elev > low_point:
+                low_point = elev
+        return True
 
     @staticmethod
     def traversal_cost_for_elevation(elev: int) -> int:
@@ -599,51 +610,70 @@ class GameState:
         return True, f"Fortify complete on {len(eligible)} road square{'s' if len(eligible) != 1 else ''}."
 
     def practical_range_cells(self, src, radius: int, show_unattackable_targets: bool = True):
+        import heapq
+
         node = self.nodes.get(src)
         if node is None or radius <= 0:
             return []
-        min_allowed = max(1, self.map.get(*src) - 1)
+
+        src_elev = self.map.get(*src)
+        start_low = src_elev
         reach = {}
-        best = {src: (0, 0)}
-        q = deque([(0, 0, src)])
-        while q:
-            spent, steps, cur = q.popleft()
-            best_spent, best_steps = best.get(cur, (10**9, 10**9))
+        best = {(src, start_low): (0, 0)}
+        pq = [(0, 0, src, start_low)]
+
+        while pq:
+            spent, steps, cur, low_point = heapq.heappop(pq)
+            best_spent, best_steps = best.get((cur, low_point), (10**9, 10**9))
             if spent > best_spent or (spent == best_spent and steps > best_steps):
                 continue
             if steps >= self.max_route_steps():
                 continue
+
             for nxt in valid_neighbors4(cur[0], cur[1], self.map.width, self.map.height):
-                if self.map.get(*nxt) < min_allowed:
-                    continue
+                elev = self.map.get(*nxt)
+                if self.settings.low_point_restrict:
+                    if elev < max(1, low_point - 1):
+                        continue
+                    next_low = max(low_point, elev)
+                else:
+                    if elev < max(1, src_elev - 1):
+                        continue
+                    next_low = start_low
                 next_steps = steps + 1
                 next_spent = spent + self.traversal_cost_for_cell(nxt)
                 if next_spent > radius:
                     continue
-                prev = best.get(nxt)
+                state_key = (nxt, next_low)
+                prev = best.get(state_key)
                 if prev is not None and (next_spent > prev[0] or (next_spent == prev[0] and next_steps >= prev[1])):
                     continue
-                best[nxt] = (next_spent, next_steps)
+                best[state_key] = (next_spent, next_steps)
+                prev_reach = reach.get(nxt)
+                if prev_reach is None or next_spent < prev_reach[0] or (next_spent == prev_reach[0] and next_steps < prev_reach[1]):
+                    reach[nxt] = (next_spent, next_steps)
+
                 other_node = self.nodes.get(nxt)
                 if other_node is not None and nxt != src:
                     if other_node.owner == node.owner:
-                        reach[nxt] = (next_spent, next_steps)
-                    else:
-                        protected = self.is_connected_to_castle(nxt)
-                        if show_unattackable_targets or (not protected) or self.can_attack_from(src, nxt):
-                            reach[nxt] = (next_spent, next_steps)
+                        continue
+                    protected = self.is_connected_to_castle(nxt)
+                    if show_unattackable_targets or (not protected) or self.can_attack_from(src, nxt):
+                        continue
+                    reach.pop(nxt, None)
                     continue
+
                 road = self.road_at(nxt)
                 if road is not None:
                     if road.owner == node.owner:
-                        reach[nxt] = (next_spent, next_steps)
-                    else:
-                        protected = self.road_is_connected_to_castle(road)
-                        if show_unattackable_targets or (not protected) or self.can_attack_from(src, nxt):
-                            reach[nxt] = (next_spent, next_steps)
+                        continue
+                    protected = self.road_is_connected_to_castle(road)
+                    if show_unattackable_targets or (not protected) or self.can_attack_from(src, nxt):
+                        continue
+                    reach.pop(nxt, None)
                     continue
-                reach[nxt] = (next_spent, next_steps)
-                q.append((next_spent, next_steps, nxt))
+
+                heapq.heappush(pq, (next_spent, next_steps, nxt, next_low))
         return sorted(reach)
 
     def is_retake_blocked(self, pos, owner: int) -> bool:

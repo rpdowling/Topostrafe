@@ -63,6 +63,19 @@ function maxSingleLinkCost() {
   return Math.max(0, Number(latestState.settings.max_link_distance || 0));
 }
 
+function lowPointRestrictEnabled() {
+  return !!(latestState && latestState.settings && latestState.settings.low_point_restrict);
+}
+
+function nextLowPoint(currentLow, nextElev) {
+  return lowPointRestrictEnabled() ? Math.max(currentLow, nextElev) : currentLow;
+}
+
+function routeStepAllowedFromLow(currentLow, nextElev, srcElev = currentLow) {
+  if (lowPointRestrictEnabled()) return nextElev >= Math.max(1, currentLow - 1);
+  return nextElev >= Math.max(1, srcElev - 1);
+}
+
 function formatClock(seconds) {
   const s = Math.max(0, Math.floor(seconds));
   const h = Math.floor(s / 3600);
@@ -503,8 +516,13 @@ function evaluateRoutesLocal(routes, options = {}) {
 
 function routeBuildAllowedLocal(src, route) {
   const srcElev = mapElev(src);
-  const minAllowed = Math.max(1, srcElev - 1);
-  return route.slice(1).every(pos => mapElev(pos) >= minAllowed);
+  let lowPoint = srcElev;
+  for (const pos of route.slice(1)) {
+    const elev = mapElev(pos);
+    if (!routeStepAllowedFromLow(lowPoint, elev, srcElev)) return false;
+    lowPoint = nextLowPoint(lowPoint, elev);
+  }
+  return true;
 }
 
 
@@ -520,40 +538,50 @@ function findShortestRoute(src, dst, options = {}) {
   if (seat === null) return null;
   if (!options.ignorePending && pendingDestination && !sameCell(dst, pendingDestination)) return null;
   if (!options.ignorePending && sourceAlreadyUsed(src)) return null;
-  const minAllowed = Math.max(1, mapElev(src) - 1);
+  const srcElev = mapElev(src);
+  const startLow = srcElev;
   const targetKey = keyOf(dst);
   const limitCost = Math.max(0, Math.min(maxSingleLinkCost(), options.limitCost ?? localRemainingBudget()));
   const limitSteps = Math.max(0, maxRouteSteps());
-  const best = new Map([[keyOf(src), { cost: 0, steps: 0 }]]);
+  const best = new Map([[`${keyOf(src)}|${startLow}`, { cost: 0, steps: 0 }]]);
   const prev = new Map();
-  const queue = [[src, 0, 0]];
+  const queue = [[src, 0, 0, startLow]];
+  let foundStateKey = null;
   while (queue.length) {
     queue.sort((a, b) => (a[1] - b[1]) || (a[2] - b[2]));
-    const [cur, spent, steps] = queue.shift();
-    const curRec = best.get(keyOf(cur));
+    const [cur, spent, steps, lowPoint] = queue.shift();
+    const stateKey = `${keyOf(cur)}|${lowPoint}`;
+    const curRec = best.get(stateKey);
     if (!curRec || curRec.cost !== spent || curRec.steps !== steps) continue;
-    if (sameCell(cur, dst) && steps > 0) break;
+    if (sameCell(cur, dst) && steps > 0) {
+      foundStateKey = stateKey;
+      break;
+    }
     if (steps >= limitSteps) continue;
     for (const nxt of neighbors4(cur)) {
-      if (mapElev(nxt) < minAllowed) continue;
+      const elev = mapElev(nxt);
+      if (!routeStepAllowedFromLow(lowPoint, elev, srcElev)) continue;
       const nk = keyOf(nxt);
       if (!sameCell(nxt, dst) && cellOccupiedForRoute(nxt, targetKey)) continue;
       const nextSteps = steps + 1;
       const nextCost = spent + traversalCostForCell(nxt);
+      const nextLow = nextLowPoint(lowPoint, elev);
       if (nextSteps > limitSteps || nextCost > limitCost) continue;
-      const prevRec = best.get(nk);
+      const nextStateKey = `${nk}|${nextLow}`;
+      const prevRec = best.get(nextStateKey);
       if (prevRec && (nextCost > prevRec.cost || (nextCost === prevRec.cost && nextSteps >= prevRec.steps))) continue;
-      best.set(nk, { cost: nextCost, steps: nextSteps });
-      prev.set(nk, keyOf(cur));
-      queue.push([[nxt[0], nxt[1]], nextCost, nextSteps]);
+      best.set(nextStateKey, { cost: nextCost, steps: nextSteps });
+      prev.set(nextStateKey, stateKey);
+      queue.push([[nxt[0], nxt[1]], nextCost, nextSteps, nextLow]);
     }
   }
-  if (!best.has(targetKey) || targetKey === keyOf(src)) return null;
+  if (!foundStateKey || targetKey === keyOf(src)) return null;
   const out = [];
-  let cur = targetKey;
+  let cur = foundStateKey;
   while (cur) {
-    out.push(parseKey(cur));
-    if (cur === keyOf(src)) break;
+    const [cellKey] = cur.split('|');
+    out.push(parseKey(cellKey));
+    if (cellKey === keyOf(src)) break;
     cur = prev.get(cur);
   }
   out.reverse();
@@ -974,38 +1002,48 @@ function canAttackFrom(src, dst) {
 function practicalRangeData(src, radius, showUnattackableTargets) {
   const node = nodeAt(src);
   if (!node || radius <= 0) return [];
-  const minAllowed = Math.max(1, mapElev(src) - 1);
+  const srcElev = mapElev(src);
+  const startLow = srcElev;
   const reach = new Map();
-  const best = new Map([[keyOf(src), { cost: 0, steps: 0 }]]);
-  const queue = [[src, 0, 0]];
+  const best = new Map([[`${keyOf(src)}|${startLow}`, { cost: 0, steps: 0 }]]);
+  const queue = [[src, 0, 0, startLow]];
 
   while (queue.length) {
     queue.sort((a, b) => (a[1] - b[1]) || (a[2] - b[2]));
-    const [cur, spent, steps] = queue.shift();
-    const curBest = best.get(keyOf(cur));
+    const [cur, spent, steps, lowPoint] = queue.shift();
+    const stateKey = `${keyOf(cur)}|${lowPoint}`;
+    const curBest = best.get(stateKey);
     if (!curBest || spent !== curBest.cost || steps !== curBest.steps) continue;
     if (steps >= maxRouteSteps()) continue;
 
     for (const nxt of neighbors4(cur)) {
+      const elev = mapElev(nxt);
+      if (!routeStepAllowedFromLow(lowPoint, elev, srcElev)) continue;
       const nk = keyOf(nxt);
-      if (mapElev(nxt) < minAllowed) continue;
       const nextSteps = steps + 1;
       const nextCost = spent + traversalCostForCell(nxt);
+      const nextLow = nextLowPoint(lowPoint, elev);
       if (nextCost > radius) continue;
 
-      const prev = best.get(nk);
+      const nextStateKey = `${nk}|${nextLow}`;
+      const prev = best.get(nextStateKey);
       if (prev && (nextCost > prev.cost || (nextCost === prev.cost && nextSteps >= prev.steps))) continue;
-      best.set(nk, { cost: nextCost, steps: nextSteps });
+      best.set(nextStateKey, { cost: nextCost, steps: nextSteps });
+
+      const updateReach = () => {
+        const prior = reach.get(nk);
+        if (!prior || nextCost < prior.dist || (nextCost === prior.dist && nextSteps < prior.steps)) {
+          reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost, steps: nextSteps });
+        }
+      };
 
       const otherNode = nodeAt(nxt);
       if (otherNode && !sameCell(nxt, src)) {
         if (otherNode.owner === node.owner) {
-          reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
+          updateReach();
         } else {
           const protectedNode = isConnectedToCastle(nxt);
-          if (showUnattackableTargets || !protectedNode || canAttackFrom(src, nxt)) {
-            reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
-          }
+          if (showUnattackableTargets || !protectedNode || canAttackFrom(src, nxt)) updateReach();
         }
         continue;
       }
@@ -1013,18 +1051,16 @@ function practicalRangeData(src, radius, showUnattackableTargets) {
       const road = roadAt(nxt);
       if (road) {
         if (road.owner === node.owner) {
-          reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
+          updateReach();
         } else {
           const protectedRoad = roadIsConnectedToCastle(road);
-          if (showUnattackableTargets || !protectedRoad || canAttackFrom(src, nxt)) {
-            reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
-          }
+          if (showUnattackableTargets || !protectedRoad || canAttackFrom(src, nxt)) updateReach();
         }
         continue;
       }
 
-      reach.set(nk, { cell: [nxt[0], nxt[1]], dist: nextCost });
-      queue.push([[nxt[0], nxt[1]], nextCost, nextSteps]);
+      updateReach();
+      queue.push([[nxt[0], nxt[1]], nextCost, nextSteps, nextLow]);
     }
   }
 
