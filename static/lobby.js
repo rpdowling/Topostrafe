@@ -169,6 +169,7 @@ async function refreshGames() {
       const left = document.createElement('div');
       left.innerHTML = `<strong>${game.game_id}</strong><small>${displayMapType(game.map_type)} · ${game.size}</small><small>Path ${game.path_count} · Link ${game.max_link_distance} · ${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
       const btn = document.createElement('button');
+      btn.className = 'join-button';
       btn.textContent = 'Join';
       btn.onclick = async () => {
         try {

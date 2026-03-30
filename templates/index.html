@@ -7,34 +7,17 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="stylesheet" href="/static/app.css?v=22" />
 </head>
 <body>
-  <div class="page two-col">
-    <section class="panel menu-panel">
-      <div class="hero-card">
-        <div class="hero-bg" aria-hidden="true"></div>
-        <div class="hero-content">
-          <h1 class="site-title">Topostrafe</h1>
-          <p class="hero-subtitle">Terrain strategy. Live duels. Custom maps.</p>
-
-          <div class="actions menu-actions hero-actions">
-            <button id="play-button" class="play-button" type="submit" form="create-form">Play</button>
-            <div class="menu-subactions">
-              <button id="bot-button" class="menu-secondary menu-bot-button" type="button" form="create-form">Play vs Bot (In Dev.)</button>
-              <a class="button-link menu-secondary menu-editor-button" href="/editor">Map Editor</a>
-            </div>
-            <span id="create-status" class="muted"></span>
-          </div>
-        </div>
-      </div>
-
+  <div class="page menu-three-col">
+    <section class="panel settings-side">
       <details open class="rules-box">
         <summary>Rules</summary>
         <pre class="rules-text">{{ rules_text }}</pre>
       </details>
 
-      <form id="create-form" class="stack gap-12">
+      <form id="create-form" class="stack gap-12 top-12">
         <div class="grid two">
           <label>
             <span>Map</span>
@@ -88,9 +71,10 @@
           <label class="check"><input id="retake_rule" type="checkbox" /><span>Retake Lock</span></label>
           <label class="check"><input id="inherited_attack_rule" type="checkbox" /><span>Shared Attack Privilege</span></label>
           <label class="check"><input id="show_unattackable_range_targets" type="checkbox" /><span>Show Unattackable Targets</span></label>
-          <label class="check"><input id="entrench_rule" type="checkbox" /><span>Sap</span></label>
-          <label class="check"><input id="fortify_rule" type="checkbox" /><span>Fortify</span></label>
           <label class="check"><input id="low_point_restrict" type="checkbox" /><span>Low Point Restrict</span></label>
+          <label class="check"><input id="entrench_rule" type="checkbox" /><span>Sap</span></label>
+          <label class="check"><input id="sap_adj_ignore" type="checkbox" /><span>Sap Adj. Ignore</span></label>
+          <label class="check"><input id="fortify_rule" type="checkbox" /><span>Fortify</span></label>
           <label class="check"><input id="require_move_confirmation" type="checkbox" /><span>Require Move Confirmation</span></label>
         </div>
 
@@ -123,23 +107,41 @@
           <span>Load Custom Map File</span>
           <input id="custom_map_file" type="file" accept="application/json,.json" />
         </label>
-
       </form>
     </section>
 
-    <section class="panel">
+    <section class="hero-column">
+      <div class="hero-card menu-hero-card">
+        <div class="hero-bg" aria-hidden="true"></div>
+        <div class="hero-content">
+          <h1 class="site-title">Topostrafe</h1>
+          <p class="hero-subtitle">Terrain strategy. Live duels. Custom maps.</p>
+
+          <div class="actions menu-actions hero-actions">
+            <button id="play-button" class="play-button" type="submit" form="create-form">Play</button>
+            <div class="menu-subactions">
+              <button id="bot-button" class="menu-secondary menu-bot-button" type="button" form="create-form">Play vs Bot (In Dev.)</button>
+              <a class="button-link menu-secondary menu-editor-button" href="/editor">Map Editor</a>
+            </div>
+            <span id="create-status" class="muted"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel public-side">
       <h2>Open Public Games</h2>
       <form id="join-private-form" class="inline-form">
         <input id="private_code" type="text" placeholder="Private code" />
         <button type="submit">Join Private</button>
       </form>
-      <div id="games-list" class="stack gap-8"></div>
+      <div id="games-list" class="stack gap-8 top-12"></div>
     </section>
   </div>
 
   <script>
     window.TOPOS_DEFAULTS = {{ defaults_json | safe }};
   </script>
-  <script src="/static/lobby.js"></script>
+  <script src="/static/lobby.js?v=7"></script>
 </body>
 </html>

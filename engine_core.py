@@ -25,6 +25,7 @@ class GameSettings:
     inherited_attack_rule: bool = False
     show_unattackable_range_targets: bool = False
     entrench_rule: bool = True
+    sap_adj_ignore: bool = True
     fortify_rule: bool = True
     low_point_restrict: bool = True
     require_move_confirmation: bool = False
@@ -52,6 +53,7 @@ class GameSettings:
             f"Shared attack privilege: {'On' if self.inherited_attack_rule else 'Off'}",
             f"Show unattackable range targets: {'On' if self.show_unattackable_range_targets else 'Off'}",
             f"Sap: {'On' if self.entrench_rule else 'Off'}",
+            f"Sap Adj. Ignore: {'On' if self.sap_adj_ignore else 'Off'}",
             f"Fortify: {'On' if self.fortify_rule else 'Off'}",
             f"Low Point Restrict: {'On' if self.low_point_restrict else 'Off'}",
             f"Require move confirmation: {'On' if self.require_move_confirmation else 'Off'}",
@@ -553,11 +555,12 @@ class GameState:
         cur = self.map.get(*target)
         if cur >= 5:
             return False, "That square is already at the lowest elevation."
-        if any(self.map.get(nx, ny) not in (cur, cur + 1) for nx, ny in valid_neighbors4(target[0], target[1], self.map.width, self.map.height)):
-            return False, "Sap requires all four adjacent squares to match the target square's current elevation."
         new_val = cur + 1
-        if not self.can_change_cell_to(target, new_val):
-            return False, "Sap would violate the adjacent elevation rule."
+        if not self.settings.sap_adj_ignore:
+            if any(self.map.get(nx, ny) not in (cur, cur + 1) for nx, ny in valid_neighbors4(target[0], target[1], self.map.width, self.map.height)):
+                return False, "Sap requires all four adjacent squares to match the target square's current elevation."
+            if not self.can_change_cell_to(target, new_val):
+                return False, "Sap would violate the adjacent elevation rule."
         return True, "Sap ready. Confirm or click the square again."
 
     def commit_entrench(self, src, target):
