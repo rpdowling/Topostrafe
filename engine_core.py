@@ -365,6 +365,7 @@ class Node:
     sapper: bool = False
     sap_dir: tuple | None = None
     expires_on_owner: int | None = None
+    expires_on_turn: int | None = None
 
 @dataclass
 class Road:
@@ -373,6 +374,7 @@ class Road:
     path: list
     sapper: bool = False
     expires_on_owner: int | None = None
+    expires_on_turn: int | None = None
 
     @property
     def length(self) -> int:
@@ -403,6 +405,7 @@ class GameState:
         self.win_reason = ""
         self.next_road_id = 1
         self.retake_locks = {}
+        self.turn_index = 0
 
     def clone(self):
         return copy.deepcopy(self)
@@ -631,8 +634,6 @@ class GameState:
         target = (route[-1][0] + dx, route[-1][1] + dy)
         if not self.map.in_bounds(*target):
             return False, "Sap target is out of bounds.", None
-        if target in self.nodes:
-            return False, "Sap cannot target a node square.", None
         cur = self.map.get(*target)
         if cur >= 5:
             return False, "That square is already at the lowest elevation.", None
@@ -661,9 +662,10 @@ class GameState:
         target = summary["target"]
         dx, dy = summary["sap_dir"]
         self.map.set(target[0], target[1], self.map.get(*target) + 1)
-        self.nodes[dest] = Node(self.current_owner, starter=False, sapper=True, sap_dir=(dx, dy), expires_on_owner=self.current_owner)
+        expire_turn = self.turn_index + 3
+        self.nodes[dest] = Node(self.current_owner, starter=False, sapper=True, sap_dir=(dx, dy), expires_on_turn=expire_turn)
         if len(summary["route"]) > 2:
-            self._create_road(summary["route"], self.current_owner, sapper=True, expires_on_owner=self.current_owner)
+            self._create_road(summary["route"], self.current_owner, sapper=True, expires_on_turn=expire_turn)
         self.remaining_path -= summary["cost"]
         self.cut_illegal_roads()
         self.check_winner()
@@ -997,20 +999,21 @@ class GameState:
             for pos in remove:
                 self._remove_node(pos)
 
-    def _expire_sappers_for_owner(self, owner: int):
+    def _expire_sappers_for_turn(self, turn_index: int):
         for rid, road in list(self.roads.items()):
-            if road.expires_on_owner == owner:
+            if getattr(road, "expires_on_turn", None) == turn_index:
                 self._remove_road(rid)
         for pos, node in list(self.nodes.items()):
-            if node.expires_on_owner == owner:
+            if getattr(node, "expires_on_turn", None) == turn_index:
                 self._remove_node(pos)
 
     def end_turn(self):
         if self.winner is not None:
             return False, "Game over."
         old_owner = self.current_owner
+        self.turn_index += 1
         self.current_owner = self.other_owner()
-        self._expire_sappers_for_owner(self.current_owner)
+        self._expire_sappers_for_turn(self.turn_index)
         self.remaining_path = self.settings.path_count
         self._expire_retake_locks(old_owner)
         self._cull_isolated(0)

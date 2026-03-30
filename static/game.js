@@ -695,7 +695,6 @@ function evaluateEntrenchRouteLocal(route) {
   if (cost > currentTurnBudgetForSeat()) return { ok: false, message: 'Not enough traversal cost remaining this turn.' };
   const target = sapTargetFromRoute(route);
   if (!target || target[0] < 0 || target[1] < 0 || target[0] >= latestState.map.width || target[1] >= latestState.map.height) return { ok: false, message: 'Sap target is out of bounds.' };
-  if (nodeAt(target)) return { ok: false, message: 'Sap cannot target a node square.' };
   if (mapElev(target) >= 5) return { ok: false, message: 'That square is already at the lowest elevation.' };
   return { ok: true, message: 'Sap ready.' };
 }
@@ -790,7 +789,7 @@ function updateDraftLine() {
   if (activeRoute.length) bits.push(`Active route cost ${routeTraversalCost(activeRoute)}`);
   if (pendingRoutes.length) bits.push(`Pending routes ${pendingRoutes.length} · cost ${localPendingLength()}`);
   if (pendingDestination) bits.push(`Dest ${pendingDestination[0]},${pendingDestination[1]}`);
-  if (mode === 'entrench' && activeRoute.length) bits.push(`Sap route cost ${routeTraversalCost(activeRoute)}`);
+  if (mode === 'entrench' && activeRoute.length) bits.push(activeRoute.length >= 2 ? `Sap route cost ${routeTraversalCost(activeRoute)} · Click endpoint again to confirm` : `Sap source selected`);
   el('draft-line').textContent = bits.join(' · ') || 'No draft.';
 }
 
@@ -1318,6 +1317,31 @@ function drawCellBracket(cell, color, width = 2, inset = 4, lenFrac = 0.24) {
   ctx.restore();
 }
 
+
+function drawSapperPreviewTriangle(route, color = 'rgba(210,40,40,0.95)', outline = '#111111') {
+  if (!route || route.length < 2 || !latestState) return;
+  const end = route[route.length - 1];
+  const prev = route[route.length - 2];
+  const dx = end[0] - prev[0];
+  const dy = end[1] - prev[1];
+  const [cx, cy] = cellCenter(end);
+  const s = boardGeom.cell;
+  const ang = Math.atan2(dy, dx);
+  const rr = Math.max(6, s * 0.34);
+  ctx.save();
+  ctx.beginPath();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = outline;
+  ctx.lineWidth = Math.max(2, s * 0.08);
+  ctx.moveTo(cx + Math.cos(ang) * rr, cy + Math.sin(ang) * rr);
+  ctx.lineTo(cx + Math.cos(ang + 2.45) * rr, cy + Math.sin(ang + 2.45) * rr);
+  ctx.lineTo(cx + Math.cos(ang - 2.45) * rr, cy + Math.sin(ang - 2.45) * rr);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawPremoveOverlay() {
   const action = myPremoveAction();
   if (!action || !latestState || latestState.winner !== null) return;
@@ -1503,6 +1527,7 @@ function draw() {
   if (mode === 'entrench') {
     if (activeRoute.length >= 2) {
       drawRoute(activeRoute, previewValid ? 'rgba(180,30,30,0.95)' : '#ffffff', Math.max(3, s * 0.18), true);
+      drawSapperPreviewTriangle(activeRoute, previewValid ? 'rgba(210,40,40,0.95)' : '#ffffff', previewValid ? '#111111' : '#666666');
       const sapTarget = sapTargetFromRoute(activeRoute);
       if (sapTarget && sapTarget[0] >= 0 && sapTarget[1] >= 0 && sapTarget[0] < map.width && sapTarget[1] < map.height) {
         drawCellBracket(sapTarget, 'rgba(210,40,40,0.95)', Math.max(2, s * 0.08), 3, 0.28);
@@ -1574,6 +1599,20 @@ function onBoardClick(evt) {
       }
       return;
     }
+    if (activeRoute.length >= 2 && sameCell(cell, activeRoute[activeRoute.length - 1])) {
+      const check = evaluateEntrenchRouteLocal(activeRoute);
+      previewValid = !!check.ok;
+      if (check.ok) {
+        sendGameAction({ type: 'entrench', route: activeRoute });
+        clearDraft();
+        clearRange();
+      } else {
+        latestMessage = check.message;
+        renderStatus();
+        draw();
+      }
+      return;
+    }
     if (sameCell(cell, activeRoute[0])) {
       clearDraft();
       clearRange();
@@ -1584,15 +1623,13 @@ function onBoardClick(evt) {
       if (autoPath) {
         activeRoute = autoPath.map(p => [p[0], p[1]]);
         const check = evaluateEntrenchRouteLocal(activeRoute);
-        if (check.ok) {
-          sendGameAction({ type: 'entrench', route: activeRoute });
-          clearDraft();
-          clearRange();
-        } else {
+        previewValid = !!check.ok;
+        if (!check.ok) {
           latestMessage = check.message;
           renderStatus();
-          draw();
         }
+        updateDraftLine();
+        draw();
       }
       return;
     }
@@ -1601,6 +1638,7 @@ function onBoardClick(evt) {
       const check = evaluateEntrenchRouteLocal(activeRoute);
       previewValid = !!check.ok;
       if (!check.ok) { latestMessage = check.message; renderStatus(); }
+      updateDraftLine();
       draw();
     }
     return;
@@ -1714,14 +1752,13 @@ function onBoardMouseUp() {
     }, 0);
     if (mode === 'entrench') {
       const check = evaluateEntrenchRouteLocal(activeRoute);
-      if (check.ok) {
-        sendGameAction({ type: 'entrench', route: activeRoute });
-        clearDraft();
-        clearRange();
-      } else {
+      previewValid = !!check.ok;
+      if (!check.ok) {
         latestMessage = check.message;
         renderStatus();
       }
+      updateDraftLine();
+      draw();
     } else {
       finishRoute();
     }
