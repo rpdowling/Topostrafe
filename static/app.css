@@ -457,10 +457,11 @@ button:hover, .button-link:hover { background: var(--button-active); }
     linear-gradient(135deg, rgba(69,117,180,0.16) 0%, rgba(145,207,96,0.11) 34%, rgba(254,224,139,0.10) 64%, rgba(215,48,39,0.10) 100%),
     linear-gradient(rgba(255,255,255,0.045) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255,255,255,0.045) 1px, transparent 1px),
-    repeating-radial-gradient(circle at 18% 28%, rgba(255,255,255,0.07) 0 1px, transparent 1px 24px, rgba(255,255,255,0.04) 24px 25px, transparent 25px 48px),
-    repeating-radial-gradient(circle at 78% 34%, rgba(255,255,255,0.05) 0 1px, transparent 1px 22px, rgba(255,255,255,0.03) 22px 23px, transparent 23px 44px),
-    repeating-radial-gradient(circle at 50% 72%, rgba(255,255,255,0.045) 0 1px, transparent 1px 26px, rgba(255,255,255,0.028) 26px 27px, transparent 27px 54px);
-  background-size: auto, 28px 28px, 28px 28px, auto, auto, auto;
+    repeating-linear-gradient(0deg, transparent 0 17px, rgba(255,255,255,0.05) 17px 18px, transparent 18px 36px, rgba(255,255,255,0.03) 36px 37px, transparent 37px 72px),
+    repeating-linear-gradient(90deg, transparent 0 21px, rgba(255,255,255,0.045) 21px 22px, transparent 22px 44px, rgba(255,255,255,0.028) 44px 45px, transparent 45px 88px),
+    linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.03) 14%, transparent 28%, rgba(255,255,255,0.025) 42%, transparent 58%, rgba(255,255,255,0.03) 72%, transparent 100%),
+    linear-gradient(0deg, transparent 0%, rgba(255,255,255,0.025) 18%, transparent 34%, rgba(255,255,255,0.022) 52%, transparent 70%, rgba(255,255,255,0.025) 88%, transparent 100%);
+  background-size: auto, 28px 28px, 28px 28px, auto, auto, auto, auto;
   opacity: 0.95;
 }
 .hero-card::after {
@@ -520,10 +521,13 @@ button:hover, .button-link:hover { background: var(--button-active); }
 
 .menu-three-col {
   display: grid;
-  grid-template-columns: minmax(360px, 460px) minmax(420px, 620px) minmax(320px, 400px);
+  grid-template-columns: minmax(320px, 1fr) minmax(420px, 1.15fr) minmax(320px, 1fr);
   gap: 24px;
-  align-items: start;
+  align-items: stretch;
   min-height: calc(100vh - 32px);
+  width: 100%;
+  max-width: none;
+  margin: 0;
 }
 .settings-side,
 .public-side {
@@ -534,9 +538,10 @@ button:hover, .button-link:hover { background: var(--button-active); }
   align-items: center;
   justify-content: center;
   min-height: calc(100vh - 32px);
+  width: 100%;
 }
 .menu-hero-card {
-  width: min(100%, 560px);
+  width: min(100%, 640px);
   margin: 0 auto;
 }
 .menu-hero-card .hero-content {
@@ -602,4 +607,6 @@ button:hover, .button-link:hover { background: var(--button-active); }
 .settings-side,
 .public-side {
   overflow: auto;
+  width: 100%;
+  min-height: calc(100vh - 32px);
 }
