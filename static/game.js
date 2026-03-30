@@ -1259,10 +1259,17 @@ function drawEntrenchPremoveOverlayAfterNodes() {
 function drawNodesOverlay() {
   if (!latestState) return;
   const s = boardGeom.cell;
+  ctx.save();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
   latestState.nodes.forEach(node => {
     const [cx, cy] = cellCenter([node.x, node.y]);
     const r = Math.max(5, s * 0.34);
     ctx.save();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
     ctx.beginPath();
     ctx.fillStyle = PLAYER_COLORS[node.owner];
     ctx.strokeStyle = PLAYER_OUTLINES[node.owner];
@@ -1286,6 +1293,7 @@ function drawNodesOverlay() {
     }
     ctx.restore();
   });
+  ctx.restore();
 }
 
 function draw() {
@@ -1370,6 +1378,10 @@ function draw() {
 
   drawNodesOverlay();
   drawEntrenchPremoveOverlayAfterNodes();
+  const queuedAfter = myPremoveAction();
+  if (queuedAfter && queuedAfter.type === 'entrench') {
+    drawNodesOverlay();
+  }
 }
 
 function onBoardClick(evt) {
