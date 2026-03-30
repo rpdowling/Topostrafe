@@ -69,6 +69,12 @@ function routeTraversalCost(route) {
   return total;
 }
 
+function routeCliffSurcharge(route) {
+  let total = 0;
+  for (let i = 1; i < route.length; i++) total += cliffExtraCostBetween(route[i - 1], route[i]);
+  return total;
+}
+
 function maxRouteSteps() {
   if (!latestState) return 0;
   return Math.max(0, Number(latestState.settings.max_link_distance || 0));
@@ -603,8 +609,10 @@ function findShortestRoute(src, dst, options = {}) {
 function classifyRouteResult(path, opts = {}) {
   if (!path || path.length < 2) return { title: 'No route', sub: 'Select a source node.', variant: 'invalid' };
   const cost = routeTraversalCost(path);
+  const cliff = routeCliffSurcharge(path);
   const remaining = localRemainingBudget() - cost;
-  if (opts.invalid) return { title: 'Invalid route', sub: `Cost ${cost} · Remaining ${remaining}`, variant: 'invalid' };
+  const costSummary = cliff > 0 ? `Cost ${cost} · +Cliff Jump ${cliff} · Remaining ${remaining}` : `Cost ${cost} · Remaining ${remaining}`;
+  if (opts.invalid) return { title: 'Invalid route', sub: costSummary, variant: 'invalid' };
   const seat = playerSeat();
   const dest = path[path.length - 1];
   const destNode = nodeAt(dest);
@@ -618,7 +626,7 @@ function classifyRouteResult(path, opts = {}) {
     if (destRoad.owner === seat) result = 'Connect path';
     else { result = 'Attack path'; variant = 'attack'; }
   }
-  return { title: result, sub: `Cost ${cost} · Remaining ${remaining}`, variant };
+  return { title: result, sub: costSummary, variant };
 }
 
 function updateHoverPreview(cell, clientX, clientY) {
