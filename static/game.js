@@ -1241,13 +1241,13 @@ function detectVisualEvents(prev, next, message) {
   for (const [k, nextNode] of nextNodes.entries()) {
     const prevNode = prevNodes.get(k);
     if (prevNode && prevNode.owner !== nextNode.owner) {
-      events.push({ kind: 'rally', cell: [nextNode.x, nextNode.y], duration: 620 });
+      events.push({ kind: 'rally', cell: [nextNode.x, nextNode.y], duration: 1200 });
       continue;
     }
     if (prevNode) continue;
     const cell = [nextNode.x, nextNode.y];
     const enemyRoad = (prev.roads || []).find(r => r.owner !== nextNode.owner && r.path.some(p => sameCell(p, cell)));
-    if (enemyRoad) events.push({ kind: 'rally', cell, duration: 620 });
+    if (enemyRoad) events.push({ kind: 'rally', cell, duration: 1200 });
   }
   const changedCells = [];
   const prevGrid = prev.map && prev.map.grid ? prev.map.grid : [];
@@ -1296,19 +1296,7 @@ function drawAnimations() {
       ctx.fillRect(boardGeom.ox + x * boardGeom.cell + 1, boardGeom.oy + y * boardGeom.cell + 1, boardGeom.cell - 2, boardGeom.cell - 2);
       ctx.restore();
     } else if (anim.kind === 'rally') {
-      const [cx, cy] = cellCenter(anim.cell);
-      const pulse = 0.88 + 0.18 * Math.sin((now - anim.t0) / 90);
-      ctx.save();
-      ctx.globalAlpha = 0.95 * fade;
-      ctx.fillStyle = '#ff3b30';
-      ctx.strokeStyle = 'rgba(80,0,0,0.70)';
-      ctx.lineWidth = Math.max(1.5, boardGeom.cell * 0.05);
-      ctx.font = `bold ${Math.max(12, boardGeom.cell * 0.52 * pulse)}px system-ui, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.strokeText('!', cx, cy - boardGeom.cell * 0.03);
-      ctx.fillText('!', cx, cy - boardGeom.cell * 0.03);
-      ctx.restore();
+      drawRallyIndicator(anim.cell, 0.98 * fade, 90, 0.56);
     }
   }
 }
@@ -1558,21 +1546,12 @@ function draw() {
     if (invalidPreviewPath.length >= 2) drawRoute(invalidPreviewPath, '#ffffff', Math.max(4, s * 0.22), true);
   }
 
-  latestState.retake_locks.forEach(lock => {
-    const [cx, cy] = cellCenter([lock.x, lock.y]);
-    ctx.save();
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = Math.max(1, s * 0.08);
-    ctx.beginPath();
-    ctx.moveTo(cx - s * 0.16, cy - s * 0.16);
-    ctx.lineTo(cx + s * 0.16, cy + s * 0.16);
-    ctx.moveTo(cx + s * 0.16, cy - s * 0.16);
-    ctx.lineTo(cx - s * 0.16, cy + s * 0.16);
-    ctx.stroke();
-    ctx.restore();
-  });
-
   drawAnimations();
+
+  if (rallyActive()) {
+    const rally = rallyOrigin();
+    if (rally) drawRallyIndicator(rally, 0.98, 110, 0.60);
+  }
 
   if (!suppressRouteDraftOverlays && pendingDestination) {
     const [cx, cy] = cellCenter(pendingDestination);
