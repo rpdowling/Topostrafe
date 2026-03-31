@@ -419,61 +419,64 @@ class UmGameState:
         return blocked
 
     def _enclosed_cells_for_owner(self, owner: int) -> set[tuple[int, int]]:
-        blocked = self._owner_path_cells(owner)
-        if not blocked:
+        owner_paths = [path for path in self.paths.values() if path.owner == owner and len(path.cells) >= 2]
+        if not owner_paths:
             return set()
 
-        open_cells = {
-            (x, y)
-            for x in range(self.width)
-            for y in range(self.height)
-            if (x, y) not in blocked
-        }
-        if not open_cells:
-            return set()
+        micro_w = self.width * 2 + 1
+        micro_h = self.height * 2 + 1
+        occupied: set[tuple[int, int]] = set()
 
-        corners = [
-            (0, 0),
-            (self.width - 1, 0),
-            (0, self.height - 1),
-            (self.width - 1, self.height - 1),
-        ]
-        seeds = [pt for pt in corners if pt in open_cells]
+        def center(cell: tuple[int, int]) -> tuple[int, int]:
+            return (cell[0] * 2 + 1, cell[1] * 2 + 1)
+
+        for path in owner_paths:
+            prev_center = None
+            for cell in path.cells:
+                c = center(cell)
+                occupied.add(c)
+                if prev_center is not None:
+                    mid = ((prev_center[0] + c[0]) // 2, (prev_center[1] + c[1]) // 2)
+                    occupied.add(mid)
+                prev_center = c
 
         outside: set[tuple[int, int]] = set()
-        if seeds:
-            q = deque(seeds)
-            outside.update(seeds)
-            while q:
-                x, y = q.popleft()
-                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                    np = (x + dx, y + dy)
-                    if np not in open_cells or np in outside:
-                        continue
-                    outside.add(np)
-                    q.append(np)
-        else:
-            remaining = set(open_cells)
-            largest: set[tuple[int, int]] = set()
-            while remaining:
-                seed = next(iter(remaining))
-                comp = {seed}
-                q = deque([seed])
-                remaining.remove(seed)
-                while q:
-                    x, y = q.popleft()
-                    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                        np = (x + dx, y + dy)
-                        if np not in remaining:
-                            continue
-                        remaining.remove(np)
-                        comp.add(np)
-                        q.append(np)
-                if len(comp) > len(largest):
-                    largest = comp
-            outside = largest
+        q = deque()
+        for x in range(micro_w):
+            for y in (0, micro_h - 1):
+                pt = (x, y)
+                if pt in occupied or pt in outside:
+                    continue
+                outside.add(pt)
+                q.append(pt)
+        for y in range(micro_h):
+            for x in (0, micro_w - 1):
+                pt = (x, y)
+                if pt in occupied or pt in outside:
+                    continue
+                outside.add(pt)
+                q.append(pt)
 
-        return open_cells - outside
+        while q:
+            x, y = q.popleft()
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                np = (x + dx, y + dy)
+                if not (0 <= np[0] < micro_w and 0 <= np[1] < micro_h):
+                    continue
+                if np in occupied or np in outside:
+                    continue
+                outside.add(np)
+                q.append(np)
+
+        enclosed: set[tuple[int, int]] = set()
+        for x in range(self.width):
+            for y in range(self.height):
+                c = center((x, y))
+                if c in occupied:
+                    continue
+                if c not in outside:
+                    enclosed.add((x, y))
+        return enclosed
 
     def check_winner(self):
         if self.winner is not None:

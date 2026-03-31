@@ -167,15 +167,7 @@ function eventToCell(evt) {
 }
 
 function captureFadeEffects(prev, next) {
-  if (!prev || !next) return;
-  const prevNodes = new Map((prev.nodes || []).map(n => [`${n.x},${n.y}`, n]));
-  const nextNodes = new Set((next.nodes || []).map(n => `${n.x},${n.y}`));
-  const now = performance.now();
-  for (const [key, node] of prevNodes.entries()) {
-    if (nextNodes.has(key)) continue;
-    const [x, y] = parseKey(key);
-    fadeEffects.push({ type: 'node', x, y, owner: node.owner, starter: !!node.starter, t0: now, duration: 550 });
-  }
+  fadeEffects = [];
 }
 
 function cleanupFadeEffects() {
@@ -250,7 +242,7 @@ function renderDraftLine() {
     return;
   }
   if (pendingNode) {
-    node.textContent = `Pending node at ${pendingNode[0] + 1},${pendingNode[1] + 1}. ${requireMoveConfirmation() ? 'Click Confirm Turn or click the same square again.' : ''}`.trim();
+    node.textContent = `Pending node at ${pendingNode[0] + 1},${pendingNode[1] + 1}. Click the same square again to confirm. Click anywhere else to clear.`;
     return;
   }
   if (currentSegment && currentSegment.length > 1) {
@@ -276,7 +268,7 @@ function renderDraftLine() {
 }
 
 function updateActionButtons() {
-  const canConfirmNode = isMyTurn() && !!pendingNode;
+  const canConfirmNode = false;
   const canConfirmPath = isMyTurn() && draftSegments.length > 0 && (!currentSegment || currentSegment.length <= 1);
   const confirmButton = el('commit-path');
   const showConfirm = requireMoveConfirmation() || draftSegments.length > 0;
@@ -597,17 +589,12 @@ function handleNodePlacement(cell) {
   }
   currentSegment = null;
   draftSegments = [];
-  if (requireMoveConfirmation()) {
-    if (pendingNode && sameCell(pendingNode, cell)) {
-      sendPendingNode();
-      return;
-    }
-    pendingNode = cell;
-    renderState();
+  if (pendingNode && sameCell(pendingNode, cell)) {
+    sendPendingNode();
     return;
   }
-  pendingNode = null;
-  send({ type: 'um_node', x: cell[0], y: cell[1] });
+  pendingNode = cell;
+  renderState();
 }
 
 function startPathFrom(cell) {
@@ -695,6 +682,16 @@ function handleBoardClick(evt) {
       return;
     }
     setStatus('Trace the path with the mouse, then click a friendly end node.', true);
+    return;
+  }
+
+  if (pendingNode) {
+    if (sameCell(cell, pendingNode)) {
+      sendPendingNode();
+    } else {
+      pendingNode = null;
+      renderState();
+    }
     return;
   }
 
