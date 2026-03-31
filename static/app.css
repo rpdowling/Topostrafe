@@ -18,6 +18,24 @@ body {
   background: var(--bg);
   color: var(--text);
 }
+body.menu-page {
+  position: relative;
+  background:
+    linear-gradient(rgba(15,20,26,0.88), rgba(15,20,26,0.88)),
+    url("/static/Background_topostrafe.PNG") center center / cover no-repeat fixed;
+}
+body.menu-page::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  background:
+    linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+  background-size: 28px 28px;
+  opacity: 0.22;
+}
 .page { padding: 16px; }
 .two-col {
   display: grid;
