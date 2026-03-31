@@ -826,3 +826,22 @@ body.info-modal-open {
     padding: 14px 18px 18px;
   }
 }
+
+.rally-marker {
+  position: absolute;
+  transform: translate(-50%, -58%);
+  color: rgb(235,40,40);
+  -webkit-text-stroke: 1.5px rgba(255,255,255,0.88);
+  font-weight: 900;
+  line-height: 1;
+  pointer-events: none;
+  z-index: 6;
+  animation: rally-pulse 0.9s ease-in-out infinite;
+  text-shadow: 0 0 8px rgba(235,40,40,0.32);
+}
+.rally-marker.hidden { display: none; }
+@keyframes rally-pulse {
+  0% { opacity: 0.38; transform: translate(-50%, -58%) scale(0.86); }
+  50% { opacity: 1; transform: translate(-50%, -58%) scale(1.08); }
+  100% { opacity: 0.38; transform: translate(-50%, -58%) scale(0.86); }
+}

@@ -42,6 +42,7 @@ let autoPathPreview = null;
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
 const routePill = document.getElementById('route-pill');
+let rallyMarkerEl = null;
 
 function el(id) { return document.getElementById(id); }
 function sameCell(a, b) { return a && b && a[0] === b[0] && a[1] === b[1]; }
@@ -1295,8 +1296,6 @@ function drawAnimations() {
       ctx.fillStyle = anim.kind === 'fortify' ? `rgba(255,255,255,${0.22 * fade})` : `rgba(0,0,0,${0.18 * fade})`;
       ctx.fillRect(boardGeom.ox + x * boardGeom.cell + 1, boardGeom.oy + y * boardGeom.cell + 1, boardGeom.cell - 2, boardGeom.cell - 2);
       ctx.restore();
-    } else if (anim.kind === 'rally') {
-      drawRallyIndicator(anim.cell, 0.98 * fade, 90, 0.56);
     }
   }
 }
@@ -1321,26 +1320,36 @@ function recomputeThreatenedCastles() {
   threatenedCastles = { 0: shortestAttackThreat(0), 1: shortestAttackThreat(1) };
 }
 
-function drawRallyIndicator(cell, alpha = 0.98, pulseMs = 110, baseScale = 0.60) {
-  if (!latestState || !cell) return;
-  const [cx, cy] = cellCenter(cell);
-  const now = performance.now();
-  const pulse = 0.5 + 0.5 * Math.sin(now / Math.max(1, pulseMs));
-  const fade = Math.max(0, Math.min(1, alpha));
-  const scale = baseScale + 0.10 * pulse;
-  ctx.save();
-  ctx.globalAlpha = fade;
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = `rgba(235,40,40,${0.85 * fade})`;
-  ctx.strokeStyle = `rgba(255,255,255,${0.85 * fade})`;
-  ctx.lineWidth = Math.max(1.5, boardGeom.cell * 0.05);
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.font = `bold ${Math.max(10, Math.round(boardGeom.cell * scale))}px system-ui, sans-serif`;
-  const y = cy - boardGeom.cell * 0.02;
-  ctx.strokeText('!', cx, y);
-  ctx.fillText('!', cx, y);
-  ctx.restore();
+function ensureRallyMarker() {
+  if (rallyMarkerEl) return rallyMarkerEl;
+  const host = canvas && canvas.parentElement ? canvas.parentElement : null;
+  if (!host) return null;
+  if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+  const el = document.createElement('div');
+  el.id = 'rally-marker';
+  el.className = 'rally-marker hidden';
+  el.textContent = '!';
+  host.appendChild(el);
+  rallyMarkerEl = el;
+  return rallyMarkerEl;
+}
+
+function updateRallyMarker() {
+  const el = ensureRallyMarker();
+  if (!el || !latestState || !rallyActive()) {
+    if (el) el.classList.add('hidden');
+    return;
+  }
+  const rally = rallyOrigin();
+  if (!rally) {
+    el.classList.add('hidden');
+    return;
+  }
+  const [cx, cy] = cellCenter(rally);
+  el.style.left = `${cx}px`;
+  el.style.top = `${cy}px`;
+  el.style.fontSize = `${Math.max(18, Math.round(boardGeom.cell * 0.62))}px`;
+  el.classList.remove('hidden');
 }
 
 function drawRoute(path, color, width = 4, dashed = false) {
@@ -1519,7 +1528,7 @@ function drawNodesOverlay() {
 function draw() {
   const rect = canvas.getBoundingClientRect();
   ctx.clearRect(0, 0, rect.width, rect.height);
-  if (!latestState) return;
+  if (!latestState) { updateRallyMarker(); return; }
   boardGeom = computeGeom();
   const { cell: s, ox, oy } = boardGeom;
   const map = latestState.map;
@@ -1570,10 +1579,6 @@ function draw() {
 
   drawAnimations();
 
-  if (rallyActive()) {
-    const rally = rallyOrigin();
-    if (rally) drawRallyIndicator(rally, 0.98, 110, 0.60);
-  }
 
   if (!suppressRouteDraftOverlays && pendingDestination) {
     const [cx, cy] = cellCenter(pendingDestination);
@@ -1613,6 +1618,7 @@ function draw() {
   if (queuedAfter && queuedAfter.type === 'entrench') {
     drawNodesOverlay();
   }
+  updateRallyMarker();
 }
 
 function onBoardClick(evt) {
