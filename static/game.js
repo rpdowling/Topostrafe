@@ -1346,8 +1346,10 @@ function updateRallyMarker() {
     return;
   }
   const [cx, cy] = cellCenter(rally);
-  el.style.left = `${cx}px`;
-  el.style.top = `${cy}px`;
+  const canvasLeft = canvas ? canvas.offsetLeft : 0;
+  const canvasTop = canvas ? canvas.offsetTop : 0;
+  el.style.left = `${canvasLeft + cx}px`;
+  el.style.top = `${canvasTop + cy}px`;
   el.style.fontSize = `${Math.max(18, Math.round(boardGeom.cell * 0.62))}px`;
   el.classList.remove('hidden');
 }
