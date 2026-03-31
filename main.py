@@ -99,9 +99,11 @@ async def api_generate_map(payload: dict[str, Any]):
 
 @app.get("/game/{game_id}", response_class=HTMLResponse)
 async def game_page(request: Request, game_id: str):
-    if store.get_game(game_id) is None:
+    game = store.get_game(game_id)
+    if game is None:
         raise HTTPException(status_code=404, detail="Game not found")
-    return templates.TemplateResponse(request, "game.html", {"game_id": game_id, "title": f"Topostrafe {game_id}"})
+    template_name = "um_game.html" if getattr(game, "game_mode", "topostrafe") == "um" else "game.html"
+    return templates.TemplateResponse(request, template_name, {"game_id": game_id, "title": f"Topostrafe {game_id}"})
 
 
 @app.get("/api/public-games")

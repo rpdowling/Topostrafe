@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import engine_core as eng
+import um_mode as um
 from preset_maps import ALTAR_MAP, MOSAIC_MAP, PRISON_MAP, RIVER_MAP
 
 
@@ -61,9 +62,9 @@ def _code(n: int = 6) -> str:
 @dataclass
 class GameSession:
     game_id: str
-    settings: eng.GameSettings
-    map_data: eng.MapData
-    state: eng.GameState
+    settings: Any
+    map_data: eng.MapData | None
+    state: Any
     is_private: bool
     join_code: str | None
     vs_bot: bool = False
@@ -78,6 +79,7 @@ class GameSession:
     abandon_delete_at: float | None = None
     pending_premoves: dict[int, dict[str, Any] | None] = field(default_factory=lambda: {0: None, 1: None})
     disconnected_deadline: dict[int, float | None] = field(default_factory=lambda: {0: None, 1: None})
+    game_mode: str = "topostrafe"
 
     def __post_init__(self):
         if not self.time_remaining:
@@ -112,12 +114,22 @@ class GameStore:
     def defaults(self) -> dict[str, Any]:
         d = eng.GameSettings()
         d.map_type = "River"
+        um_defaults = um.UmSettings()
         return {
             "settings": d.__dict__.copy(),
             "map_types": MAP_TYPES,
             "map_type_labels": MAP_TYPE_LABELS,
             "elevation_colors": ELEVATION_COLORS,
             "player_colors": PLAYER_COLORS,
+            "um_defaults": {
+                "board_width": um_defaults.board_width,
+                "board_height": um_defaults.board_height,
+                "max_corners": um_defaults.max_corners,
+                "board_color": um_defaults.board_color,
+                "size_preset": "large",
+            },
+            "um_board_colors": um.BOARD_COLORS,
+            "um_size_presets": {name: {"board_width": size[0], "board_height": size[1]} for name, size in um.SIZE_PRESETS.items()},
         }
 
     def _prune_expired_open_games_locked(self):
@@ -197,18 +209,31 @@ class GameStore:
             for game in self.games.values():
                 if game.is_private or game.status != "open":
                     continue
-                rows.append(
-                    {
-                        "game_id": game.game_id,
-                        "map_type": game.settings.map_type,
-                        "size": f"{game.map_data.width}x{game.map_data.height}",
-                        "path_count": game.settings.path_count,
-                        "max_link_distance": game.settings.max_link_distance,
-                        "time_limit_enabled": game.settings.time_limit_enabled,
-                        "time_bank_seconds": game.settings.time_bank_seconds,
-                        "created_at": game.created_at,
-                    }
-                )
+                if game.game_mode == "um":
+                    rows.append(
+                        {
+                            "game_id": game.game_id,
+                            "game_mode": "um",
+                            "size": f"{game.state.width}x{game.state.height}",
+                            "max_corners": game.settings.max_corners,
+                            "board_color": game.settings.board_color,
+                            "created_at": game.created_at,
+                        }
+                    )
+                else:
+                    rows.append(
+                        {
+                            "game_id": game.game_id,
+                            "game_mode": "topostrafe",
+                            "map_type": game.settings.map_type,
+                            "size": f"{game.map_data.width}x{game.map_data.height}",
+                            "path_count": game.settings.path_count,
+                            "max_link_distance": game.settings.max_link_distance,
+                            "time_limit_enabled": game.settings.time_limit_enabled,
+                            "time_bank_seconds": game.settings.time_bank_seconds,
+                            "created_at": game.created_at,
+                        }
+                    )
             rows.sort(key=lambda x: x["created_at"], reverse=True)
             return rows
 
@@ -239,6 +264,16 @@ class GameStore:
         data["time_bank_seconds"] = max(10, min(24 * 3600, int(data["time_bank_seconds"])))
         return eng.GameSettings(**data)
 
+    def _um_settings_from_payload(self, payload: dict[str, Any]) -> um.UmSettings:
+        raw = dict(payload.get("um_settings", {}))
+        preset = str(raw.get("size_preset", "large") or "large").strip().lower()
+        width, height = um.SIZE_PRESETS.get(preset, um.SIZE_PRESETS["large"])
+        max_corners = max(0, min(6, int(raw.get("max_corners", 1))))
+        board_color = str(raw.get("board_color", "yellow") or "yellow").strip().lower()
+        if board_color not in um.BOARD_COLORS:
+            board_color = "yellow"
+        return um.UmSettings(board_width=width, board_height=height, max_corners=max_corners, board_color=board_color)
+
     def _map_from_payload(self, settings: eng.GameSettings, payload: dict[str, Any]) -> eng.MapData:
         if settings.map_type == "River":
             return eng.MapData(int(RIVER_MAP["width"]), int(RIVER_MAP["height"]), [[int(c) for c in row] for row in RIVER_MAP["grid"]])
@@ -268,36 +303,55 @@ class GameStore:
     def create_game(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
             self._prune_expired_open_games_locked()
-            settings_payload = dict(payload.get("settings", {}))
-            if "size_preset" in payload and "size_preset" not in settings_payload:
-                settings_payload["size_preset"] = payload.get("size_preset")
-            settings = self._settings_from_payload(settings_payload)
-            map_data = self._map_from_payload(settings, payload)
+            game_mode = str(payload.get("game_mode", "topostrafe") or "topostrafe").strip().lower()
             game_id = _short_id(8)
             player_key = _token(24)
             is_private = bool(payload.get("is_private", False))
             join_code = (payload.get("join_code") or "").strip().upper() or (_code() if is_private else None)
-            vs_bot = bool(payload.get("vs_bot", False))
-            state = eng.GameState(settings, map_data.copy())
-            game = GameSession(
-                game_id=game_id,
-                settings=settings,
-                map_data=map_data.copy(),
-                state=state,
-                is_private=is_private,
-                join_code=join_code,
-                vs_bot=vs_bot,
-                bot=eng.HeuristicBot(1) if vs_bot else None,
-            )
-            game.seat_keys[0] = player_key
-            if vs_bot:
-                game.seat_keys[1] = "BOT"
-                game.status = "active"
-                game.abandon_delete_at = None
-                game.turn_started_at = time.monotonic()
-                game.log.append("Game created vs bot.")
+            if game_mode == "um":
+                settings = self._um_settings_from_payload(payload)
+                map_data = None
+                state = um.UmGameState(settings)
+                game = GameSession(
+                    game_id=game_id,
+                    settings=settings,
+                    map_data=map_data,
+                    state=state,
+                    is_private=is_private,
+                    join_code=join_code,
+                    vs_bot=False,
+                    bot=None,
+                    game_mode="um",
+                )
+                game.log.append("Um game created. Waiting for opponent.")
             else:
-                game.log.append("Game created. Waiting for opponent.")
+                settings_payload = dict(payload.get("settings", {}))
+                if "size_preset" in payload and "size_preset" not in settings_payload:
+                    settings_payload["size_preset"] = payload.get("size_preset")
+                settings = self._settings_from_payload(settings_payload)
+                map_data = self._map_from_payload(settings, payload)
+                vs_bot = bool(payload.get("vs_bot", False))
+                state = eng.GameState(settings, map_data.copy())
+                game = GameSession(
+                    game_id=game_id,
+                    settings=settings,
+                    map_data=map_data.copy(),
+                    state=state,
+                    is_private=is_private,
+                    join_code=join_code,
+                    vs_bot=vs_bot,
+                    bot=eng.HeuristicBot(1) if vs_bot else None,
+                    game_mode="topostrafe",
+                )
+                if vs_bot:
+                    game.seat_keys[1] = "BOT"
+                    game.status = "active"
+                    game.abandon_delete_at = None
+                    game.turn_started_at = time.monotonic()
+                    game.log.append("Game created vs bot.")
+                else:
+                    game.log.append("Game created. Waiting for opponent.")
+            game.seat_keys[0] = player_key
             self.games[game_id] = game
             return {
                 "game_id": game_id,
@@ -395,8 +449,52 @@ class GameStore:
             self._check_timeout_passively(game)
             seat = game.seat_for_key(player_key)
             state = game.state
+            if game.game_mode == "um":
+                nodes = [
+                    {"x": x, "y": y, "owner": node.owner, "starter": node.starter}
+                    for (x, y), node in sorted(state.nodes.items())
+                ]
+                paths = [
+                    {"path_id": path.path_id, "owner": path.owner, "cells": [[x, y] for (x, y) in path.cells], "length": path.length}
+                    for path in sorted(state.paths.values(), key=lambda p: p.path_id)
+                ]
+                return {
+                    "game_id": game.game_id,
+                    "game_mode": "um",
+                    "status": game.status,
+                    "is_private": game.is_private,
+                    "join_code": game.join_code if seat == 0 or seat == 1 else None,
+                    "vs_bot": False,
+                    "my_seat": seat,
+                    "my_name": game.owner_name(seat) if seat is not None else "Spectator",
+                    "current_owner": state.current_owner,
+                    "current_owner_name": game.owner_name(state.current_owner),
+                    "winner": state.winner,
+                    "winner_name": game.owner_name(state.winner) if state.winner is not None else None,
+                    "win_reason": state.win_reason,
+                    "starter_placed": list(state.starter_placed),
+                    "time_remaining": {"0": 0.0, "1": 0.0},
+                    "settings": {
+                        "board_width": game.settings.board_width,
+                        "board_height": game.settings.board_height,
+                        "max_corners": game.settings.max_corners,
+                        "board_color": game.settings.board_color,
+                        "time_limit_enabled": False,
+                        "time_bank_seconds": game.settings.time_bank_seconds,
+                    },
+                    "board": {
+                        "width": state.width,
+                        "height": state.height,
+                        "color": um.BOARD_COLORS.get(game.settings.board_color, um.BOARD_COLORS["yellow"]),
+                        "color_name": game.settings.board_color,
+                    },
+                    "nodes": nodes,
+                    "paths": paths,
+                    "log": game.log[-16:],
+                    "chat": game.chat[-100:],
+                }
             nodes = [
-                {"x": x, "y": y, "owner": node.owner, "starter": node.starter, "fort": bool(getattr(node, "fort", False)), "sapper": bool(getattr(node, "sapper", False)), "sap_dir": list(getattr(node, "sap_dir", []) or [] )}
+                {"x": x, "y": y, "owner": node.owner, "starter": node.starter, "fort": bool(getattr(node, "fort", False)), "sapper": bool(getattr(node, "sapper", False)), "sap_dir": list(getattr(node, "sap_dir", []) or [])}
                 for (x, y), node in sorted(state.nodes.items())
             ]
             roads = [
@@ -405,6 +503,7 @@ class GameStore:
             ]
             return {
                 "game_id": game.game_id,
+                "game_mode": "topostrafe",
                 "status": game.status,
                 "is_private": game.is_private,
                 "join_code": game.join_code if seat == 0 or seat == 1 else None,
@@ -469,10 +568,23 @@ class GameStore:
     def _start_next_turn(self, game: GameSession):
         game.turn_started_at = time.monotonic() if game.status == "active" else None
 
-    def _normalize_action_payload(self, action: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_action_payload(self, action: dict[str, Any], game_mode: str = "topostrafe") -> dict[str, Any]:
         if not isinstance(action, dict):
             raise ValueError("Invalid action.")
         t = str(action.get("type", "")).strip()
+        if game_mode == "um":
+            if t not in {"starter", "um_node", "um_paths", "resign"}:
+                raise ValueError("Unknown action.")
+            if t == "starter":
+                return {"type": "starter", "x": int(action["x"]), "y": int(action["y"])}
+            if t == "um_node":
+                return {"type": "um_node", "x": int(action["x"]), "y": int(action["y"])}
+            if t == "um_paths":
+                segments = []
+                for seg in action.get("segments", []):
+                    segments.append([(int(x), int(y)) for x, y in seg])
+                return {"type": "um_paths", "segments": segments}
+            return {"type": "resign"}
         if t not in {"starter", "routes", "fortify", "demolish", "entrench", "end_turn", "resign"}:
             raise ValueError("Unknown action.")
         if t == "starter":
@@ -504,6 +616,30 @@ class GameStore:
         self._consume_active_turn_time(game)
         if game.state.winner is not None:
             return game.state.win_reason
+
+        if game.game_mode == "um":
+            auto_end_turn = False
+            if t == "starter":
+                ok, msg = game.state.commit_starter(int(action["x"]), int(action["y"]))
+                auto_end_turn = ok
+            elif t == "um_node":
+                ok, msg = game.state.commit_place_node(int(action["x"]), int(action["y"]))
+                auto_end_turn = ok
+            elif t == "um_paths":
+                ok, msg = game.state.commit_place_paths(action.get("segments", []))
+                auto_end_turn = ok
+            else:
+                raise ValueError("Unknown action.")
+            if not ok:
+                raise ValueError(msg)
+            if auto_end_turn and game.state.winner is None:
+                ok2, msg2 = game.state.end_turn()
+                if ok2:
+                    self._start_next_turn(game)
+                    msg = f"{msg} {msg2}".strip()
+            if game.state.winner is not None:
+                game.status = "finished"
+            return msg
 
         auto_end_turn = False
         if t == "starter":
@@ -586,7 +722,7 @@ class GameStore:
                     raise ValueError("Game is not active.")
                 if seat == game.state.current_owner:
                     raise ValueError("It is your turn already.")
-                queued = self._normalize_action_payload(action.get("action", {}))
+                queued = self._normalize_action_payload(action.get("action", {}), game.game_mode)
                 if queued.get("type") == "resign":
                     raise ValueError("Cannot premove resign.")
                 game.pending_premoves[seat] = queued
@@ -594,7 +730,7 @@ class GameStore:
 
             if seat != game.state.current_owner and t != "resign":
                 raise ValueError("It is not your turn.")
-            msg = self._execute_turn_action(game, seat, self._normalize_action_payload(action))
+            msg = self._execute_turn_action(game, seat, self._normalize_action_payload(action, game.game_mode))
             extra_notes = self._apply_due_premoves(game)
             if extra_notes:
                 msg = f"{msg} {' '.join(extra_notes)}".strip()
@@ -605,7 +741,7 @@ class GameStore:
         with self.lock:
             self._prune_expired_open_games_locked()
             game = self.games.get(game_id)
-            if game is None or not game.vs_bot or game.bot is None:
+            if game is None or game.game_mode != "topostrafe" or not game.vs_bot or game.bot is None:
                 return None
             if game.status != "active" or game.state.winner is not None or game.state.current_owner != 1:
                 return None

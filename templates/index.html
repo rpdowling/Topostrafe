@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/app.css?v=31" />
+  <link rel="stylesheet" href="/static/app.css?v=40" />
 </head>
 <body class="menu-page">
   <div class="page menu-three-col">
@@ -108,6 +108,40 @@
           <input id="custom_map_file" type="file" accept="application/json,.json" />
         </label>
       </form>
+
+      <form id="um-form" class="stack gap-12 top-12 um-settings-section">
+        <div class="um-settings-header">
+          <h2>Um Settings</h2>
+          <div class="muted">Separate mode. Original Topostrafe is unchanged.</div>
+        </div>
+        <div class="grid two">
+          <label>
+            <span>Map Size</span>
+            <select id="um_size_preset">
+              <option value="small">Small</option>
+              <option value="medium">Medium</option>
+              <option value="large">Large</option>
+            </select>
+            <small class="muted">Small 6x6. Medium 10x10. Large 20x20.</small>
+          </label>
+          <label>
+            <span>Board Color</span>
+            <select id="um_board_color"></select>
+          </label>
+          <label>
+            <span>Max Corners</span>
+            <input id="um_max_corners" type="number" min="0" max="6" value="1" />
+          </label>
+          <label class="check um-private-check">
+            <input id="um_is_private" type="checkbox" />
+            <span>Private Game</span>
+          </label>
+        </div>
+        <label>
+          <span>Private Join Code</span>
+          <input id="um_join_code" type="text" maxlength="16" placeholder="Optional. Leave blank to auto-generate." />
+        </label>
+      </form>
     </section>
 
     <section class="hero-column">
@@ -135,6 +169,17 @@
           <p class="hero-subtitle info-hero-subtitle">Reference for node types and terrain tools.</p>
           <div class="actions info-hero-actions">
             <button id="info-button" class="info-button" type="button">Info</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-card menu-hero-card um-hero-card">
+        <div class="hero-bg um-hero-bg" aria-hidden="true"></div>
+        <div class="hero-content um-hero-content">
+          <h2 class="info-hero-title">Um</h2>
+          <p class="hero-subtitle info-hero-subtitle">Loop-cutting node and path duels.</p>
+          <div class="actions info-hero-actions">
+            <button id="um-play-button" class="um-play-button" type="submit" form="um-form">Play Um</button>
           </div>
         </div>
       </div>
@@ -206,6 +251,6 @@
   <script>
     window.TOPOS_DEFAULTS = {{ defaults_json | safe }};
   </script>
-  <script src="/static/lobby.js?v=11"></script>
+  <script src="/static/lobby.js?v=12"></script>
 </body>
 </html>

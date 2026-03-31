@@ -3,6 +3,9 @@ const settings = defaults.settings;
 const settingKeys = Object.keys(settings);
 
 const mapTypeLabels = defaults.map_type_labels || {};
+const umDefaults = defaults.um_defaults || { board_width: 20, board_height: 20, max_corners: 1, board_color: "yellow", size_preset: "large" };
+const umBoardColors = defaults.um_board_colors || { yellow: "#e8cf52" };
+const umSizePresets = defaults.um_size_presets || { small: { board_width: 6, board_height: 6 }, medium: { board_width: 10, board_height: 10 }, large: { board_width: 20, board_height: 20 } };
 
 function displayMapType(name) {
   return mapTypeLabels[name] || name;
@@ -43,6 +46,18 @@ function buildForm() {
     if (node.type === 'checkbox') node.checked = !!value;
     else node.value = value;
   }
+  const umColorSelect = el('um_board_color');
+  if (umColorSelect) {
+    for (const name of Object.keys(umBoardColors)) {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name.charAt(0).toUpperCase() + name.slice(1);
+      umColorSelect.appendChild(opt);
+    }
+    umColorSelect.value = umDefaults.board_color || 'yellow';
+  }
+  if (el('um_size_preset')) el('um_size_preset').value = umDefaults.size_preset || 'large';
+  if (el('um_max_corners')) el('um_max_corners').value = String(umDefaults.max_corners ?? 1);
 }
 
 
@@ -126,6 +141,33 @@ function collectPayload() {
 }
 
 
+function collectUmPayload() {
+  return {
+    game_mode: 'um',
+    is_private: !!el('um_is_private')?.checked,
+    join_code: el('um_join_code')?.value.trim() || '',
+    um_settings: {
+      size_preset: el('um_size_preset')?.value || 'large',
+      max_corners: Number(el('um_max_corners')?.value || 1),
+      board_color: el('um_board_color')?.value || 'yellow',
+    },
+  };
+}
+
+async function createUmGame(evt) {
+  evt.preventDefault();
+  setStatus('Creating…');
+  try {
+    const created = await fetchJson('/api/create', {
+      method: 'POST',
+      body: JSON.stringify(collectUmPayload()),
+    });
+    window.location.href = created.url;
+  } catch (err) {
+    setStatus(err.message, true);
+  }
+}
+
 function submitBotGame() {
   el('vs_bot').checked = true;
   setStatus('');
@@ -169,7 +211,11 @@ async function refreshGames() {
       const row = document.createElement('div');
       row.className = 'game-row';
       const left = document.createElement('div');
-      left.innerHTML = `<strong>${game.game_id}</strong><small>${displayMapType(game.map_type)} · ${game.size}</small><small>Path ${game.path_count} · Link ${game.max_link_distance} · ${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
+      if (game.game_mode === 'um') {
+        left.innerHTML = `<strong>${game.game_id}</strong><small>Um · ${game.size}</small><small>Max Corners ${game.max_corners} · ${String(game.board_color || '').replace(/^./, c => c.toUpperCase())}</small>`;
+      } else {
+        left.innerHTML = `<strong>${game.game_id}</strong><small>${displayMapType(game.map_type)} · ${game.size}</small><small>Path ${game.path_count} · Link ${game.max_link_distance} · ${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
+      }
       const btn = document.createElement('button');
       btn.className = 'join-button';
       btn.textContent = 'Join';
@@ -234,6 +280,8 @@ hookSizePreset();
 el('play-button').addEventListener('click', submitNormalGame);
 el('bot-button').addEventListener('click', submitBotGame);
 el('create-form').addEventListener('submit', createGame);
+if (el('um-form')) el('um-form').addEventListener('submit', createUmGame);
+if (el('um-play-button')) el('um-play-button').addEventListener('click', () => setStatus(''));
 el('join-private-form').addEventListener('submit', joinPrivate);
 hookInfoModal();
 refreshGames();
