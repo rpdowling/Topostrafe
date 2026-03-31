@@ -460,9 +460,10 @@ function cleanupDraftIfInvalid() {
     return;
   }
   if (pendingNode) {
-    const occ = pathOccupancy();
     const nk = keyOf(pendingNode);
-    if (nodeAt(pendingNode) || occ.has(nk)) pendingNode = null;
+    const occ = pathOccupancy();
+    const occPaths = occ.get(nk) || [];
+    if (nodeAt(pendingNode) || occPaths.some(path => path.owner !== seat)) pendingNode = null;
   }
   draftSegments = draftSegments.filter(seg => Array.isArray(seg) && seg.length >= 2 && seg.every(cell => Array.isArray(cell) && cell.length === 2));
   if (currentSegment && currentSegment.length) {
@@ -677,16 +678,7 @@ function handleBoardClick(evt) {
       finishCurrentSegment(cell);
       return;
     }
-    if (!node && currentSegment.length === 1) {
-      clearDraft();
-      return;
-    }
-    if (canStepTo(cell)) {
-      currentSegment = [...currentSegment, cell];
-      renderState();
-      return;
-    }
-    setStatus('Trace the path with the mouse, then click a friendly end node.', true);
+    clearDraft();
     return;
   }
 
