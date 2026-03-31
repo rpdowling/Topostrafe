@@ -449,6 +449,10 @@ function nodeAt(cell) {
   return latestState.nodes.find(n => n.x === cell[0] && n.y === cell[1]) || null;
 }
 
+function nodeCanStartSap(node) {
+  return !!(node && (node.fort || node.sapper));
+}
+
 function roadAt(cell) {
   if (!latestState) return null;
   return latestState.roads.find(r => r.path.slice(1, -1).some(p => p[0] === cell[0] && p[1] === cell[1])) || null;
@@ -685,6 +689,7 @@ function evaluateEntrenchRouteLocal(route) {
   const src = route[0];
   const srcNode = nodeAt(src);
   if (!srcNode || srcNode.owner !== mySeat) return { ok: false, message: 'Select your own node first.' };
+  if (!nodeCanStartSap(srcNode)) return { ok: false, message: 'Sap must start from a Fort or an existing sapper.' };
   if (!connectedToCastle(mySeat).has(keyOf(src))) return { ok: false, message: 'Cannot act from nodes disconnected from your castle.' };
   if (new Set(route.map(keyOf)).size !== route.length) return { ok: false, message: 'A route cannot revisit cells.' };
   for (let i = 0; i < route.length - 1; i++) if (Math.abs(route[i][0]-route[i+1][0]) + Math.abs(route[i][1]-route[i+1][1]) !== 1) return { ok: false, message: 'Route must move orthogonally one cell at a time.' };
@@ -1423,6 +1428,13 @@ function drawNodesOverlay() {
       ctx.lineTo(cx + Math.cos(ang + 2.45) * rr, cy + Math.sin(ang + 2.45) * rr);
       ctx.lineTo(cx + Math.cos(ang - 2.45) * rr, cy + Math.sin(ang - 2.45) * rr);
       ctx.closePath();
+    } else if (node.fort) {
+      const rr = Math.max(6, s * 0.34);
+      ctx.moveTo(cx, cy - rr);
+      ctx.lineTo(cx + rr, cy);
+      ctx.lineTo(cx, cy + rr);
+      ctx.lineTo(cx - rr, cy);
+      ctx.closePath();
     } else {
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
     }
@@ -1598,6 +1610,12 @@ function onBoardClick(evt) {
     const node = nodeAt(cell);
     if (!activeRoute.length) {
       if (node && node.owner === mySeat) {
+        if (!nodeCanStartSap(node)) {
+          latestMessage = 'Sap must start from a Fort or an existing sapper.';
+          renderStatus();
+          draw();
+          return;
+        }
         clearRouteOnlyState();
         activeRoute = [cell];
         setRangeFromNode(cell);

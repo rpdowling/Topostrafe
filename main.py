@@ -165,7 +165,6 @@ async def ws_game(websocket: WebSocket, game_id: str):
             if msg_type == "ping":
                 before = store.serialize(game_id, player_key)
                 await websocket.send_json({"type": "state", "state": before, "message": None})
-                await broadcast_state(game_id)
                 continue
             if msg_type == "chat":
                 try:

@@ -34,6 +34,8 @@ MAP_TYPE_LABELS = {
     "Altar": "Altar",
     "Custom": "Custom",
 }
+DISCONNECT_GRACE_SECONDS = 20.0
+
 SIZE_PRESETS = {
     "small": {"map_width": 14, "map_height": 14, "max_link_distance": 7, "path_count": 8},
     "medium": {"map_width": 22, "map_height": 22, "max_link_distance": 11, "path_count": 12},
@@ -75,6 +77,7 @@ class GameSession:
     chat: list[dict[str, Any]] = field(default_factory=list)
     abandon_delete_at: float | None = None
     pending_premoves: dict[int, dict[str, Any] | None] = field(default_factory=lambda: {0: None, 1: None})
+    disconnected_deadline: dict[int, float | None] = field(default_factory=lambda: {0: None, 1: None})
 
     def __post_init__(self):
         if not self.time_remaining:
@@ -137,14 +140,34 @@ class GameStore:
         with self.lock:
             self._prune_expired_open_games_locked()
 
+    def _apply_disconnect_forfeits_locked(self, game: GameSession):
+        if game.status != "active" or game.state.winner is not None:
+            return
+        now = time.time()
+        for seat, deadline in list(game.disconnected_deadline.items()):
+            if deadline is None or deadline > now:
+                continue
+            game.disconnected_deadline[seat] = None
+            game.state.players[seat].resigned = True
+            game.state.check_winner()
+            msg = f"{game.owner_name(seat)} disconnected for too long and resigned."
+            game.state.win_reason = msg
+            game.status = "finished"
+            game.log.append(msg)
+            break
+
     def note_connection_opened(self, game_id: str, player_key: str | None):
         with self.lock:
             self._prune_expired_open_games_locked()
             game = self.games.get(game_id)
             if game is None:
                 return
-            if player_key is not None and game.seat_for_key(player_key) is not None:
-                game.abandon_delete_at = None
+            self._apply_disconnect_forfeits_locked(game)
+            if player_key is not None:
+                seat = game.seat_for_key(player_key)
+                if seat is not None:
+                    game.abandon_delete_at = None
+                    game.disconnected_deadline[seat] = None
 
     def note_connection_closed(self, game_id: str, player_key: str | None, same_player_still_connected: bool) -> str | None:
         with self.lock:
@@ -158,13 +181,11 @@ class GameStore:
             if seat is None:
                 return None
             if seat == 0 and game.status == "open" and not game.vs_bot and game.seat_keys[1] is None:
-                self.games.pop(game_id, None)
+                game.abandon_delete_at = time.time() + DISCONNECT_GRACE_SECONDS
                 return None
             if game.status == "active" and game.state.winner is None:
-                game.state.players[seat].resigned = True
-                game.state.check_winner()
-                game.status = "finished"
-                msg = f"{game.owner_name(seat)} resigned."
+                game.disconnected_deadline[seat] = time.time() + DISCONNECT_GRACE_SECONDS
+                msg = f"{game.owner_name(seat)} disconnected. Reconnect within {int(DISCONNECT_GRACE_SECONDS)}s."
                 game.log.append(msg)
                 return msg
             return None
@@ -321,7 +342,10 @@ class GameStore:
     def get_game(self, game_id: str) -> GameSession | None:
         with self.lock:
             self._prune_expired_open_games_locked()
-            return self.games.get(game_id)
+            game = self.games.get(game_id)
+            if game is not None:
+                self._apply_disconnect_forfeits_locked(game)
+            return game
 
     def _effective_time_remaining(self, game: GameSession, owner: int) -> float:
         remaining = float(game.time_remaining.get(owner, 0.0))
@@ -367,11 +391,12 @@ class GameStore:
             game = self.games.get(game_id)
             if game is None:
                 raise ValueError("Game not found.")
+            self._apply_disconnect_forfeits_locked(game)
             self._check_timeout_passively(game)
             seat = game.seat_for_key(player_key)
             state = game.state
             nodes = [
-                {"x": x, "y": y, "owner": node.owner, "starter": node.starter, "sapper": bool(getattr(node, "sapper", False)), "sap_dir": list(getattr(node, "sap_dir", []) or [] )}
+                {"x": x, "y": y, "owner": node.owner, "starter": node.starter, "fort": bool(getattr(node, "fort", False)), "sapper": bool(getattr(node, "sapper", False)), "sap_dir": list(getattr(node, "sap_dir", []) or [] )}
                 for (x, y), node in sorted(state.nodes.items())
             ]
             roads = [
@@ -541,6 +566,7 @@ class GameStore:
             game = self.games.get(game_id)
             if game is None:
                 raise ValueError("Game not found.")
+            self._apply_disconnect_forfeits_locked(game)
             self._check_timeout_passively(game)
             t = action.get("type")
             seat = game.seat_for_key(player_key)

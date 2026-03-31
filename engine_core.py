@@ -363,6 +363,7 @@ class MapGenerator:
 class Node:
     owner: int
     starter: bool = False
+    fort: bool = False
     sapper: bool = False
     sap_dir: tuple | None = None
     expires_on_owner: int | None = None
@@ -603,8 +604,11 @@ class GameState:
         if not route or len(route) < 2:
             return False, "Sap route too short.", None
         src = route[0]
-        if src not in self.nodes or self.nodes[src].owner != self.current_owner:
+        src_node = self.nodes.get(src)
+        if src_node is None or src_node.owner != self.current_owner:
             return False, "Select your own node first.", None
+        if not getattr(src_node, "fort", False) and not getattr(src_node, "sapper", False):
+            return False, "Sap must start from a Fort or an existing sapper.", None
         if not self.can_build_from(src, self.current_owner):
             return False, "Cannot act from nodes disconnected from your castle.", None
         if len(set(route)) != len(route):
@@ -690,9 +694,22 @@ class GameState:
             return False, "Game over."
         if not self.settings.fortify_rule:
             return False, "Fortify is disabled."
+        node = self.nodes.get(pos)
+        if node is not None:
+            if node.owner != self.current_owner:
+                return False, "Select one of your own Army Camps or paths."
+            if node.starter:
+                return False, "Castle Nodes cannot be fortified."
+            if getattr(node, "sapper", False):
+                return False, "Temporary sappers cannot be fortified."
+            if not self.can_build_from(pos, self.current_owner):
+                return False, "Cannot fortify a node disconnected from your castle."
+            if getattr(node, "fort", False):
+                return False, "That Army Camp is already a Fort."
+            return True, "Fortify ready. This Army Camp will become a Fort."
         road = self.road_at(pos)
         if road is None:
-            return False, "Select one of your road squares to fortify that path."
+            return False, "Select one of your Army Camps or road squares to fortify."
         if road.owner != self.current_owner:
             return False, "Select one of your own paths."
         if not self.road_is_connected_to_castle(road):
@@ -706,6 +723,11 @@ class GameState:
         ok, msg = self.preview_fortify(pos)
         if not ok:
             return False, msg
+        node = self.nodes.get(pos)
+        if node is not None:
+            node.fort = True
+            self.check_winner()
+            return True, "Fortify complete. Army Camp became a Fort."
         road = self.road_at(pos)
         eligible = self.fortify_eligible_road_cells(road)
         for cell in eligible:
