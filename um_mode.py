@@ -149,10 +149,11 @@ class UmGameState:
         remove_enemy_paths: set[int] = set()
         remove_enemy_nodes: set[tuple[int, int]] = set()
         prev_end: tuple[int, int] | None = None
+        used_start_nodes: set[tuple[int, int]] = set()
         to_add: list[UmPath] = []
 
         for seg in norm_segments:
-            ok, msg = self._validate_segment(seg, owner, prev_end, new_internal_cells)
+            ok, msg = self._validate_segment(seg, owner, prev_end, new_internal_cells, used_start_nodes)
             if not ok:
                 return False, msg
             seg_internal = set(seg[1:-1])
@@ -188,6 +189,7 @@ class UmGameState:
             self.next_path_id += 1
             to_add.append(path)
             new_internal_cells.update(seg_internal)
+            used_start_nodes.add(seg[0])
             prev_end = seg[-1]
 
         for pid in sorted(remove_enemy_paths):
@@ -225,7 +227,7 @@ class UmGameState:
             msg = f"{msg} {self.win_reason}".strip()
         return True, msg
 
-    def _validate_segment(self, seg: list[tuple[int, int]], owner: int, prev_end: tuple[int, int] | None, new_internal_cells: set[tuple[int, int]]):
+    def _validate_segment(self, seg: list[tuple[int, int]], owner: int, prev_end: tuple[int, int] | None, new_internal_cells: set[tuple[int, int]], used_start_nodes: set[tuple[int, int]]):
         if len(seg) < 2:
             return False, "Each path segment must connect two friendly nodes."
         if len(set(seg)) != len(seg):
@@ -243,6 +245,8 @@ class UmGameState:
             return False, "Path must start on a friendly node."
         if end_node is None or end_node.owner != owner:
             return False, "Path must end on a friendly node."
+        if end in used_start_nodes:
+            return False, "You cannot end a segment on a node that already started one earlier this turn."
         for a, b in zip(seg, seg[1:]):
             if abs(a[0] - b[0]) + abs(a[1] - b[1]) != 1:
                 return False, "Paths must move one square orthogonally at a time."
@@ -381,7 +385,7 @@ class UmGameState:
     def _orth_node_surround_kills(self, owner: int) -> set[tuple[int, int]]:
         kills: set[tuple[int, int]] = set()
         enemy = 1 - owner
-        owner_nodes = {pos for pos, node in self.nodes.items() if node.owner == owner}
+        owner_walls = self._owner_wall_cells(owner)
         for pos, node in self.nodes.items():
             if node.owner != enemy:
                 continue
@@ -391,7 +395,7 @@ class UmGameState:
                 np = (x + dx, y + dy)
                 if not self.in_bounds(np):
                     continue
-                if np not in owner_nodes:
+                if np not in owner_walls:
                     surrounded = False
                     break
             if surrounded:

@@ -251,13 +251,18 @@ function renderDraftLine() {
     node.textContent = `Pending node at ${pendingNode[0] + 1},${pendingNode[1] + 1}. ${requireMoveConfirmation() ? 'Click Confirm Turn or click the same square again.' : ''}`.trim();
     return;
   }
-  if (draftSegments.length > 0) {
-    node.textContent = `Pending path segment. ${requireMoveConfirmation() ? 'Click Confirm Turn to submit.' : ''}`.trim();
-    return;
-  }
   if (currentSegment && currentSegment.length > 1) {
     const end = currentSegment[currentSegment.length - 1];
-    node.textContent = `Drag orthogonally from ${end[0] + 1},${end[1] + 1}, then click a friendly node to finish.`;
+    node.textContent = `Drag orthogonally from ${end[0] + 1},${end[1] + 1}, then click a friendly node to finish this segment.`;
+    return;
+  }
+  if (draftSegments.length > 0 && currentSegment && currentSegment.length === 1) {
+    const end = currentSegment[0];
+    node.textContent = `Chain ready at ${end[0] + 1},${end[1] + 1}. Click this node and drag another segment, or Confirm Turn to submit.`;
+    return;
+  }
+  if (draftSegments.length > 0) {
+    node.textContent = 'Pending path chain. Click Confirm Turn to submit.';
     return;
   }
   if (currentSegment && currentSegment.length === 1) {
@@ -270,9 +275,9 @@ function renderDraftLine() {
 
 function updateActionButtons() {
   const canConfirmNode = isMyTurn() && !!pendingNode;
-  const canConfirmPath = isMyTurn() && draftSegments.length > 0;
+  const canConfirmPath = isMyTurn() && draftSegments.length > 0 && (!currentSegment || currentSegment.length <= 1);
   const confirmButton = el('commit-path');
-  const showConfirm = requireMoveConfirmation();
+  const showConfirm = requireMoveConfirmation() || draftSegments.length > 0;
   if (confirmButton) {
     confirmButton.style.display = showConfirm ? '' : 'none';
     confirmButton.disabled = !(canConfirmNode || canConfirmPath);
@@ -488,6 +493,10 @@ function countCorners(seg) {
   return corners;
 }
 
+function usedSegmentStartKeys() {
+  return new Set(draftSegments.map(seg => keyOf(seg[0])));
+}
+
 
 function canDragExtendTo(cell) {
   const seat = mySeat();
@@ -599,7 +608,16 @@ function startPathFrom(cell) {
     return;
   }
   pendingNode = null;
-  draftSegments = [];
+  if (!draftSegments.length) {
+    currentSegment = [cell];
+    renderState();
+    return;
+  }
+  const lastEnd = draftSegments[draftSegments.length - 1].slice(-1)[0];
+  if (!sameCell(cell, lastEnd)) {
+    setStatus('A chain must continue from the node you just reached.', true);
+    return;
+  }
   currentSegment = [cell];
   renderState();
 }
@@ -616,16 +634,15 @@ function finishCurrentSegment(cell) {
     setStatus(`Invalid end node. Use orthogonal moves and at most ${latestState.settings.max_corners} corner${latestState.settings.max_corners === 1 ? '' : 's'} per segment.`, true);
     return;
   }
-  const segment = [...currentSegment, cell];
-  if (requireMoveConfirmation()) {
-    draftSegments = [segment];
-    currentSegment = null;
-    renderState();
+  const usedStarts = usedSegmentStartKeys();
+  if (usedStarts.has(keyOf(cell))) {
+    setStatus('You cannot end on a node that already started a segment this turn.', true);
     return;
   }
-  currentSegment = null;
-  draftSegments = [];
-  send({ type: 'um_paths', segments: [segment] });
+  const segment = [...currentSegment, cell];
+  draftSegments = [...draftSegments, segment];
+  currentSegment = [cell];
+  renderState();
 }
 
 function handleBoardClick(evt) {
@@ -648,6 +665,10 @@ function handleBoardClick(evt) {
     const node = nodeAt(cell);
     if (node && node.owner === seat) {
       if (sameCell(cell, currentSegment[0]) && currentSegment.length === 1) {
+        if (draftSegments.length > 0) {
+          renderState();
+          return;
+        }
         renderState();
         return;
       }
