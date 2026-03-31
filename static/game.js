@@ -1321,6 +1321,28 @@ function recomputeThreatenedCastles() {
   threatenedCastles = { 0: shortestAttackThreat(0), 1: shortestAttackThreat(1) };
 }
 
+function drawRallyIndicator(cell, alpha = 0.98, pulseMs = 110, baseScale = 0.60) {
+  if (!latestState || !cell) return;
+  const [cx, cy] = cellCenter(cell);
+  const now = performance.now();
+  const pulse = 0.5 + 0.5 * Math.sin(now / Math.max(1, pulseMs));
+  const fade = Math.max(0, Math.min(1, alpha));
+  const scale = baseScale + 0.10 * pulse;
+  ctx.save();
+  ctx.globalAlpha = fade;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = `rgba(235,40,40,${0.85 * fade})`;
+  ctx.strokeStyle = `rgba(255,255,255,${0.85 * fade})`;
+  ctx.lineWidth = Math.max(1.5, boardGeom.cell * 0.05);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `bold ${Math.max(10, Math.round(boardGeom.cell * scale))}px system-ui, sans-serif`;
+  const y = cy - boardGeom.cell * 0.02;
+  ctx.strokeText('!', cx, y);
+  ctx.fillText('!', cx, y);
+  ctx.restore();
+}
+
 function drawRoute(path, color, width = 4, dashed = false) {
   if (path.length < 2) return;
   ctx.save();
