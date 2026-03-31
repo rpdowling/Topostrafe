@@ -873,6 +873,10 @@ body.info-modal-open {
   border-color: rgba(226, 192, 67, 0.52);
   background: linear-gradient(180deg, rgba(86, 72, 16, 0.96) 0%, rgba(58, 48, 12, 0.98) 100%);
 }
+
+.um-hero-card .info-hero-title {
+  font-size: clamp(1.62rem, 2.8vw, 2.02rem);
+}
 .um-hero-bg {
   background:
     linear-gradient(135deg, rgba(255,234,128,0.20) 0%, rgba(236,204,61,0.16) 44%, rgba(116,92,18,0.14) 100%),
