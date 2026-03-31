@@ -369,7 +369,7 @@ class GameStore:
             seat = game.seat_for_key(player_key)
             state = game.state
             nodes = [
-                {"x": x, "y": y, "owner": node.owner, "starter": node.starter, "fort": bool(getattr(node, "fort", False)), "sapper": bool(getattr(node, "sapper", False)), "sap_dir": list(getattr(node, "sap_dir", []) or [] )}
+                {"x": x, "y": y, "owner": node.owner, "starter": node.starter, "sapper": bool(getattr(node, "sapper", False)), "sap_dir": list(getattr(node, "sap_dir", []) or [] )}
                 for (x, y), node in sorted(state.nodes.items())
             ]
             roads = [

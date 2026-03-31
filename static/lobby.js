@@ -233,5 +233,36 @@ el('play-button').addEventListener('click', submitNormalGame);
 el('bot-button').addEventListener('click', submitBotGame);
 el('create-form').addEventListener('submit', createGame);
 el('join-private-form').addEventListener('submit', joinPrivate);
+hookInfoModal();
 refreshGames();
 setInterval(refreshGames, 3000);
+
+
+function hookInfoModal() {
+  const openBtn = el('info-button');
+  const overlay = el('info-overlay');
+  const closeBtn = el('info-close');
+  const modal = el('info-modal');
+  if (!openBtn || !overlay || !closeBtn || !modal) return;
+
+  function openModal() {
+    overlay.classList.remove('hidden');
+    overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('info-modal-open');
+  }
+
+  function closeModal() {
+    overlay.classList.add('hidden');
+    overlay.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('info-modal-open');
+  }
+
+  openBtn.addEventListener('click', openModal);
+  closeBtn.addEventListener('click', closeModal);
+  overlay.addEventListener('click', (evt) => {
+    if (evt.target === overlay) closeModal();
+  });
+  document.addEventListener('keydown', (evt) => {
+    if (evt.key === 'Escape' && !overlay.classList.contains('hidden')) closeModal();
+  });
+}

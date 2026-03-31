@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/app.css?v=26" />
+  <link rel="stylesheet" href="/static/app.css?v=27" />
 </head>
 <body>
   <div class="page menu-three-col">
@@ -128,6 +128,17 @@
           </div>
         </div>
       </div>
+
+      <div class="hero-card menu-hero-card info-hero-card">
+        <div class="hero-bg info-hero-bg" aria-hidden="true"></div>
+        <div class="hero-content info-hero-content">
+          <h2 class="info-hero-title">Unit Library</h2>
+          <p class="hero-subtitle info-hero-subtitle">Reference for node types and terrain tools.</p>
+          <div class="actions info-hero-actions">
+            <button id="info-button" class="info-button" type="button">Info</button>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section class="panel public-side">
@@ -140,9 +151,63 @@
     </section>
   </div>
 
+
+  <div id="info-overlay" class="info-overlay hidden" aria-hidden="true">
+    <div id="info-modal" class="info-modal" role="dialog" aria-modal="true" aria-labelledby="info-modal-title">
+      <div class="info-modal-header">
+        <div>
+          <h2 id="info-modal-title">Library</h2>
+          <p class="info-modal-subtitle">Moves and node types</p>
+        </div>
+        <button id="info-close" class="info-close" type="button" aria-label="Close info">✕</button>
+      </div>
+      <div class="info-modal-body">
+        <div class="info-entry">
+          <div class="info-entry-icon icon-castle" aria-hidden="true">
+            <span class="icon-castle-ring"></span>
+            <span class="icon-castle-dot"></span>
+          </div>
+          <div class="info-entry-copy">
+            <h3>Castle Node</h3>
+            <p>Your king commands your army, keep him safe or you lose. He is always placed on a blue square, and always on the edge of the map.</p>
+          </div>
+        </div>
+        <div class="info-entry">
+          <div class="info-entry-icon icon-camp" aria-hidden="true">
+            <span class="icon-camp-ring"></span>
+            <span class="icon-camp-dot"></span>
+          </div>
+          <div class="info-entry-copy">
+            <h3>Army Camp</h3>
+            <p>Your Army Camps are the backbone of your army, keep them well connected and well supplied, so they can expand your territory. Army camps that have their supply lines cut will fall.</p>
+          </div>
+        </div>
+        <div class="info-entry">
+          <div class="info-entry-icon icon-fort" aria-hidden="true">
+            <span class="icon-fort-diamond"></span>
+          </div>
+          <div class="info-entry-copy">
+            <h3>Fort</h3>
+            <p>A fortified Army Camp, Forts can deploy Sappers.</p>
+          </div>
+        </div>
+        <div class="info-entry">
+          <div class="info-entry-icon icon-sapper" aria-hidden="true">
+            <span class="icon-sapper-line"></span>
+            <span class="icon-sapper-head"></span>
+          </div>
+          <div class="info-entry-copy">
+            <h3>Sapper</h3>
+            <p>A temporarily deployed unit which can decrease terrain elevation by one level, and will take two turns to return to its Fort. Sappers can indirectly cut paths and attack Army Camps and Forts if they can reduce their elevation to be more than one level below adjacent paths.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     window.TOPOS_DEFAULTS = {{ defaults_json | safe }};
   </script>
-  <script src="/static/lobby.js?v=8"></script>
+  <script src="/static/lobby.js?v=9"></script>
 </body>
 </html>

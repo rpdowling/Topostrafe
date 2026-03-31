@@ -362,7 +362,6 @@ class MapGenerator:
 class Node:
     owner: int
     starter: bool = False
-    fort: bool = False
     sapper: bool = False
     sap_dir: tuple | None = None
     expires_on_owner: int | None = None
@@ -605,9 +604,6 @@ class GameState:
         src = route[0]
         if src not in self.nodes or self.nodes[src].owner != self.current_owner:
             return False, "Select your own node first.", None
-        src_node = self.nodes[src]
-        if not (getattr(src_node, "fort", False) or getattr(src_node, "sapper", False)):
-            return False, "Sap must start from a Fort or an existing sapper node.", None
         if not self.can_build_from(src, self.current_owner):
             return False, "Cannot act from nodes disconnected from your castle.", None
         if len(set(route)) != len(route):
@@ -693,22 +689,11 @@ class GameState:
             return False, "Game over."
         if not self.settings.fortify_rule:
             return False, "Fortify is disabled."
-        node = self.nodes.get(pos)
-        if node is not None:
-            if node.owner != self.current_owner:
-                return False, "Select one of your own nodes or paths."
-            if not self.can_build_from(pos, self.current_owner):
-                return False, "Cannot fortify a node disconnected from your castle."
-            if getattr(node, "sapper", False):
-                return False, "Sapper nodes already can sap."
-            if getattr(node, "fort", False):
-                return False, "That node is already a Fort."
-            return True, "Fortify ready. Node will become a Fort."
         road = self.road_at(pos)
         if road is None:
-            return False, "Select one of your own nodes or one of your road squares to fortify."
+            return False, "Select one of your road squares to fortify that path."
         if road.owner != self.current_owner:
-            return False, "Select one of your own nodes or paths."
+            return False, "Select one of your own paths."
         if not self.road_is_connected_to_castle(road):
             return False, "Cannot fortify a path disconnected from your castle."
         eligible = self.fortify_eligible_road_cells(road)
@@ -720,11 +705,6 @@ class GameState:
         ok, msg = self.preview_fortify(pos)
         if not ok:
             return False, msg
-        node = self.nodes.get(pos)
-        if node is not None and node.owner == self.current_owner and not getattr(node, "sapper", False):
-            node.fort = True
-            self.check_winner()
-            return True, "Fortify complete. Node converted to Fort."
         road = self.road_at(pos)
         eligible = self.fortify_eligible_road_cells(road)
         for cell in eligible:
