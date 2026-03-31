@@ -366,8 +366,16 @@ function drawDraftPaths(m) {
   for (let idx = 0; idx < draftSegments.length; idx++) {
     pseudo.push({ owner: mySeat() ?? 0, cells: draftSegments[idx], path_id: -1000 - idx });
   }
-  if (currentSegment && currentSegment.length > 1) {
-    pseudo.push({ owner: mySeat() ?? 0, cells: currentSegment, path_id: -2000 });
+  if (currentSegment && currentSegment.length > 0) {
+    let previewCells = currentSegment;
+    const seat = mySeat();
+    const hoverNode = hoverCell ? nodeAt(hoverCell) : null;
+    if (hoverCell && hoverNode && seat !== null && hoverNode.owner === seat && canStepTo(hoverCell)) {
+      previewCells = [...currentSegment, hoverCell];
+    }
+    if (previewCells.length > 1) {
+      pseudo.push({ owner: seat ?? 0, cells: previewCells, path_id: -2000 });
+    }
   }
   if (!pseudo.length) return;
   ctx.save();

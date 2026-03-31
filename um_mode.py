@@ -410,51 +410,73 @@ class UmGameState:
             blocked.update(path.cells)
         return blocked
 
+    def _owner_barrier_points(self, owner: int) -> set[tuple[int, int]]:
+        blocked: set[tuple[int, int]] = set()
+        for pos, node in self.nodes.items():
+            if node.owner != owner:
+                continue
+            blocked.add((pos[0] * 2 + 1, pos[1] * 2 + 1))
+        for path in self.paths.values():
+            if path.owner != owner:
+                continue
+            cells = path.cells or []
+            for x, y in cells:
+                blocked.add((x * 2 + 1, y * 2 + 1))
+            for a, b in zip(cells, cells[1:]):
+                ax, ay = a[0] * 2 + 1, a[1] * 2 + 1
+                bx, by = b[0] * 2 + 1, b[1] * 2 + 1
+                blocked.add(((ax + bx) // 2, (ay + by) // 2))
+        return blocked
+
     def _enclosed_cells_for_owner(self, owner: int) -> set[tuple[int, int]]:
-        blocked = self._owner_wall_cells(owner)
+        blocked = self._owner_barrier_points(owner)
         if not blocked:
             return set()
 
-        open_cells = {(x, y) for x in range(self.width) for y in range(self.height) if (x, y) not in blocked}
-        if not open_cells:
+        exp_w = self.width * 2 + 1
+        exp_h = self.height * 2 + 1
+        corners = {
+            (0, 0),
+            (exp_w - 1, 0),
+            (0, exp_h - 1),
+            (exp_w - 1, exp_h - 1),
+        }
+        open_points = {
+            (x, y)
+            for x in range(exp_w)
+            for y in range(exp_h)
+            if (x, y) not in blocked
+            and (
+                (x, y) in corners
+                or not (x == 0 or y == 0 or x == exp_w - 1 or y == exp_h - 1)
+            )
+        }
+        if not open_points:
             return set()
 
-        corners = {(0, 0), (self.width - 1, 0), (0, self.height - 1), (self.width - 1, self.height - 1)}
         seen: set[tuple[int, int]] = set()
-        components: list[tuple[set[tuple[int, int]], bool]] = []
-
-        for start in open_cells:
-            if start in seen:
-                continue
-            comp: set[tuple[int, int]] = set()
-            q = deque([start])
-            seen.add(start)
-            touches_corner = start in corners
-            while q:
-                x, y = q.popleft()
-                comp.add((x, y))
-                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                    np = (x + dx, y + dy)
-                    if np not in open_cells or np in seen:
-                        continue
-                    seen.add(np)
-                    if np in corners:
-                        touches_corner = True
-                    q.append(np)
-            components.append((comp, touches_corner))
-
         outside: set[tuple[int, int]] = set()
-        corner_components = [comp for comp, touches_corner in components if touches_corner]
-        if corner_components:
-            for comp in corner_components:
-                outside.update(comp)
-        else:
-            max_size = max(len(comp) for comp, _ in components)
-            for comp, _ in components:
-                if len(comp) == max_size:
-                    outside.update(comp)
+        q = deque([pt for pt in corners if pt in open_points])
+        seen.update(q)
+        outside.update(q)
+        while q:
+            x, y = q.popleft()
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                np = (x + dx, y + dy)
+                if np not in open_points or np in seen:
+                    continue
+                seen.add(np)
+                outside.add(np)
+                q.append(np)
 
-        return open_cells - outside
+        enclosed_points = open_points - outside
+        enclosed_cells: set[tuple[int, int]] = set()
+        for x in range(self.width):
+            for y in range(self.height):
+                center = (x * 2 + 1, y * 2 + 1)
+                if center in enclosed_points:
+                    enclosed_cells.add((x, y))
+        return enclosed_cells
 
     def check_winner(self):
         if self.winner is not None:
