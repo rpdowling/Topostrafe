@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/app.css?v=29" />
+  <link rel="stylesheet" href="/static/app.css?v=30" />
 </head>
 <body>
   <div class="page menu-three-col">
@@ -25,18 +25,16 @@
             <small class="muted">River is the default preset map.</small>
           </label>
           <label>
-            <span>Start Band</span>
-            <input id="start_band" type="number" min="1" max="8" />
-          </label>
-          <label>
             <span>Map Size Preset</span>
             <select id="size_preset">
               <option value="small">Small</option>
               <option value="medium">Medium</option>
               <option value="large">Large</option>
+              <option value="huge">Huge</option>
+              <option value="ginormous">Ginormous</option>
               <option value="custom">Custom</option>
             </select>
-            <small class="muted">Small 14x14 · link 7 · path 8. Medium 22x22 · link 11 · path 12. Large 30x30 · link 15 · path 16.</small>
+            <small class="muted">Small 14x14 · link 7 · path 8. Medium 22x22 · link 11 · path 12. Large 30x30 · link 15 · path 16. Huge 46x46 · link 23 · path 24. Ginormous 70x70 · link 35 · path 36.</small>
           </label>
           <label class="custom-size-field" id="map_width_wrap">
             <span>Map Width</span>
@@ -208,6 +206,6 @@
   <script>
     window.TOPOS_DEFAULTS = {{ defaults_json | safe }};
   </script>
-  <script src="/static/lobby.js?v=10"></script>
+  <script src="/static/lobby.js?v=11"></script>
 </body>
 </html>

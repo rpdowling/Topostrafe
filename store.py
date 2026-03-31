@@ -38,6 +38,8 @@ SIZE_PRESETS = {
     "small": {"map_width": 14, "map_height": 14, "max_link_distance": 7, "path_count": 8},
     "medium": {"map_width": 22, "map_height": 22, "max_link_distance": 11, "path_count": 12},
     "large": {"map_width": 30, "map_height": 30, "max_link_distance": 15, "path_count": 16},
+    "huge": {"map_width": 46, "map_height": 46, "max_link_distance": 23, "path_count": 24},
+    "ginormous": {"map_width": 70, "map_height": 70, "max_link_distance": 35, "path_count": 36},
 }
 
 

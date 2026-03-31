@@ -48,7 +48,6 @@ class GameSettings:
             f"Map type: {self.map_type}",
             f"Path count/turn: {self.path_count}",
             f"Max link distance: {self.max_link_distance}",
-            f"Start band: {self.start_band}",
             f"Time limit: {'On' if self.time_limit_enabled else 'Off'}",
             f"Time bank/side: {self.time_bank_seconds}s",
             f"Retake lock: {'On' if self.retake_rule else 'Off'}",
@@ -802,7 +801,7 @@ class GameState:
             return False, "Out of bounds."
         if (x, y) in self.nodes or self.road_at((x, y)):
             return False, "Cell occupied."
-        band = max(1, self.settings.start_band)
+        band = 1
         if self.current_owner == 0 and x >= band:
             return False, "Player 1 starter must be on the left edge."
         if self.current_owner == 1 and x < self.map.width - band:
@@ -1126,7 +1125,7 @@ class HeuristicBot:
     def choose_starter(self, state: GameState):
         width = state.map.width
         height = state.map.height
-        band = max(1, state.settings.start_band)
+        band = 1
         xs = range(0, band) if self.owner == 0 else range(width - band, width)
         enemy_castle = state.castle_pos(1 - self.owner)
         target_y = enemy_castle[1] if enemy_castle else height / 2
