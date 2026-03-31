@@ -918,11 +918,13 @@ body.info-modal-open {
 }
 .um-board-panel #board {
   display: block;
-  width: 100%;
+  width: auto;
+  max-width: 100%;
   height: auto;
   max-height: calc(100vh - 110px);
   aspect-ratio: 11 / 9;
   background: #0a0f14;
+  margin: 0 auto;
 }
 .um-layout #game-title {
   font-size: 1.08em;

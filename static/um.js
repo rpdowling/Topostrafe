@@ -114,6 +114,8 @@ function resizeCanvas() {
   }
   board.width = width;
   board.height = height;
+  board.style.width = `${width}px`;
+  board.style.height = `${height}px`;
   drawBoard();
 }
 

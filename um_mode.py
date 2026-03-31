@@ -410,73 +410,70 @@ class UmGameState:
             blocked.update(path.cells)
         return blocked
 
-    def _owner_barrier_points(self, owner: int) -> set[tuple[int, int]]:
+    def _owner_path_cells(self, owner: int) -> set[tuple[int, int]]:
         blocked: set[tuple[int, int]] = set()
-        for pos, node in self.nodes.items():
-            if node.owner != owner:
-                continue
-            blocked.add((pos[0] * 2 + 1, pos[1] * 2 + 1))
         for path in self.paths.values():
             if path.owner != owner:
                 continue
-            cells = path.cells or []
-            for x, y in cells:
-                blocked.add((x * 2 + 1, y * 2 + 1))
-            for a, b in zip(cells, cells[1:]):
-                ax, ay = a[0] * 2 + 1, a[1] * 2 + 1
-                bx, by = b[0] * 2 + 1, b[1] * 2 + 1
-                blocked.add(((ax + bx) // 2, (ay + by) // 2))
+            blocked.update(path.cells or [])
         return blocked
 
     def _enclosed_cells_for_owner(self, owner: int) -> set[tuple[int, int]]:
-        blocked = self._owner_barrier_points(owner)
+        blocked = self._owner_path_cells(owner)
         if not blocked:
             return set()
 
-        exp_w = self.width * 2 + 1
-        exp_h = self.height * 2 + 1
-        corners = {
-            (0, 0),
-            (exp_w - 1, 0),
-            (0, exp_h - 1),
-            (exp_w - 1, exp_h - 1),
-        }
-        open_points = {
+        open_cells = {
             (x, y)
-            for x in range(exp_w)
-            for y in range(exp_h)
+            for x in range(self.width)
+            for y in range(self.height)
             if (x, y) not in blocked
-            and (
-                (x, y) in corners
-                or not (x == 0 or y == 0 or x == exp_w - 1 or y == exp_h - 1)
-            )
         }
-        if not open_points:
+        if not open_cells:
             return set()
 
-        seen: set[tuple[int, int]] = set()
-        outside: set[tuple[int, int]] = set()
-        q = deque([pt for pt in corners if pt in open_points])
-        seen.update(q)
-        outside.update(q)
-        while q:
-            x, y = q.popleft()
-            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                np = (x + dx, y + dy)
-                if np not in open_points or np in seen:
-                    continue
-                seen.add(np)
-                outside.add(np)
-                q.append(np)
+        corners = [
+            (0, 0),
+            (self.width - 1, 0),
+            (0, self.height - 1),
+            (self.width - 1, self.height - 1),
+        ]
+        seeds = [pt for pt in corners if pt in open_cells]
 
-        enclosed_points = open_points - outside
-        enclosed_cells: set[tuple[int, int]] = set()
-        for x in range(self.width):
-            for y in range(self.height):
-                center = (x * 2 + 1, y * 2 + 1)
-                if center in enclosed_points:
-                    enclosed_cells.add((x, y))
-        return enclosed_cells
+        outside: set[tuple[int, int]] = set()
+        if seeds:
+            q = deque(seeds)
+            outside.update(seeds)
+            while q:
+                x, y = q.popleft()
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    np = (x + dx, y + dy)
+                    if np not in open_cells or np in outside:
+                        continue
+                    outside.add(np)
+                    q.append(np)
+        else:
+            remaining = set(open_cells)
+            largest: set[tuple[int, int]] = set()
+            while remaining:
+                seed = next(iter(remaining))
+                comp = {seed}
+                q = deque([seed])
+                remaining.remove(seed)
+                while q:
+                    x, y = q.popleft()
+                    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        np = (x + dx, y + dy)
+                        if np not in remaining:
+                            continue
+                        remaining.remove(np)
+                        comp.add(np)
+                        q.append(np)
+                if len(comp) > len(largest):
+                    largest = comp
+            outside = largest
+
+        return open_cells - outside
 
     def check_winner(self):
         if self.winner is not None:
