@@ -13,6 +13,8 @@ let draftSegments = [];
 let currentSegment = null;
 let hoverCell = null;
 let fadeEffects = [];
+let isPointerDown = false;
+let suppressNextClick = false;
 
 const PLAYER_COLORS = { 0: '#ff00ff', 1: '#ffffff' };
 const PLAYER_OUTLINES = { 0: '#1a001c', 1: '#000000' };
@@ -93,6 +95,25 @@ function pathList() {
 function nodeAt(cell) {
   if (!latestState || !cell) return null;
   return (latestState.nodes || []).find(n => n.x === cell[0] && n.y === cell[1]) || null;
+}
+
+
+function resizeCanvas() {
+  if (!board) return;
+  const panel = board.parentElement;
+  const toolbar = panel?.querySelector('.toolbar');
+  const panelWidth = Math.max(480, Math.floor((panel?.clientWidth || 1200) - 2));
+  const availableHeight = Math.max(420, Math.floor(window.innerHeight - (toolbar?.offsetHeight || 56) - 70));
+  const aspect = 11 / 9;
+  let width = panelWidth;
+  let height = Math.floor(width / aspect);
+  if (height > availableHeight) {
+    height = availableHeight;
+    width = Math.floor(height * aspect);
+  }
+  board.width = width;
+  board.height = height;
+  drawBoard();
 }
 
 function pathOccupancy(owner = null) {
@@ -230,12 +251,12 @@ function renderDraftLine() {
     return;
   }
   if (!draftSegments.length && !currentSegment) {
-    node.textContent = 'Path mode: click a friendly node to start, then click orthogonally to draw the route yourself.';
+    node.textContent = 'Path mode: click or drag from a friendly node, then click a friendly end node to finish each segment.';
     return;
   }
   if (currentSegment && currentSegment.length > 1) {
     const end = currentSegment[currentSegment.length - 1];
-    node.textContent = `Current segment length ${currentSegment.length - 1}. Continue orthogonally from ${end[0] + 1},${end[1] + 1}, then click a friendly node to finish.`;
+    node.textContent = `Current segment length ${currentSegment.length - 1}. Drag orthogonally from ${end[0] + 1},${end[1] + 1}, then click a friendly node to finish.`;
     return;
   }
   if (currentSegment && currentSegment.length === 1) {
@@ -463,6 +484,41 @@ function countCorners(seg) {
   return corners;
 }
 
+
+function canDragExtendTo(cell) {
+  const seat = mySeat();
+  if (!latestState || seat === null || !currentSegment || !currentSegment.length) return false;
+  const prev = currentSegment[currentSegment.length - 1];
+  if (Math.abs(cell[0] - prev[0]) + Math.abs(cell[1] - prev[1]) !== 1) return false;
+  if (currentSegment.some(c => sameCell(c, cell))) return false;
+  const node = nodeAt(cell);
+  if (node) return false;
+  const ownOcc = pathOccupancy(seat);
+  if (ownOcc.has(keyOf(cell))) return false;
+  for (const seg of draftSegments) {
+    for (const internal of seg.slice(1, -1)) {
+      if (sameCell(internal, cell)) return false;
+    }
+  }
+  const nextSeg = [...currentSegment, cell];
+  return countCorners(nextSeg) <= Number(latestState.settings.max_corners || 1);
+}
+
+function extendPathByDrag(cell) {
+  if (!currentSegment || !currentSegment.length) return false;
+  if (sameCell(cell, currentSegment[currentSegment.length - 1])) return false;
+  if (currentSegment.length > 1 && sameCell(cell, currentSegment[currentSegment.length - 2])) {
+    currentSegment.pop();
+    renderState();
+    return true;
+  }
+  if (!canDragExtendTo(cell)) return false;
+  currentSegment = [...currentSegment, cell];
+  suppressNextClick = true;
+  renderState();
+  return true;
+}
+
 function canStepTo(cell) {
   const seat = mySeat();
   if (!latestState || seat === null || !currentSegment || !currentSegment.length) return false;
@@ -516,6 +572,10 @@ function handleNodeModeClick(cell) {
 function handlePathModeClick(cell) {
   const seat = mySeat();
   const node = nodeAt(cell);
+  if (currentSegment && sameCell(cell, currentSegment[currentSegment.length - 1])) {
+    renderState();
+    return;
+  }
   if (!currentSegment) {
     if (!node || node.owner !== seat) {
       setStatus('Start path drawing from a friendly node.', true);
@@ -550,8 +610,29 @@ function handlePathModeClick(cell) {
   renderState();
 }
 
+
+function handlePathPointerDown(cell) {
+  const seat = mySeat();
+  const node = nodeAt(cell);
+  if (seat === null) return;
+  if (!currentSegment) {
+    if (!node || node.owner !== seat) return;
+    currentSegment = [cell];
+    pendingNode = null;
+    renderState();
+    return;
+  }
+  if (currentSegment.length === 1 && sameCell(cell, currentSegment[0])) {
+    return;
+  }
+}
+
 function handleBoardClick(evt) {
   if (!latestState) return;
+  if (mode === 'path' && suppressNextClick) {
+    suppressNextClick = false;
+    return;
+  }
   const cell = eventToCell(evt);
   if (!cell) return;
   const seat = mySeat();
@@ -575,8 +656,30 @@ function handleBoardClick(evt) {
   handlePathModeClick(cell);
 }
 
+
+function handlePointerDown(evt) {
+  if (!latestState) return;
+  const cell = eventToCell(evt);
+  if (!cell) return;
+  hoverCell = cell;
+  isPointerDown = true;
+  if (!isMyTurn() || mySeat() === null || mode !== 'path') return;
+  const seat = mySeat();
+  const minePlaced = latestState.starter_placed?.[seat];
+  if (!minePlaced) return;
+  pendingNode = null;
+  handlePathPointerDown(cell);
+}
+
+function handlePointerUp() {
+  isPointerDown = false;
+}
+
 function handleMouseMove(evt) {
   hoverCell = eventToCell(evt);
+  if (isPointerDown && mode === 'path' && isMyTurn() && hoverCell) {
+    extendPathByDrag(hoverCell);
+  }
   drawBoard();
 }
 
@@ -586,9 +689,12 @@ function selectMode(next) {
 }
 
 function setupUi() {
+  board.addEventListener('mousedown', handlePointerDown);
   board.addEventListener('click', handleBoardClick);
   board.addEventListener('mousemove', handleMouseMove);
-  board.addEventListener('mouseleave', () => { hoverCell = null; drawBoard(); });
+  board.addEventListener('mouseleave', () => { hoverCell = null; isPointerDown = false; drawBoard(); });
+  window.addEventListener('mouseup', handlePointerUp);
+  window.addEventListener('resize', resizeCanvas);
   el('mode-node').addEventListener('click', () => selectMode('node'));
   el('mode-path').addEventListener('click', () => selectMode('path'));
   el('commit-path').addEventListener('click', commitPendingTurn);
@@ -610,6 +716,7 @@ function tick() {
 }
 
 setupUi();
+resizeCanvas();
 connect();
 setInterval(tick, 1000);
 requestAnimationFrame(function loop() {

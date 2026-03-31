@@ -6,7 +6,7 @@ from typing import Iterable
 
 PLAYER_NAMES = {0: "Player 1", 1: "Player 2"}
 BOARD_COLORS = {
-    "yellow": "#efe3a3",
+    "yellow": "#f3ebb8",
     "blue": "#7ba6f5",
     "green": "#84c96f",
     "gray": "#b6b6b6",
@@ -159,6 +159,8 @@ class UmGameState:
                 if node is not None:
                     if node.owner == owner:
                         return False, "Paths cannot pass through your own nodes."
+                    if node.starter:
+                        return False, "You cannot draw through the enemy castle."
                     remove_enemy_nodes.add(cell)
                 for pid in self.path_lookup.get(cell, set()):
                     path = self.paths.get(pid)
@@ -166,6 +168,10 @@ class UmGameState:
                         continue
                     if path.owner == owner:
                         return False, "Cannot cross your own paths."
+                    seg_axis = self._segment_axis_at_cell(seg, cell)
+                    path_axis = self._path_axis_at_cell(path, cell)
+                    if seg_axis is None or path_axis is None or seg_axis == path_axis:
+                        return False, "You may only cross enemy paths perpendicularly, not along them."
                     crossed_enemy.add(pid)
             for pid in crossed_enemy:
                 path = self.paths.get(pid)
@@ -258,6 +264,37 @@ class UmGameState:
                 corners += 1
             prev_dir = d
         return corners
+
+
+    @staticmethod
+    def _axis_from_pair(a: tuple[int, int], b: tuple[int, int]) -> str:
+        if a[0] != b[0]:
+            return 'h'
+        if a[1] != b[1]:
+            return 'v'
+        return ''
+
+    def _path_axis_at_cell(self, path: UmPath, cell: tuple[int, int]) -> str | None:
+        try:
+            idx = path.cells.index(cell)
+        except ValueError:
+            return None
+        if idx <= 0 or idx >= len(path.cells) - 1:
+            return None
+        a = self._axis_from_pair(path.cells[idx - 1], cell)
+        b = self._axis_from_pair(cell, path.cells[idx + 1])
+        return a if a == b else None
+
+    def _segment_axis_at_cell(self, seg: list[tuple[int, int]], cell: tuple[int, int]) -> str | None:
+        try:
+            idx = seg.index(cell)
+        except ValueError:
+            return None
+        if idx <= 0 or idx >= len(seg) - 1:
+            return None
+        a = self._axis_from_pair(seg[idx - 1], cell)
+        b = self._axis_from_pair(cell, seg[idx + 1])
+        return a if a == b else None
 
     def _remove_path(self, pid: int):
         path = self.paths.pop(pid, None)

@@ -230,6 +230,7 @@ button:hover, .button-link:hover { background: var(--button-active); }
   .game-layout, .two-col, .editor-layout { grid-template-columns: 1fr; }
   .sidebar, .chat-panel, .editor-sidebar { position: static; max-height: none; }
   #board, #editor-board { height: 70vh; }
+  .um-board-panel #board { height: auto; }
 }
 
 .rules-box { margin: 14px 0 18px; border: 1px solid #2f3a47; border-radius: 10px; padding: 10px 12px; background: #111821; }
@@ -907,7 +908,15 @@ body.info-modal-open {
   fill: rgba(255,255,255,0.8);
 }
 .um-board-panel #board {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: calc(100vh - 110px);
+  aspect-ratio: 11 / 9;
   background: #0a0f14;
+}
+.um-layout #game-title {
+  font-size: 1.08em;
 }
 .um-note-card {
   padding: 12px;
