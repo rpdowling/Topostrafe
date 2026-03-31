@@ -583,8 +583,13 @@ function handleNodePlacement(cell) {
   if (seat === null) return;
   const occ = pathOccupancy();
   const nk = keyOf(cell);
-  if (nodeAt(cell) || occ.has(nk)) {
+  const occPaths = occ.get(nk) || [];
+  if (nodeAt(cell)) {
     setStatus('That square is occupied.', true);
+    return;
+  }
+  if (occPaths.some(path => path.owner !== seat)) {
+    setStatus('You may only place a node on your own path.', true);
     return;
   }
   currentSegment = null;

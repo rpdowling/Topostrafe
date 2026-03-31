@@ -119,14 +119,22 @@ class UmGameState:
             return False, "Out of bounds."
         if pos in self.nodes:
             return False, "Cell occupied."
-        if self.path_lookup.get(pos):
-            return False, "Cannot place a node on a path."
+        occupant_paths = [self.paths[pid] for pid in sorted(self.path_lookup.get(pos, set())) if pid in self.paths]
+        if any(path.owner != self.current_owner for path in occupant_paths):
+            return False, "Cannot place a node on an enemy path."
         enemy_enclosed = self._enclosed_cells_for_owner(1 - self.current_owner)
         if pos in enemy_enclosed:
             return False, "Cannot place a node inside enemy-encircled territory."
         self.nodes[pos] = UmNode(owner=self.current_owner, starter=False)
+        split_count = 0
+        for path in occupant_paths:
+            if pos not in path.internal_cells:
+                continue
+            split_count += self._split_path_with_node(path.path_id, pos)
         removed = self._resolve_after_action(self.current_owner)
         msg = "Node placed."
+        if split_count:
+            msg = f"{msg} Split {split_count} path segment{'s' if split_count != 1 else ''}."
         if removed:
             msg = f"{msg} {removed}".strip()
         return True, msg
@@ -322,6 +330,30 @@ class UmGameState:
             return None
         return node
 
+    def _split_path_with_node(self, pid: int, pos: tuple[int, int]) -> int:
+        path = self.paths.get(pid)
+        if path is None or pos not in path.internal_cells:
+            return 0
+        try:
+            idx = path.cells.index(pos)
+        except ValueError:
+            return 0
+        cells = path.cells[:]
+        owner = path.owner
+        self._remove_path(pid)
+        created = 0
+        pieces = [cells[:idx + 1], cells[idx:]]
+        for piece in pieces:
+            if len(piece) < 2:
+                continue
+            new_path = UmPath(self.next_path_id, owner, piece)
+            self.next_path_id += 1
+            self.paths[new_path.path_id] = new_path
+            for cell in new_path.internal_cells:
+                self.path_lookup[cell].add(new_path.path_id)
+            created += 1
+        return created
+
     def _remove_paths_touching_owner_node(self, pos: tuple[int, int], owner: int):
         for pid, path in list(self.paths.items()):
             if path.owner != owner:
@@ -440,42 +472,86 @@ class UmGameState:
                     occupied.add(mid)
                 prev_center = c
 
-        outside: set[tuple[int, int]] = set()
-        q = deque()
-        for x in range(micro_w):
-            for y in (0, micro_h - 1):
-                pt = (x, y)
-                if pt in occupied or pt in outside:
-                    continue
-                outside.add(pt)
-                q.append(pt)
-        for y in range(micro_h):
-            for x in (0, micro_w - 1):
-                pt = (x, y)
-                if pt in occupied or pt in outside:
-                    continue
+        def component_cells(edge_name: str | None):
+            blocked = set(occupied)
+            if edge_name == 'top':
+                blocked.update((x, 0) for x in range(micro_w))
+            elif edge_name == 'bottom':
+                blocked.update((x, micro_h - 1) for x in range(micro_w))
+            elif edge_name == 'left':
+                blocked.update((0, y) for y in range(micro_h))
+            elif edge_name == 'right':
+                blocked.update((micro_w - 1, y) for y in range(micro_h))
+
+            outside: set[tuple[int, int]] = set()
+            q = deque()
+
+            def seed_boundary(pt: tuple[int, int]):
+                if pt in blocked or pt in outside:
+                    return
                 outside.add(pt)
                 q.append(pt)
 
-        while q:
-            x, y = q.popleft()
-            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                np = (x + dx, y + dy)
-                if not (0 <= np[0] < micro_w and 0 <= np[1] < micro_h):
-                    continue
-                if np in occupied or np in outside:
-                    continue
-                outside.add(np)
-                q.append(np)
+            for x in range(micro_w):
+                seed_boundary((x, 0))
+                seed_boundary((x, micro_h - 1))
+            for y in range(micro_h):
+                seed_boundary((0, y))
+                seed_boundary((micro_w - 1, y))
 
-        enclosed: set[tuple[int, int]] = set()
-        for x in range(self.width):
-            for y in range(self.height):
-                c = center((x, y))
-                if c in occupied:
+            while q:
+                x, y = q.popleft()
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    np = (x + dx, y + dy)
+                    if not (0 <= np[0] < micro_w and 0 <= np[1] < micro_h):
+                        continue
+                    if np in blocked or np in outside:
+                        continue
+                    outside.add(np)
+                    q.append(np)
+
+            raw: set[tuple[int, int]] = set()
+            for x in range(self.width):
+                for y in range(self.height):
+                    c = center((x, y))
+                    if c in blocked:
+                        continue
+                    if c not in outside:
+                        raw.add((x, y))
+            return raw
+
+        enclosed = component_cells(None)
+        edge_specs = (
+            ('top', lambda cell: cell[1] == 0, lambda cell: cell[1] == self.height - 1 or cell[0] == 0 or cell[0] == self.width - 1),
+            ('bottom', lambda cell: cell[1] == self.height - 1, lambda cell: cell[1] == 0 or cell[0] == 0 or cell[0] == self.width - 1),
+            ('left', lambda cell: cell[0] == 0, lambda cell: cell[0] == self.width - 1 or cell[1] == 0 or cell[1] == self.height - 1),
+            ('right', lambda cell: cell[0] == self.width - 1, lambda cell: cell[0] == 0 or cell[1] == 0 or cell[1] == self.height - 1),
+        )
+        for edge_name, on_edge, on_other_edge in edge_specs:
+            candidate = component_cells(edge_name)
+            if not candidate:
+                continue
+            seen: set[tuple[int, int]] = set()
+            for start in list(candidate):
+                if start in seen:
                     continue
-                if c not in outside:
-                    enclosed.add((x, y))
+                comp = set()
+                q = deque([start])
+                seen.add(start)
+                while q:
+                    cur = q.popleft()
+                    comp.add(cur)
+                    x, y = cur
+                    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        np = (x + dx, y + dy)
+                        if np not in candidate or np in seen:
+                            continue
+                        seen.add(np)
+                        q.append(np)
+                touches_chosen = any(on_edge(cell) for cell in comp)
+                touches_other = any(on_other_edge(cell) for cell in comp)
+                if touches_chosen and not touches_other:
+                    enclosed.update(comp)
         return enclosed
 
     def check_winner(self):
