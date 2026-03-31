@@ -114,7 +114,7 @@ class GameStore:
     def defaults(self) -> dict[str, Any]:
         d = eng.GameSettings()
         d.map_type = "River"
-        um_defaults = um.UmSettings(board_width=10, board_height=10)
+        um_defaults = um.UmSettings(board_width=10, board_height=10, require_move_confirmation=False)
         return {
             "settings": d.__dict__.copy(),
             "map_types": MAP_TYPES,
@@ -126,6 +126,7 @@ class GameStore:
                 "board_height": um_defaults.board_height,
                 "max_corners": um_defaults.max_corners,
                 "board_color": um_defaults.board_color,
+                "require_move_confirmation": um_defaults.require_move_confirmation,
                 "size_preset": "medium",
             },
             "um_board_colors": um.BOARD_COLORS,
@@ -270,9 +271,16 @@ class GameStore:
         width, height = um.SIZE_PRESETS.get(preset, um.SIZE_PRESETS["medium"])
         max_corners = max(0, min(6, int(raw.get("max_corners", 1))))
         board_color = str(raw.get("board_color", "yellow") or "yellow").strip().lower()
+        require_move_confirmation = bool(raw.get("require_move_confirmation", False))
         if board_color not in um.BOARD_COLORS:
             board_color = "yellow"
-        return um.UmSettings(board_width=width, board_height=height, max_corners=max_corners, board_color=board_color)
+        return um.UmSettings(
+            board_width=width,
+            board_height=height,
+            max_corners=max_corners,
+            board_color=board_color,
+            require_move_confirmation=require_move_confirmation,
+        )
 
     def _map_from_payload(self, settings: eng.GameSettings, payload: dict[str, Any]) -> eng.MapData:
         if settings.map_type == "River":
@@ -479,6 +487,7 @@ class GameStore:
                         "board_height": game.settings.board_height,
                         "max_corners": game.settings.max_corners,
                         "board_color": game.settings.board_color,
+                        "require_move_confirmation": game.settings.require_move_confirmation,
                         "time_limit_enabled": False,
                         "time_bank_seconds": game.settings.time_bank_seconds,
                     },

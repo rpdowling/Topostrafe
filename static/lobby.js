@@ -3,7 +3,7 @@ const settings = defaults.settings;
 const settingKeys = Object.keys(settings);
 
 const mapTypeLabels = defaults.map_type_labels || {};
-const umDefaults = defaults.um_defaults || { board_width: 10, board_height: 10, max_corners: 1, board_color: "yellow", size_preset: "medium" };
+const umDefaults = defaults.um_defaults || { board_width: 10, board_height: 10, max_corners: 1, board_color: "yellow", require_move_confirmation: false, size_preset: "medium" };
 const umBoardColors = defaults.um_board_colors || { yellow: "#e8cf52" };
 const umSizePresets = defaults.um_size_presets || { small: { board_width: 6, board_height: 6 }, medium: { board_width: 10, board_height: 10 }, large: { board_width: 20, board_height: 20 } };
 
@@ -58,6 +58,7 @@ function buildForm() {
   }
   if (el('um_size_preset')) el('um_size_preset').value = umDefaults.size_preset || 'medium';
   if (el('um_max_corners')) el('um_max_corners').value = String(umDefaults.max_corners ?? 1);
+  if (el('um_require_move_confirmation')) el('um_require_move_confirmation').checked = !!umDefaults.require_move_confirmation;
 }
 
 
@@ -150,6 +151,7 @@ function collectUmPayload() {
       size_preset: el('um_size_preset')?.value || 'medium',
       max_corners: Number(el('um_max_corners')?.value || 1),
       board_color: el('um_board_color')?.value || 'yellow',
+      require_move_confirmation: !!el('um_require_move_confirmation')?.checked,
     },
   };
 }
@@ -217,7 +219,7 @@ async function refreshGames() {
         left.innerHTML = `<strong>${game.game_id}</strong><small>${displayMapType(game.map_type)} · ${game.size}</small><small>Path ${game.path_count} · Link ${game.max_link_distance} · ${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
       }
       const btn = document.createElement('button');
-      btn.className = 'join-button';
+      btn.className = `join-button${game.game_mode === 'um' ? ' um-join-button' : ''}`;
       btn.textContent = 'Join';
       btn.onclick = async () => {
         try {

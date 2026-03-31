@@ -596,6 +596,15 @@ button:hover, .button-link:hover { background: var(--button-active); }
 .join-button:hover {
   background: linear-gradient(180deg, #71d889 0%, #38a35a 100%);
 }
+
+.join-button.um-join-button {
+  background: linear-gradient(180deg, #f0d66a 0%, #c9a62c 100%);
+  border-color: #ffe59a;
+  color: #2b2006;
+}
+.join-button.um-join-button:hover {
+  background: linear-gradient(180deg, #f6e07e 0%, #d4b43f 100%);
+}
 .game-row {
   display: flex;
   justify-content: space-between;

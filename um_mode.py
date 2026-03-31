@@ -24,6 +24,7 @@ class UmSettings:
     board_height: int = 10
     max_corners: int = 1
     board_color: str = "yellow"
+    require_move_confirmation: bool = False
     time_limit_enabled: bool = False
     time_bank_seconds: int = 600
 

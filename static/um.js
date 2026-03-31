@@ -7,14 +7,11 @@ let ws = null;
 let latestState = null;
 let previousState = null;
 let reconnectTimer = null;
-let mode = 'node';
 let pendingNode = null;
 let draftSegments = [];
 let currentSegment = null;
 let hoverCell = null;
 let fadeEffects = [];
-let isPointerDown = false;
-let suppressNextClick = false;
 
 const PLAYER_COLORS = { 0: '#ff00ff', 1: '#ffffff' };
 const PLAYER_OUTLINES = { 0: '#1a001c', 1: '#000000' };
@@ -80,6 +77,10 @@ function mySeat() {
 
 function isMyTurn() {
   return latestState && mySeat() !== null && latestState.current_owner === mySeat() && latestState.status === 'active' && latestState.winner === null;
+}
+
+function requireMoveConfirmation() {
+  return !!latestState?.settings?.require_move_confirmation;
 }
 
 function nodeMap() {
@@ -193,9 +194,13 @@ function renderMeta() {
   el('winner-line').textContent = latestState.win_reason || '';
   el('castle0').textContent = latestState.starter_placed?.[0] ? 'Placed' : 'Unplaced';
   el('castle1').textContent = latestState.starter_placed?.[1] ? 'Placed' : 'Unplaced';
-  const draftCount = draftSegments.length + (pendingNode ? 1 : 0);
+  const draftCount = (currentSegment && currentSegment.length > 1 ? 1 : 0) + draftSegments.length + (pendingNode ? 1 : 0);
   el('segment-count').textContent = String(draftCount);
   el('share-line').textContent = latestState.join_code ? `Code: ${latestState.join_code}` : '';
+  const stat0 = el('stat-player0');
+  const stat1 = el('stat-player1');
+  if (stat0) stat0.classList.toggle('active-turn', latestState.current_owner === 0 && latestState.winner === null);
+  if (stat1) stat1.classList.toggle('active-turn', latestState.current_owner === 1 && latestState.winner === null);
   renderLog();
   renderChat();
   renderDraftLine();
@@ -242,40 +247,39 @@ function renderDraftLine() {
     node.textContent = 'Place your castle on your side of the board.';
     return;
   }
-  if (mode === 'node') {
-    if (pendingNode) {
-      node.textContent = `Pending node at ${pendingNode[0] + 1},${pendingNode[1] + 1}. Click Confirm Turn or click the same square again.`;
-    } else {
-      node.textContent = 'Node mode: click an empty square to preview a node, then confirm.';
-    }
+  if (pendingNode) {
+    node.textContent = `Pending node at ${pendingNode[0] + 1},${pendingNode[1] + 1}. ${requireMoveConfirmation() ? 'Click Confirm Turn or click the same square again.' : ''}`.trim();
     return;
   }
-  if (!draftSegments.length && !currentSegment) {
-    node.textContent = 'Path mode: click or drag from a friendly node, then click a friendly end node to finish each segment.';
+  if (draftSegments.length > 0) {
+    node.textContent = `Pending path segment. ${requireMoveConfirmation() ? 'Click Confirm Turn to submit.' : ''}`.trim();
     return;
   }
   if (currentSegment && currentSegment.length > 1) {
     const end = currentSegment[currentSegment.length - 1];
-    node.textContent = `Current segment length ${currentSegment.length - 1}. Drag orthogonally from ${end[0] + 1},${end[1] + 1}, then click a friendly node to finish.`;
+    node.textContent = `Drag orthogonally from ${end[0] + 1},${end[1] + 1}, then click a friendly node to finish.`;
     return;
   }
   if (currentSegment && currentSegment.length === 1) {
     const end = currentSegment[0];
-    node.textContent = `Chain anchor at ${end[0] + 1},${end[1] + 1}. Draw the next segment or confirm the turn.`;
+    node.textContent = `Path start at ${end[0] + 1},${end[1] + 1}. Move the mouse to trace the path, then click a friendly end node.`;
     return;
   }
-  node.textContent = `Drafting ${draftSegments.length} segment${draftSegments.length !== 1 ? 's' : ''}. Click Confirm Turn to submit.`;
+  node.textContent = 'Click an empty square to place a node, or click a friendly node to start a path.';
 }
 
 function updateActionButtons() {
-  el('mode-node').classList.toggle('active', mode === 'node');
-  el('mode-path').classList.toggle('active', mode === 'path');
   const canConfirmNode = isMyTurn() && !!pendingNode;
-  const canConfirmPath = isMyTurn() && draftSegments.length > 0 && (!currentSegment || currentSegment.length === 1);
+  const canConfirmPath = isMyTurn() && draftSegments.length > 0;
   const confirmButton = el('commit-path');
-  confirmButton.disabled = !(canConfirmNode || canConfirmPath);
-  confirmButton.textContent = mode === 'node' ? 'Confirm Turn' : 'Confirm Turn';
-  el('clear-draft').disabled = !pendingNode && draftSegments.length === 0 && !currentSegment;
+  const showConfirm = requireMoveConfirmation();
+  if (confirmButton) {
+    confirmButton.style.display = showConfirm ? '' : 'none';
+    confirmButton.disabled = !(canConfirmNode || canConfirmPath);
+    confirmButton.textContent = 'Confirm Turn';
+  }
+  const clearButton = el('clear-draft');
+  if (clearButton) clearButton.disabled = !pendingNode && draftSegments.length === 0 && !currentSegment;
 }
 
 function drawBoard() {
@@ -514,7 +518,6 @@ function extendPathByDrag(cell) {
   }
   if (!canDragExtendTo(cell)) return false;
   currentSegment = [...currentSegment, cell];
-  suppressNextClick = true;
   renderState();
   return true;
 }
@@ -538,21 +541,31 @@ function canStepTo(cell) {
   return countCorners(nextSeg) <= Number(latestState.settings.max_corners || 1);
 }
 
+function sendPendingNode() {
+  if (!pendingNode) return;
+  send({ type: 'um_node', x: pendingNode[0], y: pendingNode[1] });
+  pendingNode = null;
+  renderState();
+}
+
+function sendPendingPaths() {
+  if (!draftSegments.length) return;
+  send({ type: 'um_paths', segments: draftSegments });
+  clearDraft();
+}
+
 function commitPendingTurn() {
   if (!isMyTurn()) return;
-  if (mode === 'node' && pendingNode) {
-    send({ type: 'um_node', x: pendingNode[0], y: pendingNode[1] });
-    pendingNode = null;
-    renderState();
+  if (pendingNode) {
+    sendPendingNode();
     return;
   }
-  if (mode === 'path' && draftSegments.length > 0 && (!currentSegment || currentSegment.length === 1)) {
-    send({ type: 'um_paths', segments: draftSegments });
-    clearDraft();
+  if (draftSegments.length > 0) {
+    sendPendingPaths();
   }
 }
 
-function handleNodeModeClick(cell) {
+function handleNodePlacement(cell) {
   const seat = mySeat();
   if (seat === null) return;
   const occ = pathOccupancy();
@@ -561,78 +574,60 @@ function handleNodeModeClick(cell) {
     setStatus('That square is occupied.', true);
     return;
   }
-  if (pendingNode && sameCell(pendingNode, cell)) {
-    commitPendingTurn();
-    return;
-  }
-  pendingNode = cell;
-  renderState();
-}
-
-function handlePathModeClick(cell) {
-  const seat = mySeat();
-  const node = nodeAt(cell);
-  if (currentSegment && sameCell(cell, currentSegment[currentSegment.length - 1])) {
-    renderState();
-    return;
-  }
-  if (!currentSegment) {
-    if (!node || node.owner !== seat) {
-      setStatus('Start path drawing from a friendly node.', true);
+  currentSegment = null;
+  draftSegments = [];
+  if (requireMoveConfirmation()) {
+    if (pendingNode && sameCell(pendingNode, cell)) {
+      sendPendingNode();
       return;
     }
-    currentSegment = [cell];
-    pendingNode = null;
+    pendingNode = cell;
     renderState();
     return;
   }
+  pendingNode = null;
+  send({ type: 'um_node', x: cell[0], y: cell[1] });
+}
 
-  if (currentSegment.length > 1 && sameCell(cell, currentSegment[currentSegment.length - 2])) {
-    currentSegment.pop();
-    renderState();
+function startPathFrom(cell) {
+  const seat = mySeat();
+  const node = nodeAt(cell);
+  if (seat === null || !node || node.owner !== seat) {
+    setStatus('Start path drawing from a friendly node.', true);
     return;
   }
-
-  if (!canStepTo(cell)) {
-    setStatus(`Invalid step. Use orthogonal moves and at most ${latestState.settings.max_corners} corner${latestState.settings.max_corners === 1 ? '' : 's'} per segment.`, true);
-    return;
-  }
-
-  const nextSeg = [...currentSegment, cell];
-  if (node && node.owner === seat) {
-    draftSegments.push(nextSeg);
-    currentSegment = [cell];
-    renderState();
-    return;
-  }
-
-  currentSegment = nextSeg;
+  pendingNode = null;
+  draftSegments = [];
+  currentSegment = [cell];
   renderState();
 }
 
-
-function handlePathPointerDown(cell) {
+function finishCurrentSegment(cell) {
   const seat = mySeat();
   const node = nodeAt(cell);
-  if (seat === null) return;
-  if (!currentSegment) {
-    if (!node || node.owner !== seat) return;
-    currentSegment = [cell];
-    pendingNode = null;
+  if (seat === null || !currentSegment || currentSegment.length < 1) return;
+  if (!node || node.owner !== seat) {
+    setStatus('Finish the path by clicking a friendly node.', true);
+    return;
+  }
+  if (!canStepTo(cell)) {
+    setStatus(`Invalid end node. Use orthogonal moves and at most ${latestState.settings.max_corners} corner${latestState.settings.max_corners === 1 ? '' : 's'} per segment.`, true);
+    return;
+  }
+  const segment = [...currentSegment, cell];
+  if (requireMoveConfirmation()) {
+    draftSegments = [segment];
+    currentSegment = null;
     renderState();
     return;
   }
-  if (currentSegment.length === 1 && sameCell(cell, currentSegment[0])) {
-    return;
-  }
+  currentSegment = null;
+  draftSegments = [];
+  send({ type: 'um_paths', segments: [segment] });
 }
 
 function handleBoardClick(evt) {
   if (!latestState) return;
-  if (mode === 'path' && suppressNextClick) {
-    suppressNextClick = false;
-    return;
-  }
   const cell = eventToCell(evt);
   if (!cell) return;
   const seat = mySeat();
@@ -646,57 +641,48 @@ function handleBoardClick(evt) {
     send({ type: 'starter', x: cell[0], y: cell[1] });
     return;
   }
-  if (mode === 'node') {
-    currentSegment = null;
-    draftSegments = [];
-    handleNodeModeClick(cell);
+
+  if (currentSegment && currentSegment.length) {
+    const node = nodeAt(cell);
+    if (node && node.owner === seat) {
+      if (sameCell(cell, currentSegment[0]) && currentSegment.length === 1) {
+        renderState();
+        return;
+      }
+      finishCurrentSegment(cell);
+      return;
+    }
+    if (canStepTo(cell)) {
+      currentSegment = [...currentSegment, cell];
+      renderState();
+      return;
+    }
+    setStatus('Trace the path with the mouse, then click a friendly end node.', true);
     return;
   }
-  pendingNode = null;
-  handlePathModeClick(cell);
-}
 
+  const node = nodeAt(cell);
+  if (node && node.owner === seat) {
+    startPathFrom(cell);
+    return;
+  }
 
-function handlePointerDown(evt) {
-  if (!latestState) return;
-  const cell = eventToCell(evt);
-  if (!cell) return;
-  hoverCell = cell;
-  isPointerDown = true;
-  if (!isMyTurn() || mySeat() === null || mode !== 'path') return;
-  const seat = mySeat();
-  const minePlaced = latestState.starter_placed?.[seat];
-  if (!minePlaced) return;
-  pendingNode = null;
-  handlePathPointerDown(cell);
-}
-
-function handlePointerUp() {
-  isPointerDown = false;
+  handleNodePlacement(cell);
 }
 
 function handleMouseMove(evt) {
   hoverCell = eventToCell(evt);
-  if (isPointerDown && mode === 'path' && isMyTurn() && hoverCell) {
+  if (currentSegment && currentSegment.length && isMyTurn() && hoverCell) {
     extendPathByDrag(hoverCell);
   }
   drawBoard();
 }
 
-function selectMode(next) {
-  mode = next;
-  clearDraft();
-}
-
 function setupUi() {
-  board.addEventListener('mousedown', handlePointerDown);
   board.addEventListener('click', handleBoardClick);
   board.addEventListener('mousemove', handleMouseMove);
-  board.addEventListener('mouseleave', () => { hoverCell = null; isPointerDown = false; drawBoard(); });
-  window.addEventListener('mouseup', handlePointerUp);
+  board.addEventListener('mouseleave', () => { hoverCell = null; drawBoard(); });
   window.addEventListener('resize', resizeCanvas);
-  el('mode-node').addEventListener('click', () => selectMode('node'));
-  el('mode-path').addEventListener('click', () => selectMode('path'));
   el('commit-path').addEventListener('click', commitPendingTurn);
   el('clear-draft').addEventListener('click', clearDraft);
   el('resign').addEventListener('click', () => send({ type: 'resign' }));
@@ -708,11 +694,6 @@ function setupUi() {
     send({ type: 'chat', text });
     input.value = '';
   });
-}
-
-function tick() {
-  if (fadeEffects.length) drawBoard();
-  if (ws && ws.readyState === WebSocket.OPEN) send({ type: 'ping' });
 }
 
 setupUi();
