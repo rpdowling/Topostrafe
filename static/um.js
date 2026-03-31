@@ -496,7 +496,8 @@ function canDragExtendTo(cell) {
   if (Math.abs(cell[0] - prev[0]) + Math.abs(cell[1] - prev[1]) !== 1) return false;
   if (currentSegment.some(c => sameCell(c, cell))) return false;
   const node = nodeAt(cell);
-  if (node) return false;
+  if (node && node.owner === seat) return false;
+  if (node && node.starter) return false;
   const ownOcc = pathOccupancy(seat);
   if (ownOcc.has(keyOf(cell))) return false;
   for (const seg of draftSegments) {
@@ -530,6 +531,7 @@ function canStepTo(cell) {
   if (currentSegment.some(c => sameCell(c, cell))) return false;
   const node = nodeAt(cell);
   if (node && node.owner === seat) return true;
+  if (node && node.starter) return false;
   const ownOcc = pathOccupancy(seat);
   if (ownOcc.has(keyOf(cell))) return false;
   for (const seg of draftSegments) {
@@ -650,6 +652,10 @@ function handleBoardClick(evt) {
         return;
       }
       finishCurrentSegment(cell);
+      return;
+    }
+    if (!node && currentSegment.length === 1) {
+      clearDraft();
       return;
     }
     if (canStepTo(cell)) {

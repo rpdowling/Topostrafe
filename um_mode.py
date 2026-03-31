@@ -121,6 +121,9 @@ class UmGameState:
             return False, "Cell occupied."
         if self.path_lookup.get(pos):
             return False, "Cannot place a node on a path."
+        enemy_enclosed = self._enclosed_cells_for_owner(1 - self.current_owner)
+        if pos in enemy_enclosed:
+            return False, "Cannot place a node inside enemy-encircled territory."
         self.nodes[pos] = UmNode(owner=self.current_owner, starter=False)
         removed = self._resolve_after_action(self.current_owner)
         msg = "Node placed."
