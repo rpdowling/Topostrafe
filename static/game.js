@@ -453,6 +453,16 @@ function nodeCanStartSap(node) {
   return !!(node && (node.fort || node.sapper));
 }
 
+function rallyOrigin() {
+  return latestState && Array.isArray(latestState.rally_origin) && latestState.rally_origin.length === 2
+    ? [Number(latestState.rally_origin[0]), Number(latestState.rally_origin[1])]
+    : null;
+}
+
+function rallyActive() {
+  return !!rallyOrigin();
+}
+
 function roadAt(cell) {
   if (!latestState) return null;
   return latestState.roads.find(r => r.path.slice(1, -1).some(p => p[0] === cell[0] && p[1] === cell[1])) || null;
@@ -488,6 +498,7 @@ function evaluateRoutesLocal(routes, options = {}) {
   const sources = [];
   const tempOccupied = new Set();
   const connectedSources = connectedToCastle(mySeat);
+  const rally = rallyOrigin();
   let partialLastRoute = null;
 
   for (let routeIndex = 0; routeIndex < routes.length; routeIndex++) {
@@ -496,6 +507,7 @@ function evaluateRoutesLocal(routes, options = {}) {
     const src = route[0];
     const srcNode = nodeAt(src);
     if (!srcNode || srcNode.owner !== mySeat) return { ok: false, message: 'Every route must start on your own node.' };
+    if (rally && !sameCell(src, rally)) return { ok: false, message: 'Rally must continue from the captured square.' };
     if (!connectedSources.has(keyOf(src))) return { ok: false, message: 'Cannot build from nodes disconnected from your castle.' };
     const routeDest = route[route.length - 1];
     const isPartial = allowPartialLastRoute && routeIndex === routes.length - 1 && pendingDestination && !sameCell(routeDest, dest);
@@ -529,6 +541,7 @@ function evaluateRoutesLocal(routes, options = {}) {
   if (new Set(sources).size !== sources.length) return { ok: false, message: 'Use each source node at most once this turn.' };
   if (totalCost > currentTurnBudgetForSeat()) return { ok: false, message: 'Not enough traversal cost remaining this turn.' };
 
+  const allowEqualAttack = routes.length >= 2;
   if (!partialLastRoute) {
     const destNode = nodeAt(dest);
     const destRoad = roadAt(dest);
@@ -537,17 +550,17 @@ function evaluateRoutesLocal(routes, options = {}) {
       if (latestState.settings.retake_rule && latestState.retake_locks.some(lock => lock.blocked_owner === mySeat && lock.x === dest[0] && lock.y === dest[1])) {
         return { ok: false, message: 'Retake blocked on that node this turn.' };
       }
-      if (!routes.some(route => canAttackFrom(route[0], dest))) {
+      if (!routes.some(route => canAttackFrom(route[0], dest, allowEqualAttack))) {
         const protectedNode = isConnectedToCastle(dest);
         if (protectedNode) {
-          return { ok: false, message: 'You must attack from a node at a higher elevation unless that group is disconnected from its castle.' };
+          return { ok: false, message: allowEqualAttack ? 'A multi-route assault must include a source at equal or higher elevation unless that group is disconnected from its castle.' : 'You must attack from a node at a higher elevation unless that group is disconnected from its castle.' };
         }
       }
     } else if (destRoad && destRoad.owner !== mySeat) {
-      if (!routes.some(route => canAttackFrom(route[0], dest))) {
+      if (!routes.some(route => canAttackFrom(route[0], dest, allowEqualAttack))) {
         const protectedRoad = roadIsConnectedToCastle(destRoad);
         if (protectedRoad) {
-          return { ok: false, message: 'You must attack that road section from a higher elevation unless that group is disconnected from its castle.' };
+          return { ok: false, message: allowEqualAttack ? 'A multi-route assault must include a source at equal or higher elevation unless that group is disconnected from its castle.' : 'You must attack that road section from a higher elevation unless that group is disconnected from its castle.' };
         }
       }
     } else if (!destNode && !destRoad) {
@@ -596,6 +609,7 @@ function findShortestRoute(src, dst, options = {}) {
   if (seat === null) return null;
   if (!options.ignorePending && pendingDestination && !sameCell(dst, pendingDestination)) return null;
   if (!options.ignorePending && mode === 'routes' && sourceAlreadyUsed(src)) return null;
+  if (!options.ignorePending && mode === 'routes' && rallyActive() && !sameCell(src, rallyOrigin())) return null;
   const srcElev = mapElev(src);
   const targetKey = keyOf(dst);
   const requireEmptyDest = !!options.requireEmptyDest;
@@ -797,6 +811,7 @@ function updateDraftLine() {
   if (activeRoute.length) bits.push(`Active route cost ${routeTraversalCost(activeRoute)}`);
   if (pendingRoutes.length) bits.push(`Pending routes ${pendingRoutes.length} · cost ${localPendingLength()}`);
   if (pendingDestination) bits.push(`Dest ${pendingDestination[0]},${pendingDestination[1]}`);
+  if (rallyActive()) { const r = rallyOrigin(); bits.push(`Rally ${r[0]},${r[1]}`); }
   if (mode === 'entrench' && activeRoute.length) bits.push(activeRoute.length >= 2 ? `Sap route cost ${routeTraversalCost(activeRoute)} · Click endpoint again to confirm` : `Sap source selected`);
   el('draft-line').textContent = bits.join(' · ') || 'No draft.';
 }
@@ -846,7 +861,9 @@ function renderStatus() {
   if (latestState.status === 'open') {
     el('status-line').textContent = latestState.is_private ? `Waiting for opponent. Code: ${latestState.join_code || ''}` : 'Waiting for opponent to join.';
   } else {
-    el('status-line').textContent = latestMessage || '';
+    const rally = rallyOrigin();
+    const rallyText = rally ? ` Continue from ${rally[0]},${rally[1]} or end turn.` : '';
+    el('status-line').textContent = `${latestMessage || ''}${rallyText}`.trim();
   }
   if (latestState.is_private && latestState.join_code) {
     el('share-line').textContent = `Private code: ${latestState.join_code}`;
@@ -1093,8 +1110,10 @@ function attackElevationForSource(src) {
   return attackPrivilegeElevation(node.owner);
 }
 
-function canAttackFrom(src, dst) {
-  return attackElevationForSource(src) < mapElev(dst);
+function canAttackFrom(src, dst, allowEqual = false) {
+  const srcElev = attackElevationForSource(src);
+  const dstElev = mapElev(dst);
+  return allowEqual ? srcElev <= dstElev : srcElev < dstElev;
 }
 
 function practicalRangeData(src, radius, showUnattackableTargets) {
@@ -1193,7 +1212,10 @@ function setRangeFromNode(cell) {
   rangeColor = isOwnCurrentNode ? 'rgba(0,100,27,0.20)' : 'rgba(99,0,0,0.20)';
   let data = practicalRangeData(cell, radius, !!latestState.settings.show_unattackable_range_targets);
   if (isOwnCurrentNode && canDraftOrQueue()) {
-    if (sourceAlreadyUsed(cell)) {
+    const rally = rallyOrigin();
+    if (rally && !sameCell(cell, rally)) {
+      data = [];
+    } else if (sourceAlreadyUsed(cell)) {
       data = [];
     } else if (pendingDestination) {
       data = data.filter(item => sameCell(item.cell, pendingDestination));
@@ -1216,6 +1238,17 @@ function detectVisualEvents(prev, next, message) {
   for (const [k, node] of nextNodes.entries()) if (!prevNodes.has(k)) events.push({ kind: 'snap-node', cell: [node.x, node.y], owner: node.owner, duration: 180 });
   for (const [k, node] of prevNodes.entries()) if (!nextNodes.has(k)) events.push({ kind: 'fade-node', cell: [node.x, node.y], owner: node.owner, duration: 180 });
   for (const [id, road] of prevRoads.entries()) if (!nextRoads.has(id)) events.push({ kind: 'fade-road', path: road.path, owner: road.owner, duration: 180 });
+  for (const [k, nextNode] of nextNodes.entries()) {
+    const prevNode = prevNodes.get(k);
+    if (prevNode && prevNode.owner !== nextNode.owner) {
+      events.push({ kind: 'rally', cell: [nextNode.x, nextNode.y], duration: 620 });
+      continue;
+    }
+    if (prevNode) continue;
+    const cell = [nextNode.x, nextNode.y];
+    const enemyRoad = (prev.roads || []).find(r => r.owner !== nextNode.owner && r.path.some(p => sameCell(p, cell)));
+    if (enemyRoad) events.push({ kind: 'rally', cell, duration: 620 });
+  }
   const changedCells = [];
   const prevGrid = prev.map && prev.map.grid ? prev.map.grid : [];
   const nextGrid = next.map && next.map.grid ? next.map.grid : [];
@@ -1261,6 +1294,20 @@ function drawAnimations() {
       ctx.save();
       ctx.fillStyle = anim.kind === 'fortify' ? `rgba(255,255,255,${0.22 * fade})` : `rgba(0,0,0,${0.18 * fade})`;
       ctx.fillRect(boardGeom.ox + x * boardGeom.cell + 1, boardGeom.oy + y * boardGeom.cell + 1, boardGeom.cell - 2, boardGeom.cell - 2);
+      ctx.restore();
+    } else if (anim.kind === 'rally') {
+      const [cx, cy] = cellCenter(anim.cell);
+      const pulse = 0.88 + 0.18 * Math.sin((now - anim.t0) / 90);
+      ctx.save();
+      ctx.globalAlpha = 0.95 * fade;
+      ctx.fillStyle = '#ff3b30';
+      ctx.strokeStyle = 'rgba(80,0,0,0.70)';
+      ctx.lineWidth = Math.max(1.5, boardGeom.cell * 0.05);
+      ctx.font = `bold ${Math.max(12, boardGeom.cell * 0.52 * pulse)}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.strokeText('!', cx, cy - boardGeom.cell * 0.03);
+      ctx.fillText('!', cx, cy - boardGeom.cell * 0.03);
       ctx.restore();
     }
   }
@@ -1674,6 +1721,13 @@ function onBoardClick(evt) {
   const node = nodeAt(cell);
   if (!activeRoute.length) {
     if (node && node.owner === mySeat) {
+      const rally = rallyOrigin();
+      if (rally && !sameCell(cell, rally)) {
+        latestMessage = 'Rally must continue from the captured square.';
+        renderStatus();
+        draw();
+        return;
+      }
       invalidateAutoPath();
       activeRoute = [cell];
       setRangeFromNode(cell);
@@ -1725,6 +1779,10 @@ function applyState(state, message) {
     if (nodeAt(rangeAnchor)) setRangeFromNode(rangeAnchor);
     else clearRange();
   }
+  if (isMyTurn() && rallyActive()) {
+    const rally = rallyOrigin();
+    if (rally && nodeAt(rally)) setRangeFromNode(rally);
+  }
   recomputeThreatenedCastles();
   renderStatus();
   updateDraftLine();
@@ -1744,6 +1802,9 @@ function onBoardMouseDown(evt) {
   if (!activeRoute.length) {
     const node = nodeAt(cell);
     if (node && node.owner === mySeat) {
+      if (mode === 'entrench' && !nodeCanStartSap(node)) return;
+      const rally = rallyOrigin();
+      if (mode === 'routes' && rally && !sameCell(cell, rally)) return;
       activeRoute = [cell];
       setRangeFromNode(cell);
       updateDraftLine();

@@ -408,6 +408,7 @@ class GameState:
         self.next_road_id = 1
         self.retake_locks = {}
         self.turn_index = 0
+        self.rally_origin = None
 
     def clone(self):
         return copy.deepcopy(self)
@@ -508,8 +509,10 @@ class GameState:
             return self.map.get(*src)
         return self.attack_privilege_elevation(node.owner)
 
-    def can_attack_from(self, src, dst) -> bool:
-        return self.attack_elevation_for_source(src) < self.map.get(*dst)
+    def can_attack_from(self, src, dst, allow_equal: bool = False) -> bool:
+        src_elev = self.attack_elevation_for_source(src)
+        dst_elev = self.map.get(*dst)
+        return src_elev <= dst_elev if allow_equal else src_elev < dst_elev
 
     def is_direct_cliff_jump(self, prev_pos, next_pos, src, is_last_edge: bool, route_len: int) -> bool:
         prev_elev = self.map.get(*prev_pos)
@@ -599,6 +602,8 @@ class GameState:
     def preview_entrench(self, route: list):
         if self.winner is not None:
             return False, "Game over.", None
+        if self.rally_origin is not None:
+            return False, "During Rally, continue from the captured square or end turn.", None
         if not self.settings.entrench_rule:
             return False, "Sap is disabled.", None
         if not route or len(route) < 2:
@@ -692,6 +697,8 @@ class GameState:
     def preview_fortify(self, pos):
         if self.winner is not None:
             return False, "Game over."
+        if self.rally_origin is not None:
+            return False, "During Rally, continue from the captured square or end turn."
         if not self.settings.fortify_rule:
             return False, "Fortify is disabled."
         node = self.nodes.get(pos)
@@ -738,6 +745,8 @@ class GameState:
     def preview_demolish(self, pos):
         if self.winner is not None:
             return False, "Game over."
+        if self.rally_origin is not None:
+            return False, "During Rally, continue from the captured square or end turn."
         if not self.settings.demolish_rule:
             return False, "Demolish Path is disabled."
         road = self.road_at(pos)
@@ -857,6 +866,7 @@ class GameState:
         sources = []
         temp_occupied = set()
         connected_sources = self.connected_to_castle(self.current_owner)
+        rally_origin = self.rally_origin
 
         for route in routes:
             if len(route) < 2:
@@ -864,6 +874,8 @@ class GameState:
             src = route[0]
             if src not in self.nodes or self.nodes[src].owner != self.current_owner:
                 return False, "Every route must start on your own node.", None
+            if rally_origin is not None and src != rally_origin:
+                return False, "Rally must continue from the captured square.", None
             if src not in connected_sources:
                 return False, "Cannot build from nodes disconnected from your castle.", None
             if route[-1] != dest:
@@ -900,6 +912,7 @@ class GameState:
         if total_cost > self.remaining_path:
             return False, "Not enough traversal cost remaining this turn.", None
 
+        allow_equal_attack = len(routes) >= 2
         dest_node = self.nodes.get(dest)
         dest_road = self.road_at(dest)
         if any(self.route_has_cliff_jump(route[0], route) for route in routes):
@@ -916,12 +929,16 @@ class GameState:
             if self.is_retake_blocked(dest, self.current_owner):
                 return False, "Retake blocked on that node this turn.", None
             protected = self.is_connected_to_castle(dest)
-            if protected and not any(self.can_attack_from(src, dest) for src in sources):
+            if protected and not any(self.can_attack_from(src, dest, allow_equal=allow_equal_attack) for src in sources):
+                if allow_equal_attack:
+                    return False, "A multi-route assault must include a source at equal or higher elevation unless that group is disconnected from its castle.", None
                 return False, "You must attack from a node at a higher elevation unless that group is disconnected from its castle.", None
             mode = "attack_node"
         elif dest_road and dest_road.owner != self.current_owner:
             protected = self.road_is_connected_to_castle(dest_road)
-            if protected and not any(self.can_attack_from(src, dest) for src in sources):
+            if protected and not any(self.can_attack_from(src, dest, allow_equal=allow_equal_attack) for src in sources):
+                if allow_equal_attack:
+                    return False, "A multi-route assault must include a source at equal or higher elevation unless that group is disconnected from its castle.", None
                 return False, "You must attack that road section from a higher elevation unless that group is disconnected from its castle.", None
             mode = "attack_road"
             target_road = dest_road
@@ -950,6 +967,8 @@ class GameState:
         dest = summary["dest"]
         mode = summary["mode"]
         target_road = summary["target_road"]
+        prior_rally = self.rally_origin
+        captured = mode in {"attack_node", "attack_road"}
 
         if mode == "attack_node":
             prior_owner = self.nodes[dest].owner if dest in self.nodes else None
@@ -970,9 +989,19 @@ class GameState:
                 self._create_road(route, self.current_owner)
 
         self.remaining_path -= summary["total_cost"]
+        if captured and self.remaining_path > 0 and self.winner is None:
+            self.rally_origin = dest
+        elif captured:
+            self.rally_origin = None
+        elif prior_rally is not None:
+            self.rally_origin = prior_rally
+        else:
+            self.rally_origin = None
         self._cull_isolated(0)
         self._cull_isolated(1)
         self.check_winner()
+        if captured and self.rally_origin is not None and self.winner is None:
+            return True, "Move placed. Rally available."
         return True, "Move placed."
 
     def _create_road(
@@ -1075,6 +1104,7 @@ class GameState:
     def end_turn(self):
         if self.winner is not None:
             return False, "Game over."
+        self.rally_origin = None
         old_owner = self.current_owner
         self.turn_index += 1
         self.current_owner = self.other_owner()

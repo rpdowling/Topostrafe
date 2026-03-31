@@ -417,6 +417,7 @@ class GameStore:
                 "winner_name": game.owner_name(state.winner) if state.winner is not None else None,
                 "win_reason": state.win_reason,
                 "remaining_path": state.remaining_path,
+                "rally_origin": (list(state.rally_origin) if getattr(state, "rally_origin", None) is not None else None),
                 "starter_placed": list(state.starter_placed),
                 "time_remaining": {
                     "0": self._effective_time_remaining(game, 0),
@@ -511,7 +512,7 @@ class GameStore:
         elif t == "routes":
             routes = action.get("routes", [])
             ok, msg = game.state.commit_routes(routes)
-            auto_end_turn = ok
+            auto_end_turn = ok and getattr(game.state, "rally_origin", None) is None
         elif t == "fortify":
             ok, msg = game.state.commit_fortify((int(action["x"]), int(action["y"])))
             auto_end_turn = ok
