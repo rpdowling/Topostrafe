@@ -122,15 +122,32 @@ class UmGameState:
         occupant_paths = [self.paths[pid] for pid in sorted(self.path_lookup.get(pos, set())) if pid in self.paths]
         if any(path.owner != self.current_owner for path in occupant_paths):
             return False, "Cannot place a node on an enemy path."
-        enemy_enclosed = self._enclosed_cells_for_owner(1 - self.current_owner)
+        enemy_owner = 1 - self.current_owner
+        enemy_enclosed = self._enclosed_cells_for_owner(enemy_owner)
         if pos in enemy_enclosed:
             return False, "Cannot place a node inside enemy-encircled territory."
+
+        # Snapshot the minimal mutable state so we can reject self-snuffing placements cleanly.
+        nodes_snapshot = dict(self.nodes)
+        paths_snapshot = {pid: UmPath(path.path_id, path.owner, path.cells[:]) for pid, path in self.paths.items()}
+        path_lookup_snapshot = defaultdict(set, {cell: set(ids) for cell, ids in self.path_lookup.items()})
+        next_path_id_snapshot = self.next_path_id
+
         self.nodes[pos] = UmNode(owner=self.current_owner, starter=False)
         split_count = 0
         for path in occupant_paths:
             if pos not in path.internal_cells:
                 continue
             split_count += self._split_path_with_node(path.path_id, pos)
+
+        enemy_wall_snuffed = self._wall_snuffed_cells_for_owner(enemy_owner)
+        if pos in enemy_wall_snuffed:
+            self.nodes = nodes_snapshot
+            self.paths = paths_snapshot
+            self.path_lookup = path_lookup_snapshot
+            self.next_path_id = next_path_id_snapshot
+            return False, "You cannot place a node where the enemy could immediately snuff it out against the wall."
+
         removed = self._resolve_after_action(self.current_owner)
         msg = "Node placed."
         if split_count:
@@ -564,6 +581,20 @@ class UmGameState:
                     enclosed.update(comp)
         return enclosed
 
+    def _node_has_enemy_contact_8(self, owner: int, pos: tuple[int, int]) -> bool:
+        owner_walls = self._owner_wall_cells(owner)
+        x, y = pos
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                np = (x + dx, y + dy)
+                if not self.in_bounds(np):
+                    continue
+                if np in owner_walls:
+                    return True
+        return False
+
     def _wall_snuffed_cells_for_owner(self, owner: int) -> set[tuple[int, int]]:
         enemy = 1 - owner
         owner_walls = self._owner_wall_cells(owner)
@@ -601,6 +632,9 @@ class UmGameState:
         for comp in comps:
             touches_edge = any(x == 0 or y == 0 or x == self.width - 1 or y == self.height - 1 for x, y in comp)
             if not touches_edge:
+                continue
+            enemy_nodes_in_comp = [pos for pos, node in self.nodes.items() if node.owner == enemy and pos in comp]
+            if enemy_nodes_in_comp and any(not self._node_has_enemy_contact_8(owner, pos) for pos in enemy_nodes_in_comp):
                 continue
 
             blocked = owner_walls | comp
