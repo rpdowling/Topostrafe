@@ -445,7 +445,7 @@ class GameStore:
         if not isinstance(action, dict):
             raise ValueError("Invalid action.")
         t = str(action.get("type", "")).strip()
-        if t not in {"starter", "routes", "fortify", "entrench", "end_turn", "resign"}:
+        if t not in {"starter", "routes", "fortify", "demolish", "entrench", "end_turn", "resign"}:
             raise ValueError("Unknown action.")
         if t == "starter":
             return {"type": "starter", "x": int(action["x"]), "y": int(action["y"])}
@@ -456,6 +456,8 @@ class GameStore:
             return {"type": "routes", "routes": routes}
         if t == "fortify":
             return {"type": "fortify", "x": int(action["x"]), "y": int(action["y"])}
+        if t == "demolish":
+            return {"type": "demolish", "x": int(action["x"]), "y": int(action["y"])}
         if t == "entrench":
             route = []
             for cell in action.get("route", []):
@@ -485,6 +487,9 @@ class GameStore:
             auto_end_turn = ok
         elif t == "fortify":
             ok, msg = game.state.commit_fortify((int(action["x"]), int(action["y"])))
+            auto_end_turn = ok
+        elif t == "demolish":
+            ok, msg = game.state.commit_demolish((int(action["x"]), int(action["y"])))
             auto_end_turn = ok
         elif t == "entrench":
             ok, msg = game.state.commit_entrench(action.get("route", []))

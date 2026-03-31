@@ -121,7 +121,7 @@ button:hover, .button-link:hover { background: var(--button-active); }
 }
 .sidebar { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
 .chat-panel, .sidebar { min-width: 0; }
-.mode-buttons { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.mode-buttons { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .mode-buttons button.active { outline: 2px solid var(--accent); }
 
 .mode-buttons .mode-icon {
@@ -156,18 +156,24 @@ button:hover, .button-link:hover { background: var(--button-active); }
 }
 .mode-routes-btn:hover { background: linear-gradient(180deg, #b3f0bc 0%, #55bf69 100%); }
 .mode-sap-btn {
-  background: linear-gradient(180deg, #f0a2a2 0%, #c84b4b 100%);
-  border-color: #dc8585;
+  background: linear-gradient(180deg, #d8b3ff 0%, #8d49d6 100%);
+  border-color: #c69bf4;
 }
-.mode-sap-btn:hover { background: linear-gradient(180deg, #f5b2b2 0%, #d55f5f 100%); }
+.mode-sap-btn:hover { background: linear-gradient(180deg, #e3c7ff 0%, #9e5be1 100%); }
 .mode-fortify-btn {
   background: linear-gradient(180deg, #9dc3f6 0%, #4f7fd1 100%);
   border-color: #84ace6;
 }
 .mode-fortify-btn:hover { background: linear-gradient(180deg, #afcff8 0%, #6291df 100%); }
+.mode-demolish-btn {
+  background: linear-gradient(180deg, #f2a0a0 0%, #ca3b3b 100%);
+  border-color: #e27f7f;
+}
+.mode-demolish-btn:hover { background: linear-gradient(180deg, #f7b0b0 0%, #d94a4a 100%); }
 .mode-buttons button.active.mode-routes-btn,
 .mode-buttons button.active.mode-sap-btn,
-.mode-buttons button.active.mode-fortify-btn {
+.mode-buttons button.active.mode-fortify-btn,
+.mode-buttons button.active.mode-demolish-btn {
   outline: 2px solid rgba(255,255,255,0.78);
   outline-offset: 0;
 }
@@ -535,8 +541,10 @@ button:hover, .button-link:hover { background: var(--button-active); }
 }
 .hero-column {
   display: flex;
-  align-items: flex-start;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 18px;
   min-height: calc(100vh - 32px);
   width: 100%;
   padding-top: clamp(34px, 8vh, 88px);
@@ -747,14 +755,13 @@ button:hover, .button-link:hover { background: var(--button-active); }
   width: 34px;
   height: 34px;
   border-radius: 50%;
-  border: 4px solid;
-  box-shadow: 0 0 0 2px rgba(0,0,0,0.28) inset;
+  border: 4px solid #0a0f14;
 }
 .icon-castle-ring {
-  border-color: #4575b4;
+  background: #ffffff;
 }
 .icon-camp-ring {
-  border-color: #cfd7df;
+  background: #ff00ff;
 }
 .icon-castle-dot,
 .icon-camp-dot {
@@ -763,6 +770,9 @@ button:hover, .button-link:hover { background: var(--button-active); }
   height: 10px;
   border-radius: 50%;
   background: #0a0f14;
+}
+.icon-camp-dot {
+  display: none;
 }
 .icon-fort-diamond {
   width: 28px;

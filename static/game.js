@@ -280,6 +280,7 @@ function detectSoundEvent(prev, next, message, prevMessage) {
   const logAdvanced = nextLastLog && nextLastLog !== prevLastLog;
   if ((mapDelta > 0 || actionNoteChanged || logAdvanced) && note) {
     if (note.startsWith('Fortify complete')) return 'fortify';
+    if (note.startsWith('Path demolished')) return 'attack-road';
     if (note.startsWith('Sap complete')) return 'entrench';
   }
 
@@ -307,7 +308,7 @@ function detectSoundEvent(prev, next, message, prevMessage) {
 
 function setMode(next) {
   mode = next;
-  for (const id of ['mode-routes', 'mode-entrench', 'mode-fortify']) {
+  for (const id of ['mode-routes', 'mode-entrench', 'mode-fortify', 'mode-demolish']) {
     el(id).classList.toggle('active', id === `mode-${next}`);
   }
   if (mode !== 'entrench') entrenchSource = null;
@@ -346,6 +347,7 @@ function normalizePremoveAction(action) {
   if (!action || typeof action !== 'object') return null;
   if (action.type === 'starter') return { type: 'starter', x: Number(action.x), y: Number(action.y) };
   if (action.type === 'fortify') return { type: 'fortify', x: Number(action.x), y: Number(action.y) };
+  if (action.type === 'demolish') return { type: 'demolish', x: Number(action.x), y: Number(action.y) };
   if (action.type === 'entrench') return { type: 'entrench', route: (action.route || []).map(c => [Number(c[0]), Number(c[1])]) };
   if (action.type === 'routes') return { type: 'routes', routes: (action.routes || []).map(route => route.map(c => [Number(c[0]), Number(c[1])])) };
   if (action.type === 'end_turn') return { type: 'end_turn' };
@@ -367,6 +369,7 @@ function premoveHitCell(cell) {
   if (!action || !cell) return false;
   if (action.type === 'starter') return Number(action.x) === cell[0] && Number(action.y) === cell[1];
   if (action.type === 'fortify') return Number(action.x) === cell[0] && Number(action.y) === cell[1];
+  if (action.type === 'demolish') return Number(action.x) === cell[0] && Number(action.y) === cell[1];
   if (action.type === 'entrench') {
     return (action.route || []).some(c => Number(c[0]) === cell[0] && Number(c[1]) === cell[1]);
   }
@@ -1374,7 +1377,7 @@ function drawPremoveOverlay() {
       ctx.fill();
       ctx.stroke();
     }
-  } else if (action.type === 'fortify') {
+  } else if (action.type === 'fortify' || action.type === 'demolish') {
     ctx.setLineDash([5, 4]);
     const road = roadAt([action.x, action.y]);
     if (road) drawRoute(road.path, base, Math.max(3, s * 0.14), true);
@@ -1585,6 +1588,10 @@ function onBoardClick(evt) {
 
   if (mode === 'fortify') {
     sendGameAction({ type: 'fortify', x: cell[0], y: cell[1] });
+    return;
+  }
+  if (mode === 'demolish') {
+    sendGameAction({ type: 'demolish', x: cell[0], y: cell[1] });
     return;
   }
   if (mode === 'entrench') {
@@ -1805,6 +1812,7 @@ canvas.addEventListener('click', onBoardClick);
 el('mode-routes').onclick = () => setMode('routes');
 el('mode-entrench').onclick = () => setMode('entrench');
 el('mode-fortify').onclick = () => setMode('fortify');
+el('mode-demolish').onclick = () => setMode('demolish');
 el('finish-route').onclick = finishRoute;
 el('commit-routes').onclick = commitRoutes;
 el('clear-draft').onclick = () => { clearDraft(); clearRange(); };

@@ -27,6 +27,7 @@ class GameSettings:
     entrench_rule: bool = True
     sap_adj_ignore: bool = True
     fortify_rule: bool = True
+    demolish_rule: bool = True
     low_point_restrict: bool = True
     north_shading: bool = True
     require_move_confirmation: bool = False
@@ -56,6 +57,7 @@ class GameSettings:
             f"Sap: {'On' if self.entrench_rule else 'Off'}",
             f"Sap Adj. Ignore: {'On' if self.sap_adj_ignore else 'Off'}",
             f"Fortify: {'On' if self.fortify_rule else 'Off'}",
+            f"Demolish Path: {'On' if self.demolish_rule else 'Off'}",
             f"Low Point Restrict: {'On' if self.low_point_restrict else 'Off'}",
             f"North Shading: {'On' if self.north_shading else 'Off'}",
             f"Require move confirmation: {'On' if self.require_move_confirmation else 'Off'}",
@@ -711,6 +713,31 @@ class GameState:
             self.map.set(cell[0], cell[1], self.map.get(*cell) - 1)
         self.check_winner()
         return True, f"Fortify complete on {len(eligible)} road square{'s' if len(eligible) != 1 else ''}."
+
+    def preview_demolish(self, pos):
+        if self.winner is not None:
+            return False, "Game over."
+        if not self.settings.demolish_rule:
+            return False, "Demolish Path is disabled."
+        road = self.road_at(pos)
+        if road is None:
+            return False, "Select one of your road squares to demolish that path."
+        if road.owner != self.current_owner:
+            return False, "Select one of your own paths."
+        return True, "Demolish ready."
+
+    def commit_demolish(self, pos):
+        ok, msg = self.preview_demolish(pos)
+        if not ok:
+            return False, msg
+        road = self.road_at(pos)
+        if road is None:
+            return False, "That path is no longer there."
+        self._remove_road(road.road_id)
+        self._cull_isolated(0)
+        self._cull_isolated(1)
+        self.check_winner()
+        return True, "Path demolished."
 
     def practical_range_cells(self, src, radius: int, show_unattackable_targets: bool = True):
         import heapq

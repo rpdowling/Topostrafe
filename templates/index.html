@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/app.css?v=27" />
+  <link rel="stylesheet" href="/static/app.css?v=29" />
 </head>
 <body>
   <div class="page menu-three-col">
@@ -75,6 +75,7 @@
           <label class="check"><input id="entrench_rule" type="checkbox" /><span>Sap</span></label>
           <label class="check"><input id="sap_adj_ignore" type="checkbox" /><span>Sap Adj. Ignore</span></label>
           <label class="check"><input id="fortify_rule" type="checkbox" /><span>Fortify</span></label>
+          <label class="check"><input id="demolish_rule" type="checkbox" /><span>Demolish Path</span></label>
           <label class="check"><input id="north_shading" type="checkbox" /><span>North Shading</span></label>
           <label class="check"><input id="require_move_confirmation" type="checkbox" /><span>Require Move Confirmation</span></label>
         </div>
@@ -208,6 +209,6 @@
   <script>
     window.TOPOS_DEFAULTS = {{ defaults_json | safe }};
   </script>
-  <script src="/static/lobby.js?v=9"></script>
+  <script src="/static/lobby.js?v=10"></script>
 </body>
 </html>
