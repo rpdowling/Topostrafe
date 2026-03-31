@@ -414,34 +414,47 @@ class UmGameState:
         blocked = self._owner_wall_cells(owner)
         if not blocked:
             return set()
-        reachable: set[tuple[int, int]] = set()
-        q = deque()
-        for x in range(self.width):
-            for y in (0, self.height - 1):
-                pos = (x, y)
-                if pos in blocked or pos in reachable:
-                    continue
-                reachable.add(pos)
-                q.append(pos)
-        for y in range(self.height):
-            for x in (0, self.width - 1):
-                pos = (x, y)
-                if pos in blocked or pos in reachable:
-                    continue
-                reachable.add(pos)
-                q.append(pos)
-        while q:
-            x, y = q.popleft()
-            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                np = (x + dx, y + dy)
-                if not self.in_bounds(np):
-                    continue
-                if np in blocked or np in reachable:
-                    continue
-                reachable.add(np)
-                q.append(np)
-        all_cells = {(x, y) for x in range(self.width) for y in range(self.height)}
-        return all_cells - reachable - blocked
+
+        open_cells = {(x, y) for x in range(self.width) for y in range(self.height) if (x, y) not in blocked}
+        if not open_cells:
+            return set()
+
+        corners = {(0, 0), (self.width - 1, 0), (0, self.height - 1), (self.width - 1, self.height - 1)}
+        seen: set[tuple[int, int]] = set()
+        components: list[tuple[set[tuple[int, int]], bool]] = []
+
+        for start in open_cells:
+            if start in seen:
+                continue
+            comp: set[tuple[int, int]] = set()
+            q = deque([start])
+            seen.add(start)
+            touches_corner = start in corners
+            while q:
+                x, y = q.popleft()
+                comp.add((x, y))
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    np = (x + dx, y + dy)
+                    if np not in open_cells or np in seen:
+                        continue
+                    seen.add(np)
+                    if np in corners:
+                        touches_corner = True
+                    q.append(np)
+            components.append((comp, touches_corner))
+
+        outside: set[tuple[int, int]] = set()
+        corner_components = [comp for comp, touches_corner in components if touches_corner]
+        if corner_components:
+            for comp in corner_components:
+                outside.update(comp)
+        else:
+            max_size = max(len(comp) for comp, _ in components)
+            for comp, _ in components:
+                if len(comp) == max_size:
+                    outside.update(comp)
+
+        return open_cells - outside
 
     def check_winner(self):
         if self.winner is not None:

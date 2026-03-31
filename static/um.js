@@ -666,7 +666,7 @@ function handleBoardClick(evt) {
     if (node && node.owner === seat) {
       if (sameCell(cell, currentSegment[0]) && currentSegment.length === 1) {
         if (draftSegments.length > 0) {
-          renderState();
+          commitPendingTurn();
           return;
         }
         renderState();
