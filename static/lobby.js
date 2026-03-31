@@ -3,7 +3,7 @@ const settings = defaults.settings;
 const settingKeys = Object.keys(settings);
 
 const mapTypeLabels = defaults.map_type_labels || {};
-const umDefaults = defaults.um_defaults || { board_width: 20, board_height: 20, max_corners: 1, board_color: "yellow", size_preset: "large" };
+const umDefaults = defaults.um_defaults || { board_width: 10, board_height: 10, max_corners: 1, board_color: "yellow", size_preset: "medium" };
 const umBoardColors = defaults.um_board_colors || { yellow: "#e8cf52" };
 const umSizePresets = defaults.um_size_presets || { small: { board_width: 6, board_height: 6 }, medium: { board_width: 10, board_height: 10 }, large: { board_width: 20, board_height: 20 } };
 
@@ -56,7 +56,7 @@ function buildForm() {
     }
     umColorSelect.value = umDefaults.board_color || 'yellow';
   }
-  if (el('um_size_preset')) el('um_size_preset').value = umDefaults.size_preset || 'large';
+  if (el('um_size_preset')) el('um_size_preset').value = umDefaults.size_preset || 'medium';
   if (el('um_max_corners')) el('um_max_corners').value = String(umDefaults.max_corners ?? 1);
 }
 
@@ -147,7 +147,7 @@ function collectUmPayload() {
     is_private: !!el('um_is_private')?.checked,
     join_code: el('um_join_code')?.value.trim() || '',
     um_settings: {
-      size_preset: el('um_size_preset')?.value || 'large',
+      size_preset: el('um_size_preset')?.value || 'medium',
       max_corners: Number(el('um_max_corners')?.value || 1),
       board_color: el('um_board_color')?.value || 'yellow',
     },

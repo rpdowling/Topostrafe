@@ -6,7 +6,7 @@ from typing import Iterable
 
 PLAYER_NAMES = {0: "Player 1", 1: "Player 2"}
 BOARD_COLORS = {
-    "yellow": "#e8cf52",
+    "yellow": "#efe3a3",
     "blue": "#7ba6f5",
     "green": "#84c96f",
     "gray": "#b6b6b6",
@@ -20,8 +20,8 @@ SIZE_PRESETS = {
 
 @dataclass
 class UmSettings:
-    board_width: int = 20
-    board_height: int = 20
+    board_width: int = 10
+    board_height: int = 10
     max_corners: int = 1
     board_color: str = "yellow"
     time_limit_enabled: bool = False
@@ -143,10 +143,11 @@ class UmGameState:
 
         new_internal_cells: set[tuple[int, int]] = set()
         remove_enemy_paths: set[int] = set()
+        remove_enemy_nodes: set[tuple[int, int]] = set()
         prev_end: tuple[int, int] | None = None
         to_add: list[UmPath] = []
 
-        for idx, seg in enumerate(norm_segments):
+        for seg in norm_segments:
             ok, msg = self._validate_segment(seg, owner, prev_end, new_internal_cells)
             if not ok:
                 return False, msg
@@ -154,6 +155,11 @@ class UmGameState:
             seg_length = len(seg) - 1
             crossed_enemy: set[int] = set()
             for cell in seg_internal:
+                node = self.nodes.get(cell)
+                if node is not None:
+                    if node.owner == owner:
+                        return False, "Paths cannot pass through your own nodes."
+                    remove_enemy_nodes.add(cell)
                 for pid in self.path_lookup.get(cell, set()):
                     path = self.paths.get(pid)
                     if path is None:
@@ -181,12 +187,32 @@ class UmGameState:
             for cell in path.internal_cells:
                 self.path_lookup[cell].add(path.path_id)
 
-        removed = self._resolve_after_action(owner)
+        removed_by_path = 0
+        removed_attached_paths = 0
+        for pos in sorted(remove_enemy_nodes):
+            removed = self._remove_node(pos)
+            if removed is None:
+                continue
+            removed_by_path += 1
+            removed_attached_paths += self._count_paths_touching_owner_node(pos, removed.owner)
+            self._remove_paths_touching_owner_node(pos, removed.owner)
+            if removed.starter:
+                self.winner = owner
+                self.win_reason = f"{self.owner_name(owner)} captured the enemy castle."
+        removed = ""
+        if self.winner is None:
+            removed = self._resolve_after_action(owner)
         msg = f"Placed {len(to_add)} path{'s' if len(to_add) != 1 else ''}."
         if remove_enemy_paths:
             msg = f"{msg} Cut {len(remove_enemy_paths)} enemy path{'s' if len(remove_enemy_paths) != 1 else ''}."
+        if removed_by_path:
+            msg = f"{msg} Killed {removed_by_path} enemy node{'s' if removed_by_path != 1 else ''}."
+        if removed_attached_paths:
+            msg = f"{msg} Removed {removed_attached_paths} attached enemy path{'s' if removed_attached_paths != 1 else ''}."
         if removed:
             msg = f"{msg} {removed}".strip()
+        if self.winner is not None and not removed:
+            msg = f"{msg} {self.win_reason}".strip()
         return True, msg
 
     def _validate_segment(self, seg: list[tuple[int, int]], owner: int, prev_end: tuple[int, int] | None, new_internal_cells: set[tuple[int, int]]):
@@ -213,8 +239,9 @@ class UmGameState:
         if self._count_corners(seg) > max(0, int(self.settings.max_corners)):
             return False, f"This mode allows at most {int(self.settings.max_corners)} corner{'s' if int(self.settings.max_corners) != 1 else ''} per segment."
         for cell in seg[1:-1]:
-            if cell in self.nodes:
-                return False, "Paths cannot pass through nodes."
+            node = self.nodes.get(cell)
+            if node is not None and node.owner == owner:
+                return False, "Paths cannot pass through your own nodes."
             if cell in new_internal_cells:
                 return False, "New path segments cannot overlap each other except at nodes."
         return True, "OK"
@@ -250,6 +277,22 @@ class UmGameState:
             return None
         return node
 
+    def _remove_paths_touching_owner_node(self, pos: tuple[int, int], owner: int):
+        for pid, path in list(self.paths.items()):
+            if path.owner != owner:
+                continue
+            if pos in path.cells:
+                self._remove_path(pid)
+
+    def _count_paths_touching_owner_node(self, pos: tuple[int, int], owner: int) -> int:
+        count = 0
+        for path in self.paths.values():
+            if path.owner != owner:
+                continue
+            if pos in path.cells:
+                count += 1
+        return count
+
     def _resolve_after_action(self, owner: int) -> str:
         removed_nodes = 0
         removed_paths = 0
@@ -259,6 +302,8 @@ class UmGameState:
             removed = self._remove_node(pos)
             if removed is not None:
                 removed_nodes += 1
+                removed_paths += self._count_paths_touching_owner_node(pos, removed.owner)
+                self._remove_paths_touching_owner_node(pos, removed.owner)
                 if removed.starter:
                     self.winner = owner
                     self.win_reason = f"{self.owner_name(owner)} captured the enemy castle."
@@ -272,6 +317,8 @@ class UmGameState:
                 removed = self._remove_node(pos)
                 if removed is not None:
                     removed_nodes += 1
+                    removed_paths += self._count_paths_touching_owner_node(pos, removed.owner)
+                    self._remove_paths_touching_owner_node(pos, removed.owner)
                     if removed.starter:
                         self.winner = owner
                         self.win_reason = f"{self.owner_name(owner)} encircled the enemy castle."
@@ -293,7 +340,7 @@ class UmGameState:
     def _orth_node_surround_kills(self, owner: int) -> set[tuple[int, int]]:
         kills: set[tuple[int, int]] = set()
         enemy = 1 - owner
-        enemy_nodes = {pos for pos, node in self.nodes.items() if node.owner == owner}
+        owner_nodes = {pos for pos, node in self.nodes.items() if node.owner == owner}
         for pos, node in self.nodes.items():
             if node.owner != enemy:
                 continue
@@ -303,24 +350,23 @@ class UmGameState:
                 np = (x + dx, y + dy)
                 if not self.in_bounds(np):
                     continue
-                if np not in enemy_nodes:
+                if np not in owner_nodes:
                     surrounded = False
                     break
             if surrounded:
                 kills.add(pos)
         return kills
 
-    def _owner_blocked_edges(self, owner: int) -> set[frozenset[tuple[int, int]]]:
-        blocked: set[frozenset[tuple[int, int]]] = set()
+    def _owner_wall_cells(self, owner: int) -> set[tuple[int, int]]:
+        blocked: set[tuple[int, int]] = {pos for pos, node in self.nodes.items() if node.owner == owner}
         for path in self.paths.values():
             if path.owner != owner:
                 continue
-            for a, b in zip(path.cells, path.cells[1:]):
-                blocked.add(frozenset((a, b)))
+            blocked.update(path.cells)
         return blocked
 
     def _enclosed_cells_for_owner(self, owner: int) -> set[tuple[int, int]]:
-        blocked = self._owner_blocked_edges(owner)
+        blocked = self._owner_wall_cells(owner)
         if not blocked:
             return set()
         reachable: set[tuple[int, int]] = set()
@@ -328,30 +374,29 @@ class UmGameState:
         for x in range(self.width):
             for y in (0, self.height - 1):
                 pos = (x, y)
-                if pos not in reachable:
-                    reachable.add(pos)
-                    q.append(pos)
+                if pos in blocked or pos in reachable:
+                    continue
+                reachable.add(pos)
+                q.append(pos)
         for y in range(self.height):
             for x in (0, self.width - 1):
                 pos = (x, y)
-                if pos not in reachable:
-                    reachable.add(pos)
-                    q.append(pos)
+                if pos in blocked or pos in reachable:
+                    continue
+                reachable.add(pos)
+                q.append(pos)
         while q:
             x, y = q.popleft()
             for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                 np = (x + dx, y + dy)
                 if not self.in_bounds(np):
                     continue
-                edge = frozenset(((x, y), np))
-                if edge in blocked:
-                    continue
-                if np in reachable:
+                if np in blocked or np in reachable:
                     continue
                 reachable.add(np)
                 q.append(np)
         all_cells = {(x, y) for x in range(self.width) for y in range(self.height)}
-        return all_cells - reachable
+        return all_cells - reachable - blocked
 
     def check_winner(self):
         if self.winner is not None:

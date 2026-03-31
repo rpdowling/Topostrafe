@@ -114,7 +114,7 @@ class GameStore:
     def defaults(self) -> dict[str, Any]:
         d = eng.GameSettings()
         d.map_type = "River"
-        um_defaults = um.UmSettings()
+        um_defaults = um.UmSettings(board_width=10, board_height=10)
         return {
             "settings": d.__dict__.copy(),
             "map_types": MAP_TYPES,
@@ -126,7 +126,7 @@ class GameStore:
                 "board_height": um_defaults.board_height,
                 "max_corners": um_defaults.max_corners,
                 "board_color": um_defaults.board_color,
-                "size_preset": "large",
+                "size_preset": "medium",
             },
             "um_board_colors": um.BOARD_COLORS,
             "um_size_presets": {name: {"board_width": size[0], "board_height": size[1]} for name, size in um.SIZE_PRESETS.items()},
@@ -266,8 +266,8 @@ class GameStore:
 
     def _um_settings_from_payload(self, payload: dict[str, Any]) -> um.UmSettings:
         raw = dict(payload.get("um_settings", {}))
-        preset = str(raw.get("size_preset", "large") or "large").strip().lower()
-        width, height = um.SIZE_PRESETS.get(preset, um.SIZE_PRESETS["large"])
+        preset = str(raw.get("size_preset", "medium") or "medium").strip().lower()
+        width, height = um.SIZE_PRESETS.get(preset, um.SIZE_PRESETS["medium"])
         max_corners = max(0, min(6, int(raw.get("max_corners", 1))))
         board_color = str(raw.get("board_color", "yellow") or "yellow").strip().lower()
         if board_color not in um.BOARD_COLORS:

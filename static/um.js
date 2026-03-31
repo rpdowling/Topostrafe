@@ -8,8 +8,9 @@ let latestState = null;
 let previousState = null;
 let reconnectTimer = null;
 let mode = 'node';
-let draftAnchor = null;
+let pendingNode = null;
 let draftSegments = [];
+let currentSegment = null;
 let hoverCell = null;
 let fadeEffects = [];
 
@@ -66,8 +67,7 @@ function setStatus(msg, bad = false) {
 }
 
 function addLogLine(msg) {
-  if (!msg) return;
-  if (!latestState) return;
+  if (!msg || !latestState) return;
   const next = [...(latestState.log || []), msg];
   latestState.log = next.slice(-16);
 }
@@ -91,7 +91,7 @@ function pathList() {
 }
 
 function nodeAt(cell) {
-  if (!latestState) return null;
+  if (!latestState || !cell) return null;
   return (latestState.nodes || []).find(n => n.x === cell[0] && n.y === cell[1]) || null;
 }
 
@@ -172,7 +172,8 @@ function renderMeta() {
   el('winner-line').textContent = latestState.win_reason || '';
   el('castle0').textContent = latestState.starter_placed?.[0] ? 'Placed' : 'Unplaced';
   el('castle1').textContent = latestState.starter_placed?.[1] ? 'Placed' : 'Unplaced';
-  el('segment-count').textContent = String(draftSegments.length);
+  const draftCount = draftSegments.length + (pendingNode ? 1 : 0);
+  el('segment-count').textContent = String(draftCount);
   el('share-line').textContent = latestState.join_code ? `Code: ${latestState.join_code}` : '';
   renderLog();
   renderChat();
@@ -221,30 +222,46 @@ function renderDraftLine() {
     return;
   }
   if (mode === 'node') {
-    node.textContent = 'Node mode: click an empty square to place one node.';
+    if (pendingNode) {
+      node.textContent = `Pending node at ${pendingNode[0] + 1},${pendingNode[1] + 1}. Click Confirm Turn or click the same square again.`;
+    } else {
+      node.textContent = 'Node mode: click an empty square to preview a node, then confirm.';
+    }
     return;
   }
-  if (!draftSegments.length && !draftAnchor) {
-    node.textContent = 'Path mode: click a friendly node, then click another friendly node to add a segment.';
+  if (!draftSegments.length && !currentSegment) {
+    node.textContent = 'Path mode: click a friendly node to start, then click orthogonally to draw the route yourself.';
     return;
   }
-  const anchorText = draftAnchor ? ` Current anchor ${draftAnchor[0] + 1},${draftAnchor[1] + 1}.` : '';
-  node.textContent = `Drafting ${draftSegments.length} segment${draftSegments.length !== 1 ? 's' : ''}.${anchorText}`;
+  if (currentSegment && currentSegment.length > 1) {
+    const end = currentSegment[currentSegment.length - 1];
+    node.textContent = `Current segment length ${currentSegment.length - 1}. Continue orthogonally from ${end[0] + 1},${end[1] + 1}, then click a friendly node to finish.`;
+    return;
+  }
+  if (currentSegment && currentSegment.length === 1) {
+    const end = currentSegment[0];
+    node.textContent = `Chain anchor at ${end[0] + 1},${end[1] + 1}. Draw the next segment or confirm the turn.`;
+    return;
+  }
+  node.textContent = `Drafting ${draftSegments.length} segment${draftSegments.length !== 1 ? 's' : ''}. Click Confirm Turn to submit.`;
 }
 
 function updateActionButtons() {
   el('mode-node').classList.toggle('active', mode === 'node');
   el('mode-path').classList.toggle('active', mode === 'path');
-  const canCommit = isMyTurn() && draftSegments.length > 0;
-  el('commit-path').disabled = !canCommit;
-  el('clear-draft').disabled = draftSegments.length === 0 && !draftAnchor;
+  const canConfirmNode = isMyTurn() && !!pendingNode;
+  const canConfirmPath = isMyTurn() && draftSegments.length > 0 && (!currentSegment || currentSegment.length === 1);
+  const confirmButton = el('commit-path');
+  confirmButton.disabled = !(canConfirmNode || canConfirmPath);
+  confirmButton.textContent = mode === 'node' ? 'Confirm Turn' : 'Confirm Turn';
+  el('clear-draft').disabled = !pendingNode && draftSegments.length === 0 && !currentSegment;
 }
 
 function drawBoard() {
   if (!latestState) return;
   cleanupFadeEffects();
   const m = boardMetrics();
-  const boardColor = latestState.board?.color || '#e8cf52';
+  const boardColor = latestState.board?.color || '#efe3a3';
   ctx.clearRect(0, 0, board.width, board.height);
   ctx.fillStyle = '#0a0f14';
   ctx.fillRect(0, 0, board.width, board.height);
@@ -284,6 +301,7 @@ function drawBoard() {
   drawPaths(m, pathList());
   drawDraftPaths(m);
   drawHoverMarker(m);
+  drawPendingNode(m);
   drawNodes(m);
   drawFadeEffects(m);
 }
@@ -314,8 +332,14 @@ function drawPaths(m, paths) {
 }
 
 function drawDraftPaths(m) {
-  if (!draftSegments.length) return;
-  const pseudo = draftSegments.map((cells, idx) => ({ owner: mySeat() ?? 0, cells, path_id: -1000 - idx }));
+  const pseudo = [];
+  for (let idx = 0; idx < draftSegments.length; idx++) {
+    pseudo.push({ owner: mySeat() ?? 0, cells: draftSegments[idx], path_id: -1000 - idx });
+  }
+  if (currentSegment && currentSegment.length > 1) {
+    pseudo.push({ owner: mySeat() ?? 0, cells: currentSegment, path_id: -2000 });
+  }
+  if (!pseudo.length) return;
   ctx.save();
   ctx.globalAlpha = 0.6;
   drawPaths(m, pseudo);
@@ -329,6 +353,22 @@ function drawHoverMarker(m) {
   ctx.strokeStyle = 'rgba(255,255,255,0.55)';
   ctx.lineWidth = 2;
   ctx.strokeRect(p.x - m.cell * 0.42, p.y - m.cell * 0.42, m.cell * 0.84, m.cell * 0.84);
+  ctx.restore();
+}
+
+function drawPendingNode(m) {
+  if (!pendingNode) return;
+  const p = cellCenter(pendingNode, m);
+  const r = m.cell * 0.23;
+  ctx.save();
+  ctx.globalAlpha = 0.6;
+  ctx.lineWidth = Math.max(2, m.cell * 0.06);
+  ctx.strokeStyle = '#000000';
+  ctx.fillStyle = PLAYER_COLORS[mySeat() ?? 0] || '#ff00ff';
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -387,13 +427,21 @@ function cleanupDraftIfInvalid() {
     clearDraft();
     return;
   }
-  if (draftAnchor && !nodeAt(draftAnchor)) clearDraft();
-  draftSegments = draftSegments.filter(seg => seg.every(cell => Array.isArray(cell) && cell.length === 2));
-  if (!draftSegments.length && draftAnchor && !nodeAt(draftAnchor)) draftAnchor = null;
+  if (pendingNode) {
+    const occ = pathOccupancy();
+    const nk = keyOf(pendingNode);
+    if (nodeAt(pendingNode) || occ.has(nk)) pendingNode = null;
+  }
+  draftSegments = draftSegments.filter(seg => Array.isArray(seg) && seg.length >= 2 && seg.every(cell => Array.isArray(cell) && cell.length === 2));
+  if (currentSegment && currentSegment.length) {
+    const startNode = nodeAt(currentSegment[0]);
+    if (!startNode || startNode.owner !== seat) currentSegment = null;
+  }
 }
 
 function clearDraft() {
-  draftAnchor = null;
+  pendingNode = null;
+  currentSegment = null;
   draftSegments = [];
   renderState();
 }
@@ -403,65 +451,103 @@ function ownHalf(cell, seat) {
   return seat === 0 ? cell[0] < split : cell[0] >= split;
 }
 
-function neighbors(cell) {
-  return [[cell[0] + 1, cell[1]], [cell[0] - 1, cell[1]], [cell[0], cell[1] + 1], [cell[0], cell[1] - 1]]
-    .filter(c => c[0] >= 0 && c[1] >= 0 && c[0] < latestState.board.width && c[1] < latestState.board.height);
+function countCorners(seg) {
+  if (!seg || seg.length < 3) return 0;
+  let corners = 0;
+  let prevDir = null;
+  for (let i = 1; i < seg.length; i++) {
+    const d = [seg[i][0] - seg[i - 1][0], seg[i][1] - seg[i - 1][1]];
+    if (prevDir && (d[0] !== prevDir[0] || d[1] !== prevDir[1])) corners += 1;
+    prevDir = d;
+  }
+  return corners;
 }
 
-function findSegmentPath(start, end) {
-  if (!latestState) return null;
-  if (sameCell(start, end)) return null;
+function canStepTo(cell) {
   const seat = mySeat();
-  const maxCorners = Number(latestState.settings.max_corners || 1);
-  const friendlyPathOcc = pathOccupancy(seat);
-  const nodeLookup = nodeMap();
-  const draftOcc = new Set();
+  if (!latestState || seat === null || !currentSegment || !currentSegment.length) return false;
+  const prev = currentSegment[currentSegment.length - 1];
+  if (Math.abs(cell[0] - prev[0]) + Math.abs(cell[1] - prev[1]) !== 1) return false;
+  if (currentSegment.some(c => sameCell(c, cell))) return false;
+  const node = nodeAt(cell);
+  if (node && node.owner === seat) return true;
+  const ownOcc = pathOccupancy(seat);
+  if (ownOcc.has(keyOf(cell))) return false;
   for (const seg of draftSegments) {
-    for (const cell of seg.slice(1, -1)) draftOcc.add(keyOf(cell));
-  }
-  const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
-  const q = [];
-  const best = new Map();
-  const prev = new Map();
-  function push(cell, dirIdx, corners, steps) {
-    const k = `${cell[0]},${cell[1]}|${dirIdx}|${corners}`;
-    const old = best.get(k);
-    if (old && (old.corners < corners || (old.corners === corners && old.steps <= steps))) return;
-    best.set(k, { corners, steps, cell, dirIdx });
-    q.push({ cell, dirIdx, corners, steps, k });
-  }
-  push(start, -1, 0, 0);
-  let endKey = null;
-  while (q.length) {
-    q.sort((a, b) => (a.corners - b.corners) || (a.steps - b.steps));
-    const cur = q.shift();
-    if (sameCell(cur.cell, end) && cur.steps > 0) { endKey = cur.k; break; }
-    for (let i = 0; i < dirs.length; i++) {
-      const nxt = [cur.cell[0] + dirs[i][0], cur.cell[1] + dirs[i][1]];
-      if (nxt[0] < 0 || nxt[1] < 0 || nxt[0] >= latestState.board.width || nxt[1] >= latestState.board.height) continue;
-      const turn = cur.dirIdx === -1 || cur.dirIdx === i ? 0 : 1;
-      const nextCorners = cur.corners + turn;
-      if (nextCorners > maxCorners) continue;
-      const nk = keyOf(nxt);
-      const node = nodeLookup.get(nk);
-      if (node && !sameCell(nxt, end)) continue;
-      if (friendlyPathOcc.has(nk) && !sameCell(nxt, end) && !sameCell(nxt, start)) continue;
-      if (draftOcc.has(nk) && !sameCell(nxt, end)) continue;
-      push(nxt, i, nextCorners, cur.steps + 1);
-      const pk = `${nxt[0]},${nxt[1]}|${i}|${nextCorners}`;
-      if (!prev.has(pk)) prev.set(pk, cur.k);
+    for (const internal of seg.slice(1, -1)) {
+      if (sameCell(internal, cell)) return false;
     }
   }
-  if (!endKey) return null;
-  const out = [];
-  let cur = endKey;
-  while (cur) {
-    const [pos] = cur.split('|');
-    out.push(parseKey(pos));
-    cur = prev.get(cur);
+  const nextSeg = [...currentSegment, cell];
+  return countCorners(nextSeg) <= Number(latestState.settings.max_corners || 1);
+}
+
+function commitPendingTurn() {
+  if (!isMyTurn()) return;
+  if (mode === 'node' && pendingNode) {
+    send({ type: 'um_node', x: pendingNode[0], y: pendingNode[1] });
+    pendingNode = null;
+    renderState();
+    return;
   }
-  out.reverse();
-  return out.length >= 2 ? out : null;
+  if (mode === 'path' && draftSegments.length > 0 && (!currentSegment || currentSegment.length === 1)) {
+    send({ type: 'um_paths', segments: draftSegments });
+    clearDraft();
+  }
+}
+
+function handleNodeModeClick(cell) {
+  const seat = mySeat();
+  if (seat === null) return;
+  const occ = pathOccupancy();
+  const nk = keyOf(cell);
+  if (nodeAt(cell) || occ.has(nk)) {
+    setStatus('That square is occupied.', true);
+    return;
+  }
+  if (pendingNode && sameCell(pendingNode, cell)) {
+    commitPendingTurn();
+    return;
+  }
+  pendingNode = cell;
+  renderState();
+}
+
+function handlePathModeClick(cell) {
+  const seat = mySeat();
+  const node = nodeAt(cell);
+  if (!currentSegment) {
+    if (!node || node.owner !== seat) {
+      setStatus('Start path drawing from a friendly node.', true);
+      return;
+    }
+    currentSegment = [cell];
+    pendingNode = null;
+    renderState();
+    return;
+  }
+
+  if (currentSegment.length > 1 && sameCell(cell, currentSegment[currentSegment.length - 2])) {
+    currentSegment.pop();
+    renderState();
+    return;
+  }
+
+  if (!canStepTo(cell)) {
+    setStatus(`Invalid step. Use orthogonal moves and at most ${latestState.settings.max_corners} corner${latestState.settings.max_corners === 1 ? '' : 's'} per segment.`, true);
+    return;
+  }
+
+  const nextSeg = [...currentSegment, cell];
+  if (node && node.owner === seat) {
+    draftSegments.push(nextSeg);
+    currentSegment = [cell];
+    renderState();
+    return;
+  }
+
+  currentSegment = nextSeg;
+  renderState();
 }
 
 function handleBoardClick(evt) {
@@ -480,32 +566,13 @@ function handleBoardClick(evt) {
     return;
   }
   if (mode === 'node') {
-    send({ type: 'um_node', x: cell[0], y: cell[1] });
+    currentSegment = null;
+    draftSegments = [];
+    handleNodeModeClick(cell);
     return;
   }
-  const node = nodeAt(cell);
-  if (!node || node.owner !== seat) {
-    setStatus('Path mode uses friendly nodes only.', true);
-    return;
-  }
-  if (!draftAnchor) {
-    draftAnchor = cell;
-    renderState();
-    return;
-  }
-  if (sameCell(draftAnchor, cell)) {
-    draftAnchor = cell;
-    renderState();
-    return;
-  }
-  const seg = findSegmentPath(draftAnchor, cell);
-  if (!seg) {
-    setStatus(`No valid path found within ${latestState.settings.max_corners} corner${latestState.settings.max_corners === 1 ? '' : 's'}.`, true);
-    return;
-  }
-  draftSegments.push(seg);
-  draftAnchor = cell;
-  renderState();
+  pendingNode = null;
+  handlePathModeClick(cell);
 }
 
 function handleMouseMove(evt) {
@@ -513,16 +580,9 @@ function handleMouseMove(evt) {
   drawBoard();
 }
 
-function commitDraftPaths() {
-  if (!isMyTurn() || !draftSegments.length) return;
-  send({ type: 'um_paths', segments: draftSegments });
-  clearDraft();
-}
-
 function selectMode(next) {
   mode = next;
-  if (mode === 'node') clearDraft();
-  renderState();
+  clearDraft();
 }
 
 function setupUi() {
@@ -531,7 +591,7 @@ function setupUi() {
   board.addEventListener('mouseleave', () => { hoverCell = null; drawBoard(); });
   el('mode-node').addEventListener('click', () => selectMode('node'));
   el('mode-path').addEventListener('click', () => selectMode('path'));
-  el('commit-path').addEventListener('click', commitDraftPaths);
+  el('commit-path').addEventListener('click', commitPendingTurn);
   el('clear-draft').addEventListener('click', clearDraft);
   el('resign').addEventListener('click', () => send({ type: 'resign' }));
   el('chat-form').addEventListener('submit', (evt) => {
