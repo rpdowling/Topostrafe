@@ -991,10 +991,6 @@ class GameState:
         self.remaining_path -= summary["total_cost"]
         if captured and self.remaining_path > 0 and self.winner is None:
             self.rally_origin = dest
-        elif captured:
-            self.rally_origin = None
-        elif prior_rally is not None:
-            self.rally_origin = prior_rally
         else:
             self.rally_origin = None
         self._cull_isolated(0)
