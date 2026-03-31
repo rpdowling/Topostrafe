@@ -21,7 +21,7 @@ body {
 body.menu-page {
   position: relative;
   background:
-    linear-gradient(rgba(15,20,26,0.88), rgba(15,20,26,0.88)),
+    linear-gradient(rgba(15,20,26,0.88), rgba(15,20,26,0.75)),
     url("/static/Background_topostrafe.PNG") center center / cover no-repeat fixed;
 }
 body.menu-page::before {
