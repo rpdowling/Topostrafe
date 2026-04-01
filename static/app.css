@@ -21,7 +21,7 @@ body {
 body.menu-page {
   position: relative;
   background:
-    linear-gradient(rgba(15,20,26,0.88), rgba(15,20,26,0.88)),
+    linear-gradient(rgba(15,20,26,0.63), rgba(15,20,26,0.63)),
     url("/static/Background_topostrafe.PNG") center center / cover no-repeat fixed;
 }
 body.menu-page::before {
@@ -875,7 +875,7 @@ body.info-modal-open {
 }
 
 .um-hero-card .info-hero-title {
-  font-size: clamp(1.62rem, 2.8vw, 2.02rem);
+  font-size: clamp(1.72rem, 2.95vw, 2.16rem);
 }
 .um-hero-bg {
   background:

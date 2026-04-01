@@ -865,9 +865,30 @@ class UmAggressiveBot:
                     area.update(route)
         return area
 
+    def _enemy_node_footprint_area(self, state: UmGameState, owner: int) -> set[tuple[int, int]]:
+        area = set(self._potential_path_area(state, owner))
+        area.update(self._owner_nodes(state, owner))
+        return area
+
+    def _safe_owner_nodes(self, state: UmGameState, owner: int) -> list[tuple[int, int]]:
+        if owner != self.owner:
+            return self._owner_nodes(state, owner)
+        return [pos for pos in self._owner_nodes(state, owner) if not self._enemy_can_cut_node_next(state, pos)]
+
+    def _needs_escape_node(self, state: UmGameState) -> bool:
+        owner = self.owner
+        enemy = 1 - owner
+        own_nodes = self._owner_nodes(state, owner)
+        if not own_nodes:
+            return False
+        enemy_area = self._enemy_node_footprint_area(state, enemy)
+        return all(pos in enemy_area for pos in own_nodes)
+
     def _must_defend(self, state: UmGameState) -> bool:
         owner = self.owner
         enemy = 1 - owner
+        if self._needs_escape_node(state):
+            return True
         castle = state.castle_pos(owner)
         if castle is None:
             return False
@@ -935,7 +956,7 @@ class UmAggressiveBot:
 
         enemy_castle = after.castle_pos(enemy) or before.castle_pos(enemy)
         enemy_footprint = self._footprint_cells(before, enemy)
-        enemy_path_area = self._potential_path_area(before, enemy)
+        enemy_path_area = self._enemy_node_footprint_area(before, enemy)
         own_castle = after.castle_pos(owner) or before.castle_pos(owner)
         defend = bool(meta.get('defend'))
 
@@ -951,6 +972,13 @@ class UmAggressiveBot:
                 score -= 90
             if own_castle is not None and defend:
                 score += max(0, 42 - 10 * self._manhattan(pos, own_castle))
+            if meta.get('escape'):
+                anchor_dist = int(meta.get('anchor_dist', 99))
+                if pos in enemy_path_area:
+                    score -= 420
+                else:
+                    score += 240
+                score += max(0, 170 - 34 * anchor_dist)
             if self._enemy_can_cut_node_next(after, pos):
                 score -= 260
             else:
@@ -980,6 +1008,7 @@ class UmAggressiveBot:
         owner = self.owner
         enemy = 1 - owner
         enemy_footprint = self._footprint_cells(state, enemy)
+        enemy_area = self._enemy_node_footprint_area(state, enemy)
         own_castle = state.castle_pos(owner)
         own_nodes = self._owner_nodes(state, owner)
         cells: set[tuple[int, int]] = set()
@@ -1010,14 +1039,75 @@ class UmAggressiveBot:
                     if state.in_bounds(pos):
                         cells.add(pos)
 
-        def prescore(pos: tuple[int, int]) -> tuple[int, int]:
+        def prescore(pos: tuple[int, int]) -> tuple[int, int, int]:
             d_enemy = min((self._manhattan(pos, cell) for cell in seeds), default=99)
             d_castle = self._manhattan(pos, own_castle) if own_castle is not None else 99
+            outside_enemy_area = 0 if pos not in enemy_area else 1
             if defend:
-                return (d_castle, d_enemy)
-            return (d_enemy, d_castle)
+                return (outside_enemy_area, d_castle, d_enemy)
+            return (d_enemy, d_castle, outside_enemy_area)
 
         return sorted(cells, key=prescore)[:50]
+
+    def _generate_escape_node_actions(self, state: UmGameState) -> list[dict[str, object]]:
+        owner = self.owner
+        enemy = 1 - owner
+        enemy_area = self._enemy_node_footprint_area(state, enemy)
+        safe_anchors = self._safe_owner_nodes(state, owner)
+        if not safe_anchors:
+            safe_anchors = self._owner_nodes(state, owner)
+        own_castle = state.castle_pos(owner)
+        candidate_cells: set[tuple[int, int]] = set()
+        for anchor in safe_anchors[:10]:
+            for dx in range(-4, 5):
+                for dy in range(-4, 5):
+                    if abs(dx) + abs(dy) > 5:
+                        continue
+                    pos = (anchor[0] + dx, anchor[1] + dy)
+                    if state.in_bounds(pos):
+                        candidate_cells.add(pos)
+        for pos in self._candidate_cells(state, defend=True):
+            candidate_cells.add(pos)
+        if own_castle is not None:
+            for dx in range(-5, 6):
+                for dy in range(-5, 6):
+                    if abs(dx) + abs(dy) > 6:
+                        continue
+                    pos = (own_castle[0] + dx, own_castle[1] + dy)
+                    if state.in_bounds(pos):
+                        candidate_cells.add(pos)
+
+        ranked: list[tuple[tuple[int, int, int], tuple[int, int], int]] = []
+        for pos in candidate_cells:
+            outside = 0 if pos not in enemy_area else 1
+            anchor_dist = min((self._manhattan(pos, anchor) for anchor in safe_anchors), default=99)
+            enemy_dist = min((self._manhattan(pos, cell) for cell in enemy_area), default=99)
+            ranked.append(((outside, anchor_dist, enemy_dist), pos, anchor_dist))
+        ranked.sort(key=lambda item: item[0])
+
+        actions: list[dict[str, object]] = []
+        for _, pos, anchor_dist in ranked[:70]:
+            if pos in enemy_area:
+                continue
+            sim = deepcopy(state)
+            sim.current_owner = owner
+            ok, _ = sim.commit_place_node(*pos)
+            if not ok:
+                continue
+            if self._enemy_can_cut_node_next(sim, pos):
+                continue
+            score = self._score_state(state, sim, {
+                'kind': 'node',
+                'pos': pos,
+                'defend': True,
+                'escape': True,
+                'anchor_dist': anchor_dist,
+            })
+            actions.append({
+                'score': score,
+                'action': {'type': 'um_node', 'x': pos[0], 'y': pos[1], 'label': f'Bot placed a node at {pos[0]},{pos[1]}.'},
+            })
+        return actions
 
     def _generate_node_actions(self, state: UmGameState, defend: bool) -> list[dict[str, object]]:
         actions: list[dict[str, object]] = []
@@ -1093,6 +1183,11 @@ class UmAggressiveBot:
     def choose_action(self, state: UmGameState) -> dict[str, object]:
         if not state.has_starter(self.owner):
             return self._choose_starter(state)
+        if self._needs_escape_node(state):
+            escape_actions = self._generate_escape_node_actions(state)
+            if escape_actions:
+                escape_actions.sort(key=lambda item: item['score'], reverse=True)
+                return escape_actions[0]['action']
         defend = self._must_defend(state)
         actions = self._generate_node_actions(state, defend)
         actions.extend(self._generate_path_actions(state, defend))
