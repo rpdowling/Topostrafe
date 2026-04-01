@@ -702,7 +702,7 @@ function drawPremovePreview(m) {
   const isWhiteSeat = owner === 1;
   ctx.globalAlpha = isWhiteSeat ? 0.62 : 0.4;
   ctx.lineWidth = Math.max(2, m.cell * 0.06);
-  ctx.strokeStyle = PLAYER_COLORS[owner] || '#ffffff';
+  ctx.strokeStyle = isWhiteSeat ? '#292929' : (PLAYER_COLORS[owner] || '#ffffff');
   ctx.setLineDash([Math.max(5, m.cell * 0.18), Math.max(3, m.cell * 0.12)]);
   if (isWhiteSeat) {
     ctx.fillStyle = 'rgba(255,255,255,0.16)';
