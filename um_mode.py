@@ -78,12 +78,12 @@ class UmGameState:
     def _preview_margin_x(self) -> int:
         if not getattr(self.settings, "infinite_board", False):
             return 0
-        return max(1, self.width // 2)
+        return 1
 
     def _preview_margin_y(self) -> int:
         if not getattr(self.settings, "infinite_board", False):
             return 0
-        return max(1, self.height // 2)
+        return 1
 
     def _is_edge_pos(self, pos: tuple[int, int]) -> bool:
         x, y = pos
