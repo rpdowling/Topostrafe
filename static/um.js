@@ -16,7 +16,7 @@ let fadeEffects = [];
 let lastBoardCenterSignature = '';
 let latestStateReceivedAt = 0;
 
-const PLAYER_COLORS = { 0: '#ff00ff', 1: '#ffffff' };
+const PLAYER_COLORS = { 0: '#ff00ff', 1: '#f2f0e8' };
 const PLAYER_OUTLINES = { 0: '#1a001c', 1: '#000000' };
 
 function el(id) { return document.getElementById(id); }
@@ -290,6 +290,77 @@ function cellCenter(cell, m = boardMetrics()) {
   };
 }
 
+function nodeFill(owner) {
+  return owner === 0 ? '#ff00ff' : '#f2f0e8';
+}
+
+function nodeShadow(owner) {
+  return owner === 0 ? 'rgba(56, 0, 50, 0.22)' : 'rgba(0, 0, 0, 0.18)';
+}
+
+function drawNodeBody(p, r, owner, starter = false, alpha = 1, outlineScale = 1) {
+  const fill = nodeFill(owner);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  const depthDx = Math.max(1, r * 0.10);
+  const depthDy = Math.max(1, r * 0.16);
+  ctx.fillStyle = nodeShadow(owner);
+  ctx.beginPath();
+  ctx.arc(p.x + depthDx, p.y + depthDy, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  const grad = ctx.createRadialGradient(p.x - r * 0.40, p.y - r * 0.42, r * 0.18, p.x, p.y, r * 1.18);
+  if (owner === 0) {
+    grad.addColorStop(0, '#ff7bff');
+    grad.addColorStop(0.58, '#ff1dff');
+    grad.addColorStop(1, '#d000d0');
+  } else {
+    grad.addColorStop(0, '#fffdf7');
+    grad.addColorStop(0.62, '#f2f0e8');
+    grad.addColorStop(1, '#d6d1c5');
+  }
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.lineWidth = Math.max(2, r * 0.26) * outlineScale;
+  ctx.strokeStyle = '#000000';
+  ctx.stroke();
+
+  ctx.globalAlpha = alpha * 0.34;
+  ctx.fillStyle = owner === 0 ? '#ffffff' : '#fffefb';
+  ctx.beginPath();
+  ctx.arc(p.x - r * 0.26, p.y - r * 0.28, r * 0.42, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (starter) {
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#000000';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r * 0.28, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawNodeGlow(cell, color = 'rgba(255,255,255,0.28)', alpha = 1, scale = 1) {
+  if (!cell) return;
+  const p = cellCenter(cell);
+  const r = boardMetrics().cell * 0.23 * scale;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.shadowBlur = r * 1.35;
+  ctx.shadowColor = color;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(2, boardMetrics().cell * 0.06);
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r * 1.28, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function eventToCell(evt) {
   if (!latestState) return null;
   const rect = board.getBoundingClientRect();
@@ -305,7 +376,28 @@ function eventToCell(evt) {
 }
 
 function captureFadeEffects(prev, next) {
-  fadeEffects = [];
+  const now = performance.now();
+  const existing = fadeEffects.filter(f => now - f.t0 < f.duration);
+  if (!prev || !next) {
+    fadeEffects = existing;
+    return;
+  }
+  const nextNodes = new Map((next.nodes || []).map(node => [`${node.x},${node.y}`, node]));
+  for (const node of prev.nodes || []) {
+    const key = `${node.x},${node.y}`;
+    if (!nextNodes.has(key)) {
+      existing.push({
+        kind: 'node',
+        x: node.x,
+        y: node.y,
+        owner: node.owner,
+        starter: !!node.starter,
+        t0: now,
+        duration: 220,
+      });
+    }
+  }
+  fadeEffects = existing;
 }
 
 function cleanupFadeEffects() {
@@ -494,6 +586,7 @@ function drawBoard() {
   drawPremovePreview(m);
   drawHoverMarker(m);
   drawPendingNode(m);
+  drawSelectionGlows(m);
   drawNodes(m);
   drawFadeEffects(m);
 }
@@ -503,10 +596,24 @@ function drawPaths(m, paths) {
     const cells = path.cells || [];
     if (cells.length < 2) continue;
     const color = PLAYER_COLORS[path.owner] || '#ffffff';
+    const outlineW = Math.max(6.5, m.cell * 0.28);
+    const fillW = Math.max(3.2, m.cell * 0.145);
     ctx.save();
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    ctx.lineWidth = Math.max(6, m.cell * 0.26);
+
+    ctx.lineWidth = outlineW;
+    ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+    ctx.beginPath();
+    const firstShadow = cellCenter(cells[0], m);
+    ctx.moveTo(firstShadow.x, firstShadow.y + Math.max(1, m.cell * 0.045));
+    for (const cell of cells.slice(1)) {
+      const p = cellCenter(cell, m);
+      ctx.lineTo(p.x, p.y + Math.max(1, m.cell * 0.045));
+    }
+    ctx.stroke();
+
+    ctx.lineWidth = outlineW;
     ctx.strokeStyle = PLAYER_OUTLINES[path.owner] || '#000000';
     ctx.beginPath();
     const first = cellCenter(cells[0], m);
@@ -516,9 +623,21 @@ function drawPaths(m, paths) {
       ctx.lineTo(p.x, p.y);
     }
     ctx.stroke();
-    ctx.lineWidth = Math.max(3, m.cell * 0.14);
+
+    ctx.lineWidth = fillW;
     ctx.strokeStyle = color;
     ctx.stroke();
+
+    ctx.lineWidth = Math.max(1.2, m.cell * 0.045);
+    ctx.strokeStyle = path.owner === 0 ? 'rgba(255,180,255,0.28)' : 'rgba(255,255,255,0.22)';
+    ctx.beginPath();
+    ctx.moveTo(first.x, first.y - Math.max(0.6, m.cell * 0.018));
+    for (const cell of cells.slice(1)) {
+      const p = cellCenter(cell, m);
+      ctx.lineTo(p.x, p.y - Math.max(0.6, m.cell * 0.018));
+    }
+    ctx.stroke();
+
     ctx.restore();
   }
 }
@@ -618,42 +737,31 @@ function drawHoverMarker(m) {
   ctx.restore();
 }
 
+function drawSelectionGlows(m) {
+  if (pendingNode) {
+    drawNodeGlow(pendingNode, 'rgba(255, 220, 110, 0.70)', 0.95, 1.02);
+  }
+  if (currentSegment && currentSegment.length) {
+    drawNodeGlow(currentSegment[0], 'rgba(255,255,255,0.26)', 0.9, 1.00);
+    const end = currentSegment[currentSegment.length - 1];
+    if (!sameCell(end, currentSegment[0]) || currentSegment.length > 1) {
+      drawNodeGlow(end, 'rgba(255, 215, 120, 0.72)', 1, 1.08);
+    }
+  }
+}
+
 function drawPendingNode(m) {
   if (!pendingNode) return;
   const p = cellCenter(pendingNode, m);
   const r = m.cell * 0.23;
-  ctx.save();
-  ctx.globalAlpha = 0.6;
-  ctx.lineWidth = Math.max(2, m.cell * 0.06);
-  ctx.strokeStyle = '#000000';
-  ctx.fillStyle = PLAYER_COLORS[mySeat() ?? 0] || '#ff00ff';
-  ctx.beginPath();
-  ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
+  drawNodeBody(p, r, mySeat() ?? 0, false, 0.68, 0.95);
 }
 
 function drawNodes(m) {
   for (const node of latestState.nodes || []) {
     const p = cellCenter([node.x, node.y], m);
     const r = m.cell * 0.23;
-    const fill = node.owner === 0 ? '#ff00ff' : '#ffffff';
-    ctx.save();
-    ctx.lineWidth = Math.max(2, m.cell * 0.06);
-    ctx.strokeStyle = '#000000';
-    ctx.fillStyle = fill;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    if (node.starter) {
-      ctx.fillStyle = '#000000';
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, r * 0.28, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
+    drawNodeBody(p, r, node.owner, !!node.starter, 1, node.starter ? 1.18 : 1);
   }
 }
 
@@ -662,23 +770,8 @@ function drawFadeEffects(m) {
   for (const fx of fadeEffects) {
     const age = Math.min(1, (now - fx.t0) / fx.duration);
     const p = cellCenter([fx.x, fx.y], m);
-    const r = m.cell * (0.22 + age * 0.12);
-    ctx.save();
-    ctx.globalAlpha = 1 - age;
-    ctx.lineWidth = Math.max(2, m.cell * 0.05);
-    ctx.strokeStyle = '#000000';
-    ctx.fillStyle = fx.owner === 0 ? '#ff00ff' : '#ffffff';
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    if (fx.starter) {
-      ctx.fillStyle = '#000000';
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, r * 0.28, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
+    const r = m.cell * (0.23 * (1 - age * 0.36));
+    drawNodeBody(p, r, fx.owner, !!fx.starter, 1 - age, 1);
   }
 }
 
