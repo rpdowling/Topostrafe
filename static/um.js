@@ -491,6 +491,7 @@ function drawBoard() {
 
   drawPaths(m, pathList());
   drawDraftPaths(m);
+  drawPremovePreview(m);
   drawHoverMarker(m);
   drawPendingNode(m);
   drawNodes(m);
@@ -543,6 +544,61 @@ function drawDraftPaths(m) {
   ctx.globalAlpha = 0.6;
   drawPaths(m, pseudo);
   ctx.restore();
+}
+
+function premovePreviewPaths() {
+  const action = myPremoveAction();
+  if (!action || isMyTurn()) return [];
+  if (action.type !== 'um_paths') return [];
+  const seat = mySeat();
+  return (action.segments || []).filter(seg => Array.isArray(seg) && seg.length > 1)
+    .map((seg, idx) => ({ owner: seat ?? 0, cells: seg, path_id: -3000 - idx }));
+}
+
+function premovePreviewNode() {
+  const action = myPremoveAction();
+  if (!action || isMyTurn()) return null;
+  if (action.type === 'starter' || action.type === 'um_node') {
+    return [Number(action.x), Number(action.y)];
+  }
+  return null;
+}
+
+function drawPremovePreview(m) {
+  if (!latestState || !latestState.my_premove || isMyTurn()) return;
+  const paths = premovePreviewPaths();
+  if (paths.length) {
+    ctx.save();
+    ctx.globalAlpha = 0.34;
+    ctx.setLineDash([Math.max(6, m.cell * 0.25), Math.max(4, m.cell * 0.18)]);
+    drawPaths(m, paths);
+    ctx.restore();
+  }
+  const nodeCell = premovePreviewNode();
+  if (!nodeCell) return;
+  const p = cellCenter(nodeCell, m);
+  const r = m.cell * 0.26;
+  const owner = mySeat() ?? 0;
+  ctx.save();
+  ctx.globalAlpha = 0.4;
+  ctx.lineWidth = Math.max(2, m.cell * 0.06);
+  ctx.strokeStyle = PLAYER_COLORS[owner] || '#ffffff';
+  ctx.setLineDash([Math.max(5, m.cell * 0.18), Math.max(3, m.cell * 0.12)]);
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+  ctx.stroke();
+  if (actionIsStarterPremove()) {
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r * 0.22, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function actionIsStarterPremove() {
+  const action = myPremoveAction();
+  return !!action && !isMyTurn() && action.type === 'starter';
 }
 
 function drawHoverMarker(m) {
