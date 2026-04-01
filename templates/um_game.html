@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=40" />
+  <link rel="stylesheet" href="/static/app.css?v=42" />
 </head>
 <body>
   <div class="page game-layout um-layout">
@@ -37,7 +37,7 @@
           <a class="button-link quit-link" href="/">Quit</a>
         </div>
       </div>
-      <canvas id="board" width="1100" height="900"></canvas>
+      <div id="board-scroll" class="board-scroll um-board-scroll"><canvas id="board" width="1100" height="900"></canvas></div>
     </section>
 
     <section class="panel sidebar">
@@ -80,6 +80,6 @@
   <script>
     window.TOPOS_GAME_ID = "{{ game_id }}";
   </script>
-  <script src="/static/um.js?v=8"></script>
+  <script src="/static/um.js?v=9"></script>
 </body>
 </html>

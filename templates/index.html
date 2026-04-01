@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/app.css?v=41" />
+  <link rel="stylesheet" href="/static/app.css?v=43" />
 </head>
 <body class="menu-page">
   <div class="page menu-three-col">
@@ -121,7 +121,7 @@
               <option value="medium">Medium</option>
               <option value="large">Large</option>
             </select>
-            <small class="muted">Small 6x6. Medium 10x10. Large 20x20.</small>
+            <small class="muted">Small 6x6 default. Medium 10x10. Large 20x20.</small>
           </label>
           <label>
             <span>Board Color</span>
@@ -135,6 +135,10 @@
             <input id="um_require_move_confirmation" type="checkbox" />
             <span>Require Move Confirmation</span>
           </label>
+          <label class="check">
+            <input id="um_infinite_board" type="checkbox" checked />
+            <span>Infinite Board</span>
+          </label>
           <label class="check um-private-check">
             <input id="um_is_private" type="checkbox" />
             <span>Private Game</span>
@@ -144,7 +148,7 @@
           <span>Private Join Code</span>
           <input id="um_join_code" type="text" maxlength="16" placeholder="Optional. Leave blank to auto-generate." />
         </label>
-        <div class="um-rules-mini muted">Place castles on your half, place nodes, draw connected node-to-node path chains with up to 1 corner per segment, cross enemy paths only perpendicularly, encircle or snuff enemy nodes, and kill the enemy castle to win.</div>
+        <div class="um-rules-mini muted">Place castles on your half, place or split nodes, draw connected node-to-node path chains with up to 1 corner per segment, cross enemy paths only perpendicularly, expand the board by placing a node on an edge when Infinite Board is on, encircle or snuff enemy nodes, and kill the enemy castle to win.</div>
       </form>
     </section>
 
@@ -255,6 +259,6 @@
   <script>
     window.TOPOS_DEFAULTS = {{ defaults_json | safe }};
   </script>
-  <script src="/static/lobby.js?v=12"></script>
+  <script src="/static/lobby.js?v=13"></script>
 </body>
 </html>

@@ -114,7 +114,7 @@ class GameStore:
     def defaults(self) -> dict[str, Any]:
         d = eng.GameSettings()
         d.map_type = "River"
-        um_defaults = um.UmSettings(board_width=10, board_height=10, require_move_confirmation=False)
+        um_defaults = um.UmSettings(board_width=6, board_height=6, require_move_confirmation=False, infinite_board=True)
         return {
             "settings": d.__dict__.copy(),
             "map_types": MAP_TYPES,
@@ -127,7 +127,8 @@ class GameStore:
                 "max_corners": um_defaults.max_corners,
                 "board_color": um_defaults.board_color,
                 "require_move_confirmation": um_defaults.require_move_confirmation,
-                "size_preset": "medium",
+                "size_preset": "small",
+                "infinite_board": um_defaults.infinite_board,
             },
             "um_board_colors": um.BOARD_COLORS,
             "um_size_presets": {name: {"board_width": size[0], "board_height": size[1]} for name, size in um.SIZE_PRESETS.items()},
@@ -267,11 +268,12 @@ class GameStore:
 
     def _um_settings_from_payload(self, payload: dict[str, Any]) -> um.UmSettings:
         raw = dict(payload.get("um_settings", {}))
-        preset = str(raw.get("size_preset", "medium") or "medium").strip().lower()
-        width, height = um.SIZE_PRESETS.get(preset, um.SIZE_PRESETS["medium"])
+        preset = str(raw.get("size_preset", "small") or "small").strip().lower()
+        width, height = um.SIZE_PRESETS.get(preset, um.SIZE_PRESETS["small"])
         max_corners = max(0, min(6, int(raw.get("max_corners", 1))))
         board_color = str(raw.get("board_color", "yellow") or "yellow").strip().lower()
         require_move_confirmation = bool(raw.get("require_move_confirmation", False))
+        infinite_board = bool(raw.get("infinite_board", True))
         if board_color not in um.BOARD_COLORS:
             board_color = "yellow"
         return um.UmSettings(
@@ -280,6 +282,7 @@ class GameStore:
             max_corners=max_corners,
             board_color=board_color,
             require_move_confirmation=require_move_confirmation,
+            infinite_board=infinite_board,
         )
 
     def _map_from_payload(self, settings: eng.GameSettings, payload: dict[str, Any]) -> eng.MapData:
@@ -488,6 +491,7 @@ class GameStore:
                         "max_corners": game.settings.max_corners,
                         "board_color": game.settings.board_color,
                         "require_move_confirmation": game.settings.require_move_confirmation,
+                        "infinite_board": getattr(game.settings, "infinite_board", True),
                         "time_limit_enabled": False,
                         "time_bank_seconds": game.settings.time_bank_seconds,
                     },
@@ -496,6 +500,9 @@ class GameStore:
                         "height": state.height,
                         "color": um.BOARD_COLORS.get(game.settings.board_color, um.BOARD_COLORS["yellow"]),
                         "color_name": game.settings.board_color,
+                        "preview_margin_x": state._preview_margin_x(),
+                        "preview_margin_y": state._preview_margin_y(),
+                        "infinite_board": getattr(game.settings, "infinite_board", True),
                     },
                     "nodes": nodes,
                     "paths": paths,

@@ -920,13 +920,22 @@ body.info-modal-open {
 .mode-buttons .icon-node-fill {
   fill: rgba(255,255,255,0.8);
 }
+.um-board-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  background: #0a0f14;
+  margin: 0 auto;
+}
+.um-board-scroll.can-pan {
+  overflow: auto;
+}
 .um-board-panel #board {
   display: block;
   width: auto;
-  max-width: 100%;
   height: auto;
-  max-height: calc(100vh - 110px);
-  aspect-ratio: 11 / 9;
+  max-width: none;
+  max-height: none;
   background: #0a0f14;
   margin: 0 auto;
 }

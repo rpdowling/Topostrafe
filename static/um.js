@@ -1,6 +1,7 @@
 const gameId = window.TOPOS_GAME_ID;
 const playerKey = new URLSearchParams(window.location.search).get('player') || '';
 const board = document.getElementById('board');
+const boardScroll = document.getElementById('board-scroll');
 const ctx = board.getContext('2d');
 
 let ws = null;
@@ -12,6 +13,7 @@ let draftSegments = [];
 let currentSegment = null;
 let hoverCell = null;
 let fadeEffects = [];
+let lastBoardCenterSignature = '';
 
 const PLAYER_COLORS = { 0: '#ff00ff', 1: '#ffffff' };
 const PLAYER_OUTLINES = { 0: '#1a001c', 1: '#000000' };
@@ -99,24 +101,66 @@ function nodeAt(cell) {
 }
 
 
+function boardDimensions() {
+  const activeW = latestState?.board?.width || 10;
+  const activeH = latestState?.board?.height || 10;
+  const previewX = latestState?.board?.preview_margin_x || 0;
+  const previewY = latestState?.board?.preview_margin_y || 0;
+  return {
+    activeW,
+    activeH,
+    previewX,
+    previewY,
+    totalW: activeW + previewX * 2,
+    totalH: activeH + previewY * 2,
+  };
+}
+
 function resizeCanvas() {
   if (!board) return;
-  const panel = board.parentElement;
+  const panel = boardScroll?.closest('.um-board-panel') || board.parentElement;
   const toolbar = panel?.querySelector('.toolbar');
-  const panelWidth = Math.max(480, Math.floor((panel?.clientWidth || 1200) - 2));
-  const availableHeight = Math.max(420, Math.floor(window.innerHeight - (toolbar?.offsetHeight || 56) - 70));
-  const aspect = 11 / 9;
-  let width = panelWidth;
-  let height = Math.floor(width / aspect);
-  if (height > availableHeight) {
-    height = availableHeight;
-    width = Math.floor(height * aspect);
+  const viewportW = Math.max(480, Math.floor((boardScroll?.clientWidth || panel?.clientWidth || 1200) - 2));
+  const viewportH = Math.max(420, Math.floor(window.innerHeight - (toolbar?.offsetHeight || 56) - 80));
+  const dims = boardDimensions();
+  const pad = 40;
+  const largeBoard = Math.max(dims.activeW, dims.activeH) > 30 || Math.max(dims.totalW, dims.totalH) > 30;
+  let cell;
+  if (largeBoard) {
+    cell = 24;
+    if (boardScroll) boardScroll.classList.add('can-pan');
+  } else {
+    cell = Math.max(18, Math.floor(Math.min((viewportW - pad * 2) / Math.max(1, dims.totalW), (viewportH - pad * 2) / Math.max(1, dims.totalH))));
+    if (boardScroll) boardScroll.classList.remove('can-pan');
   }
-  board.width = width;
-  board.height = height;
-  board.style.width = `${width}px`;
-  board.style.height = `${height}px`;
+  const canvasW = pad * 2 + dims.totalW * cell;
+  const canvasH = pad * 2 + dims.totalH * cell;
+  board.width = canvasW;
+  board.height = canvasH;
+  board.style.width = `${canvasW}px`;
+  board.style.height = `${canvasH}px`;
+  if (boardScroll) {
+    boardScroll.style.maxHeight = `${viewportH}px`;
+  }
   drawBoard();
+  centerBoardScroll();
+}
+
+function centerBoardScroll(force = false) {
+  if (!boardScroll || !latestState) return;
+  const dims = boardDimensions();
+  const largeBoard = Math.max(dims.activeW, dims.activeH) > 30 || Math.max(dims.totalW, dims.totalH) > 30;
+  if (!largeBoard) {
+    lastBoardCenterSignature = `${dims.activeW}x${dims.activeH}:${dims.previewX},${dims.previewY}`;
+    boardScroll.scrollLeft = 0;
+    boardScroll.scrollTop = 0;
+    return;
+  }
+  const sig = `${dims.activeW}x${dims.activeH}:${dims.previewX},${dims.previewY}`;
+  if (!force && sig === lastBoardCenterSignature) return;
+  lastBoardCenterSignature = sig;
+  boardScroll.scrollLeft = Math.max(0, Math.floor((board.width - boardScroll.clientWidth) / 2));
+  boardScroll.scrollTop = Math.max(0, Math.floor((board.height - boardScroll.clientHeight) / 2));
 }
 
 function pathOccupancy(owner = null) {
@@ -134,23 +178,38 @@ function pathOccupancy(owner = null) {
 }
 
 function boardMetrics() {
-  const width = latestState?.board?.width || 10;
-  const height = latestState?.board?.height || 10;
+  const dims = boardDimensions();
   const pad = 40;
-  const usableW = board.width - pad * 2;
-  const usableH = board.height - pad * 2;
-  const cell = Math.floor(Math.min(usableW / Math.max(1, width), usableH / Math.max(1, height)));
-  const boardW = cell * width;
-  const boardH = cell * height;
-  const ox = Math.floor((board.width - boardW) / 2);
-  const oy = Math.floor((board.height - boardH) / 2);
-  return { width, height, cell, boardW, boardH, ox, oy };
+  const cell = Math.max(1, Math.floor(Math.min((board.width - pad * 2) / Math.max(1, dims.totalW), (board.height - pad * 2) / Math.max(1, dims.totalH))));
+  const totalBoardW = cell * dims.totalW;
+  const totalBoardH = cell * dims.totalH;
+  const ox = Math.floor((board.width - totalBoardW) / 2);
+  const oy = Math.floor((board.height - totalBoardH) / 2);
+  const activeOx = ox + dims.previewX * cell;
+  const activeOy = oy + dims.previewY * cell;
+  return {
+    width: dims.activeW,
+    height: dims.activeH,
+    previewX: dims.previewX,
+    previewY: dims.previewY,
+    totalW: dims.totalW,
+    totalH: dims.totalH,
+    cell,
+    ox,
+    oy,
+    boardW: totalBoardW,
+    boardH: totalBoardH,
+    activeOx,
+    activeOy,
+    activeBoardW: dims.activeW * cell,
+    activeBoardH: dims.activeH * cell,
+  };
 }
 
 function cellCenter(cell, m = boardMetrics()) {
   return {
-    x: m.ox + (cell[0] + 0.5) * m.cell,
-    y: m.oy + (cell[1] + 0.5) * m.cell,
+    x: m.activeOx + (cell[0] + 0.5) * m.cell,
+    y: m.activeOy + (cell[1] + 0.5) * m.cell,
   };
 }
 
@@ -160,8 +219,11 @@ function eventToCell(evt) {
   const x = (evt.clientX - rect.left) * (board.width / rect.width);
   const y = (evt.clientY - rect.top) * (board.height / rect.height);
   const m = boardMetrics();
-  const cx = Math.floor((x - m.ox) / m.cell);
-  const cy = Math.floor((y - m.oy) / m.cell);
+  const tx = Math.floor((x - m.ox) / m.cell);
+  const ty = Math.floor((y - m.oy) / m.cell);
+  if (tx < 0 || ty < 0 || tx >= m.totalW || ty >= m.totalH) return null;
+  const cx = tx - m.previewX;
+  const cy = ty - m.previewY;
   if (cx < 0 || cy < 0 || cx >= m.width || cy >= m.height) return null;
   return [cx, cy];
 }
@@ -179,7 +241,7 @@ function renderState() {
   if (!latestState) return;
   cleanupDraftIfInvalid();
   renderMeta();
-  drawBoard();
+  resizeCanvas();
 }
 
 function renderMeta() {
@@ -289,19 +351,27 @@ function drawBoard() {
   ctx.clearRect(0, 0, board.width, board.height);
   ctx.fillStyle = '#0a0f14';
   ctx.fillRect(0, 0, board.width, board.height);
+
+  if (m.previewX > 0 || m.previewY > 0) {
+    ctx.save();
+    ctx.globalAlpha = 0.28;
+    ctx.fillStyle = boardColor;
+    ctx.fillRect(m.ox, m.oy, m.boardW, m.boardH);
+    ctx.restore();
+  }
   ctx.fillStyle = boardColor;
-  ctx.fillRect(m.ox, m.oy, m.boardW, m.boardH);
+  ctx.fillRect(m.activeOx, m.activeOy, m.activeBoardW, m.activeBoardH);
 
   ctx.strokeStyle = 'rgba(0,0,0,0.22)';
   ctx.lineWidth = 1;
-  for (let x = 0; x <= m.width; x++) {
+  for (let x = 0; x <= m.totalW; x++) {
     const px = m.ox + x * m.cell;
     ctx.beginPath();
     ctx.moveTo(px, m.oy);
     ctx.lineTo(px, m.oy + m.boardH);
     ctx.stroke();
   }
-  for (let y = 0; y <= m.height; y++) {
+  for (let y = 0; y <= m.totalH; y++) {
     const py = m.oy + y * m.cell;
     ctx.beginPath();
     ctx.moveTo(m.ox, py);
@@ -310,14 +380,14 @@ function drawBoard() {
   }
 
   if (!latestState.starter_placed?.every(Boolean)) {
-    const splitX = m.ox + (m.width / 2) * m.cell;
+    const splitX = m.activeOx + (m.width / 2) * m.cell;
     ctx.save();
     ctx.strokeStyle = 'rgba(0,0,0,0.78)';
     ctx.setLineDash([12, 10]);
     ctx.lineWidth = Math.max(2, m.cell * 0.05);
     ctx.beginPath();
-    ctx.moveTo(splitX, m.oy);
-    ctx.lineTo(splitX, m.oy + m.boardH);
+    ctx.moveTo(splitX, m.activeOy);
+    ctx.lineTo(splitX, m.activeOy + m.activeBoardH);
     ctx.stroke();
     ctx.restore();
   }

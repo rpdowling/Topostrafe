@@ -25,6 +25,7 @@ class UmSettings:
     max_corners: int = 1
     board_color: str = "yellow"
     require_move_confirmation: bool = False
+    infinite_board: bool = True
     time_limit_enabled: bool = False
     time_bank_seconds: int = 600
 
@@ -73,6 +74,42 @@ class UmGameState:
 
     def has_starter(self, owner: int) -> bool:
         return any(node.owner == owner and node.starter for node in self.nodes.values())
+
+    def _preview_margin_x(self) -> int:
+        if not getattr(self.settings, "infinite_board", False):
+            return 0
+        return max(1, self.width // 2)
+
+    def _preview_margin_y(self) -> int:
+        if not getattr(self.settings, "infinite_board", False):
+            return 0
+        return max(1, self.height // 2)
+
+    def _is_edge_pos(self, pos: tuple[int, int]) -> bool:
+        x, y = pos
+        return x == 0 or y == 0 or x == self.width - 1 or y == self.height - 1
+
+    def _rebuild_path_lookup(self):
+        self.path_lookup = defaultdict(set)
+        for path in self.paths.values():
+            for cell in path.internal_cells:
+                self.path_lookup[cell].add(path.path_id)
+
+    def _expand_board(self) -> tuple[int, int, int, int]:
+        add_x = self._preview_margin_x()
+        add_y = self._preview_margin_y()
+        if add_x <= 0 and add_y <= 0:
+            return self.width, self.height, 0, 0
+        if add_x:
+            self.nodes = {(x + add_x, y): node for (x, y), node in self.nodes.items()}
+        if add_y:
+            self.nodes = {(x, y + add_y): node for (x, y), node in self.nodes.items()}
+        for path in self.paths.values():
+            path.cells = [(x + add_x, y + add_y) for (x, y) in path.cells]
+        self.width += add_x * 2
+        self.height += add_y * 2
+        self._rebuild_path_lookup()
+        return self.width, self.height, add_x, add_y
 
     def node_at(self, pos: tuple[int, int]) -> UmNode | None:
         return self.nodes.get(tuple(pos))
@@ -149,11 +186,19 @@ class UmGameState:
             return False, "You cannot place a node where the enemy could immediately snuff it out against the wall."
 
         removed = self._resolve_after_action(self.current_owner)
+        expanded = False
+        new_w = self.width
+        new_h = self.height
+        if getattr(self.settings, "infinite_board", False) and self._is_edge_pos(pos):
+            new_w, new_h, _, _ = self._expand_board()
+            expanded = True
         msg = "Node placed."
         if split_count:
             msg = f"{msg} Split {split_count} path segment{'s' if split_count != 1 else ''}."
         if removed:
             msg = f"{msg} {removed}".strip()
+        if expanded:
+            msg = f"{msg} Board expanded to {new_w}x{new_h}.".strip()
         return True, msg
 
     def commit_place_paths(self, segments: list[list[tuple[int, int]]]):
@@ -448,6 +493,9 @@ class UmGameState:
             for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                 np = (x + dx, y + dy)
                 if not self.in_bounds(np):
+                    if getattr(self.settings, "infinite_board", False):
+                        surrounded = False
+                        break
                     continue
                 if np not in owner_walls:
                     surrounded = False
@@ -567,6 +615,9 @@ class UmGameState:
         for comp in self._path_region_components(owner):
             enclosed.update(comp)
 
+        if getattr(self.settings, "infinite_board", False):
+            return enclosed
+
         edge_specs = (
             ('top', lambda cell: cell[1] == 0, lambda cell: cell[1] == self.height - 1 or cell[0] == 0 or cell[0] == self.width - 1),
             ('bottom', lambda cell: cell[1] == self.height - 1, lambda cell: cell[1] == 0 or cell[0] == 0 or cell[0] == self.width - 1),
@@ -596,6 +647,8 @@ class UmGameState:
         return False
 
     def _wall_snuffed_cells_for_owner(self, owner: int) -> set[tuple[int, int]]:
+        if getattr(self.settings, "infinite_board", False):
+            return set()
         enemy = 1 - owner
         owner_walls = self._owner_wall_cells(owner)
         enemy_cells: set[tuple[int, int]] = set()

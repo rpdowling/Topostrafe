@@ -3,7 +3,7 @@ const settings = defaults.settings;
 const settingKeys = Object.keys(settings);
 
 const mapTypeLabels = defaults.map_type_labels || {};
-const umDefaults = defaults.um_defaults || { board_width: 10, board_height: 10, max_corners: 1, board_color: "yellow", require_move_confirmation: false, size_preset: "medium" };
+const umDefaults = defaults.um_defaults || { board_width: 6, board_height: 6, max_corners: 1, board_color: "yellow", require_move_confirmation: false, infinite_board: true, size_preset: "small" };
 const umBoardColors = defaults.um_board_colors || { yellow: "#e8cf52" };
 const umSizePresets = defaults.um_size_presets || { small: { board_width: 6, board_height: 6 }, medium: { board_width: 10, board_height: 10 }, large: { board_width: 20, board_height: 20 } };
 
@@ -56,9 +56,10 @@ function buildForm() {
     }
     umColorSelect.value = umDefaults.board_color || 'yellow';
   }
-  if (el('um_size_preset')) el('um_size_preset').value = umDefaults.size_preset || 'medium';
+  if (el('um_size_preset')) el('um_size_preset').value = umDefaults.size_preset || 'small';
   if (el('um_max_corners')) el('um_max_corners').value = String(umDefaults.max_corners ?? 1);
   if (el('um_require_move_confirmation')) el('um_require_move_confirmation').checked = !!umDefaults.require_move_confirmation;
+  if (el('um_infinite_board')) el('um_infinite_board').checked = umDefaults.infinite_board !== false;
 }
 
 
@@ -148,10 +149,11 @@ function collectUmPayload() {
     is_private: !!el('um_is_private')?.checked,
     join_code: el('um_join_code')?.value.trim() || '',
     um_settings: {
-      size_preset: el('um_size_preset')?.value || 'medium',
+      size_preset: el('um_size_preset')?.value || 'small',
       max_corners: Number(el('um_max_corners')?.value || 1),
       board_color: el('um_board_color')?.value || 'yellow',
       require_move_confirmation: !!el('um_require_move_confirmation')?.checked,
+      infinite_board: !!el('um_infinite_board')?.checked,
     },
   };
 }
