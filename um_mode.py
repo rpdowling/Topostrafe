@@ -144,6 +144,9 @@ class UmGameState:
             return False, "Player 2 castle must be on the right side."
         self.nodes[pos] = UmNode(owner=self.current_owner, starter=True)
         self.starter_placed[self.current_owner] = True
+        if self.infinite_board and self._is_edge_pos(pos):
+            new_w, new_h, _, _ = self._expand_board()
+            return True, f"Castle placed. Board expanded to {new_w}x{new_h}."
         return True, "Castle placed."
 
     def commit_place_node(self, x: int, y: int):
