@@ -1058,10 +1058,21 @@ class UmAggressiveBot:
             safe_anchors = self._owner_nodes(state, owner)
         own_castle = state.castle_pos(owner)
         candidate_cells: set[tuple[int, int]] = set()
-        for anchor in safe_anchors[:10]:
-            for dx in range(-4, 5):
-                for dy in range(-4, 5):
-                    if abs(dx) + abs(dy) > 5:
+
+        # First, search broadly enough that an actual escape square can be found
+        # even when all local radii around the bot are still inside the enemy footprint.
+        for x in range(state.width):
+            for y in range(state.height):
+                pos = (x, y)
+                if pos not in enemy_area:
+                    candidate_cells.add(pos)
+
+        # Keep nearby defensive/anchor candidates as stronger local options once
+        # they are outside the enemy footprint.
+        for anchor in safe_anchors[:12]:
+            for dx in range(-6, 7):
+                for dy in range(-6, 7):
+                    if abs(dx) + abs(dy) > 8:
                         continue
                     pos = (anchor[0] + dx, anchor[1] + dy)
                     if state.in_bounds(pos):
@@ -1069,26 +1080,28 @@ class UmAggressiveBot:
         for pos in self._candidate_cells(state, defend=True):
             candidate_cells.add(pos)
         if own_castle is not None:
-            for dx in range(-5, 6):
-                for dy in range(-5, 6):
-                    if abs(dx) + abs(dy) > 6:
+            for dx in range(-7, 8):
+                for dy in range(-7, 8):
+                    if abs(dx) + abs(dy) > 9:
                         continue
                     pos = (own_castle[0] + dx, own_castle[1] + dy)
                     if state.in_bounds(pos):
                         candidate_cells.add(pos)
 
-        ranked: list[tuple[tuple[int, int, int], tuple[int, int], int]] = []
+        ranked: list[tuple[tuple[int, int, int, int], tuple[int, int], int]] = []
         for pos in candidate_cells:
-            outside = 0 if pos not in enemy_area else 1
+            if pos in enemy_area:
+                continue
             anchor_dist = min((self._manhattan(pos, anchor) for anchor in safe_anchors), default=99)
             enemy_dist = min((self._manhattan(pos, cell) for cell in enemy_area), default=99)
-            ranked.append(((outside, anchor_dist, enemy_dist), pos, anchor_dist))
+            castle_dist = self._manhattan(pos, own_castle) if own_castle is not None else 99
+            # Prefer squares outside the footprint, close enough to a safe anchor to
+            # influence any enemy path between them, but not hugging the enemy area.
+            ranked.append(((anchor_dist, -enemy_dist, castle_dist, pos[1] * state.width + pos[0]), pos, anchor_dist))
         ranked.sort(key=lambda item: item[0])
 
         actions: list[dict[str, object]] = []
-        for _, pos, anchor_dist in ranked[:70]:
-            if pos in enemy_area:
-                continue
+        for _, pos, anchor_dist in ranked[:140]:
             sim = deepcopy(state)
             sim.current_owner = owner
             ok, _ = sim.commit_place_node(*pos)
@@ -1103,6 +1116,8 @@ class UmAggressiveBot:
                 'escape': True,
                 'anchor_dist': anchor_dist,
             })
+            # Strongly reward truly escaping the footprint with some stand-off from it.
+            score += min(160, min((self._manhattan(pos, cell) for cell in enemy_area), default=8) * 10)
             actions.append({
                 'score': score,
                 'action': {'type': 'um_node', 'x': pos[0], 'y': pos[1], 'label': f'Bot placed a node at {pos[0]},{pos[1]}.'},
