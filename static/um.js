@@ -352,7 +352,7 @@ function drawBoard() {
   ctx.fillStyle = '#0a0f14';
   ctx.fillRect(0, 0, board.width, board.height);
 
-  const altBoardColor = '#d9d9d9';
+  const altBoardColor = '#999999';
   const fillCheckerCell = (gx, gy, alpha = 1) => {
     ctx.save();
     ctx.globalAlpha = alpha;
