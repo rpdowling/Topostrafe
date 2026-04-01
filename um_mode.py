@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -756,3 +757,354 @@ class UmGameState:
             return False, self.win_reason or "Game over."
         self.current_owner = 1 - self.current_owner
         return True, f"{self.owner_name(self.current_owner)} to move."
+
+class UmAggressiveBot:
+    def __init__(self, owner: int = 1):
+        self.owner = int(owner)
+
+    @staticmethod
+    def _manhattan(a: tuple[int, int], b: tuple[int, int]) -> int:
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+    def _owner_nodes(self, state: UmGameState, owner: int) -> list[tuple[int, int]]:
+        return [pos for pos, node in state.nodes.items() if node.owner == owner]
+
+    def _owner_graph(self, state: UmGameState, owner: int) -> dict[tuple[int, int], set[tuple[int, int]]]:
+        graph = {pos: set() for pos, node in state.nodes.items() if node.owner == owner}
+        for path in state.paths.values():
+            if path.owner != owner or len(path.cells) < 2:
+                continue
+            a = path.cells[0]
+            b = path.cells[-1]
+            if a in graph and b in graph:
+                graph[a].add(b)
+                graph[b].add(a)
+        return graph
+
+    def _castle_component(self, state: UmGameState, owner: int) -> set[tuple[int, int]]:
+        castle = state.castle_pos(owner)
+        if castle is None:
+            return set()
+        graph = self._owner_graph(state, owner)
+        if castle not in graph:
+            return {castle}
+        seen = {castle}
+        q = deque([castle])
+        while q:
+            cur = q.popleft()
+            for nxt in graph.get(cur, ()):
+                if nxt in seen:
+                    continue
+                seen.add(nxt)
+                q.append(nxt)
+        return seen
+
+    def _footprint_cells(self, state: UmGameState, owner: int) -> set[tuple[int, int]]:
+        comp = self._castle_component(state, owner)
+        if not comp:
+            comp = set(self._owner_nodes(state, owner))
+        cells = set(comp)
+        for path in state.paths.values():
+            if path.owner != owner or len(path.cells) < 2:
+                continue
+            if path.cells[0] in comp and path.cells[-1] in comp:
+                cells.update(path.cells)
+        return cells
+
+    def _simple_routes(self, state: UmGameState, start: tuple[int, int], end: tuple[int, int]) -> list[list[tuple[int, int]]]:
+        if start == end:
+            return []
+        routes: list[list[tuple[int, int]]] = []
+        if start[0] == end[0] or start[1] == end[1]:
+            route = []
+            if start[0] == end[0]:
+                step = 1 if end[1] >= start[1] else -1
+                for y in range(start[1], end[1] + step, step):
+                    route.append((start[0], y))
+            else:
+                step = 1 if end[0] >= start[0] else -1
+                for x in range(start[0], end[0] + step, step):
+                    route.append((x, start[1]))
+            if all(state.in_bounds(cell) for cell in route):
+                routes.append(route)
+            return routes
+
+        cx1 = (end[0], start[1])
+        route1 = []
+        step = 1 if end[0] >= start[0] else -1
+        for x in range(start[0], end[0] + step, step):
+            route1.append((x, start[1]))
+        step = 1 if end[1] >= start[1] else -1
+        for y in range(start[1] + step, end[1] + step, step):
+            route1.append((end[0], y))
+        if all(state.in_bounds(cell) for cell in route1):
+            routes.append(route1)
+
+        route2 = []
+        step = 1 if end[1] >= start[1] else -1
+        for y in range(start[1], end[1] + step, step):
+            route2.append((start[0], y))
+        step = 1 if end[0] >= start[0] else -1
+        for x in range(start[0] + step, end[0] + step, step):
+            route2.append((x, end[1]))
+        if route2 != route1 and all(state.in_bounds(cell) for cell in route2):
+            routes.append(route2)
+        return routes
+
+    def _potential_path_area(self, state: UmGameState, owner: int) -> set[tuple[int, int]]:
+        nodes = self._owner_nodes(state, owner)
+        if not nodes:
+            return set()
+        area = set(nodes)
+        nodes = sorted(nodes, key=lambda p: (p[0], p[1]))[:18]
+        for i, a in enumerate(nodes):
+            for b in nodes[i + 1:]:
+                if self._manhattan(a, b) > max(state.width, state.height):
+                    continue
+                for route in self._simple_routes(state, a, b):
+                    area.update(route)
+        return area
+
+    def _must_defend(self, state: UmGameState) -> bool:
+        owner = self.owner
+        enemy = 1 - owner
+        castle = state.castle_pos(owner)
+        if castle is None:
+            return False
+        enemy_walls = state._owner_wall_cells(enemy)
+        hostile_adj = 0
+        open_adj = 0
+        for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
+            np = (castle[0] + dx, castle[1] + dy)
+            if not state.in_bounds(np):
+                continue
+            if np in enemy_walls:
+                hostile_adj += 1
+            else:
+                open_adj += 1
+        enemy_nodes = self._owner_nodes(state, enemy)
+        nearest_enemy = min((self._manhattan(castle, pos) for pos in enemy_nodes), default=99)
+        return hostile_adj >= 2 or nearest_enemy <= 3 or open_adj <= 2
+
+    def _enemy_can_cut_node_next(self, state: UmGameState, pos: tuple[int, int]) -> bool:
+        enemy = 1 - self.owner
+        if pos not in state.nodes:
+            return False
+        if pos in state._orth_node_surround_kills(enemy):
+            return True
+        enemy_nodes = self._owner_nodes(state, enemy)
+        if len(enemy_nodes) < 2:
+            return False
+        lim = max(state.width, state.height) + 4
+        for i, a in enumerate(enemy_nodes):
+            for b in enemy_nodes[i + 1:]:
+                if self._manhattan(a, b) > lim:
+                    continue
+                for route in self._simple_routes(state, a, b):
+                    if pos not in set(route[1:-1]):
+                        continue
+                    sim = deepcopy(state)
+                    sim.current_owner = enemy
+                    ok, _ = sim.commit_place_paths([route])
+                    if ok and pos not in sim.nodes:
+                        return True
+        return False
+
+    def _count_owner(self, state: UmGameState, owner: int) -> tuple[int, int]:
+        node_count = sum(1 for node in state.nodes.values() if node.owner == owner)
+        path_count = sum(1 for path in state.paths.values() if path.owner == owner)
+        return node_count, path_count
+
+    def _score_state(self, before: UmGameState, after: UmGameState, meta: dict[str, object]) -> int:
+        owner = self.owner
+        enemy = 1 - owner
+        if after.winner == owner:
+            return 1_000_000
+        if after.winner == enemy:
+            return -1_000_000
+
+        before_enemy_nodes, before_enemy_paths = self._count_owner(before, enemy)
+        after_enemy_nodes, after_enemy_paths = self._count_owner(after, enemy)
+        before_own_nodes, before_own_paths = self._count_owner(before, owner)
+        after_own_nodes, after_own_paths = self._count_owner(after, owner)
+
+        removed_enemy_nodes = before_enemy_nodes - after_enemy_nodes
+        removed_enemy_paths = before_enemy_paths - after_enemy_paths
+        removed_own_nodes = before_own_nodes - after_own_nodes
+        removed_own_paths = before_own_paths - after_own_paths
+
+        enemy_castle = after.castle_pos(enemy) or before.castle_pos(enemy)
+        enemy_footprint = self._footprint_cells(before, enemy)
+        enemy_path_area = self._potential_path_area(before, enemy)
+        own_castle = after.castle_pos(owner) or before.castle_pos(owner)
+        defend = bool(meta.get('defend'))
+
+        score = 0
+        score += removed_enemy_nodes * 340 + removed_enemy_paths * 150
+        score -= removed_own_nodes * 420 + removed_own_paths * 170
+
+        if meta.get('kind') == 'node':
+            pos = meta['pos']
+            d_foot = min((self._manhattan(pos, cell) for cell in enemy_footprint), default=12)
+            score += max(0, 34 - 8 * d_foot)
+            if pos in enemy_path_area:
+                score -= 90
+            if own_castle is not None and defend:
+                score += max(0, 42 - 10 * self._manhattan(pos, own_castle))
+            if self._enemy_can_cut_node_next(after, pos):
+                score -= 260
+            else:
+                score += 70
+
+        if meta.get('kind') == 'path':
+            route = meta['segments'][0]
+            internal = set(route[1:-1])
+            route_len = max(1, len(route) - 1)
+            score -= route_len * 4
+            if enemy_footprint:
+                near = min((min(self._manhattan(cell, fp) for fp in enemy_footprint) for cell in internal), default=12)
+                score += max(0, 42 - 7 * near)
+            if own_castle is not None and defend:
+                near_castle = min((self._manhattan(cell, own_castle) for cell in route), default=12)
+                score += max(0, 54 - 11 * near_castle)
+            if internal & enemy_path_area:
+                score += 55
+
+        if enemy_castle is not None:
+            own_nodes_after = self._owner_nodes(after, owner)
+            if own_nodes_after:
+                score += max(0, 30 - min(self._manhattan(pos, enemy_castle) for pos in own_nodes_after) * 3)
+        return score
+
+    def _candidate_cells(self, state: UmGameState, defend: bool) -> list[tuple[int, int]]:
+        owner = self.owner
+        enemy = 1 - owner
+        enemy_footprint = self._footprint_cells(state, enemy)
+        own_castle = state.castle_pos(owner)
+        own_nodes = self._owner_nodes(state, owner)
+        cells: set[tuple[int, int]] = set()
+
+        seeds = set(enemy_footprint) if enemy_footprint else set(self._owner_nodes(state, enemy))
+        for sx, sy in seeds:
+            for dx in range(-2, 3):
+                for dy in range(-2, 3):
+                    if abs(dx) + abs(dy) > 3:
+                        continue
+                    pos = (sx + dx, sy + dy)
+                    if state.in_bounds(pos):
+                        cells.add(pos)
+        for sx, sy in own_nodes[:18]:
+            for dx in range(-2, 3):
+                for dy in range(-2, 3):
+                    if abs(dx) + abs(dy) > 3:
+                        continue
+                    pos = (sx + dx, sy + dy)
+                    if state.in_bounds(pos):
+                        cells.add(pos)
+        if own_castle is not None:
+            for dx in range(-3, 4):
+                for dy in range(-3, 4):
+                    if abs(dx) + abs(dy) > 4:
+                        continue
+                    pos = (own_castle[0] + dx, own_castle[1] + dy)
+                    if state.in_bounds(pos):
+                        cells.add(pos)
+
+        def prescore(pos: tuple[int, int]) -> tuple[int, int]:
+            d_enemy = min((self._manhattan(pos, cell) for cell in seeds), default=99)
+            d_castle = self._manhattan(pos, own_castle) if own_castle is not None else 99
+            if defend:
+                return (d_castle, d_enemy)
+            return (d_enemy, d_castle)
+
+        return sorted(cells, key=prescore)[:50]
+
+    def _generate_node_actions(self, state: UmGameState, defend: bool) -> list[dict[str, object]]:
+        actions: list[dict[str, object]] = []
+        for pos in self._candidate_cells(state, defend):
+            sim = deepcopy(state)
+            sim.current_owner = self.owner
+            ok, _ = sim.commit_place_node(*pos)
+            if not ok:
+                continue
+            score = self._score_state(state, sim, {'kind': 'node', 'pos': pos, 'defend': defend})
+            actions.append({
+                'score': score,
+                'action': {'type': 'um_node', 'x': pos[0], 'y': pos[1], 'label': f'Bot placed a node at {pos[0]},{pos[1]}.'},
+            })
+        return actions
+
+    def _path_candidate_pairs(self, state: UmGameState, defend: bool) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+        owner = self.owner
+        enemy = 1 - owner
+        own_nodes = self._owner_nodes(state, owner)
+        enemy_footprint = self._footprint_cells(state, enemy)
+        own_castle = state.castle_pos(owner)
+        pairs: list[tuple[tuple[int, int], tuple[int, int], tuple[int, int]]] = []
+        for i, a in enumerate(own_nodes):
+            for b in own_nodes[i + 1:]:
+                if self._manhattan(a, b) < 2:
+                    continue
+                if self._manhattan(a, b) > max(state.width, state.height) + 2:
+                    continue
+                metric = min((self._manhattan(a, cell) + self._manhattan(b, cell) for cell in enemy_footprint), default=99)
+                if defend and own_castle is not None:
+                    metric = min(metric, self._manhattan(a, own_castle) + self._manhattan(b, own_castle))
+                pairs.append((metric, a, b))
+        pairs.sort(key=lambda item: item[0])
+        return [(a, b) for _, a, b in pairs[:40]]
+
+    def _generate_path_actions(self, state: UmGameState, defend: bool) -> list[dict[str, object]]:
+        actions: list[dict[str, object]] = []
+        for a, b in self._path_candidate_pairs(state, defend):
+            for route in self._simple_routes(state, a, b):
+                sim = deepcopy(state)
+                sim.current_owner = self.owner
+                ok, _ = sim.commit_place_paths([route])
+                if not ok:
+                    continue
+                score = self._score_state(state, sim, {'kind': 'path', 'segments': [route], 'defend': defend})
+                actions.append({
+                    'score': score,
+                    'action': {'type': 'um_paths', 'segments': [route], 'label': f'Bot drew a path from {a} to {b}.'},
+                })
+        return actions
+
+    def _choose_starter(self, state: UmGameState) -> dict[str, object]:
+        owner = self.owner
+        mid = state.width / 2.0
+        candidates = []
+        for x in range(state.width):
+            for y in range(state.height):
+                if owner == 0 and not (x < mid):
+                    continue
+                if owner == 1 and not (x >= mid):
+                    continue
+                if (x, y) in state.nodes:
+                    continue
+                edge_bonus = 0 if state._is_edge_pos((x, y)) else 3
+                center_bias = abs(y - state.height / 2.0)
+                x_bias = abs(x - (state.width - 1 if owner == 1 else 0))
+                candidates.append((edge_bonus + center_bias + x_bias, x, y))
+        candidates.sort()
+        _, x, y = candidates[0]
+        return {'type': 'starter', 'x': int(x), 'y': int(y), 'label': 'Bot placed a castle.'}
+
+    def choose_action(self, state: UmGameState) -> dict[str, object]:
+        if not state.has_starter(self.owner):
+            return self._choose_starter(state)
+        defend = self._must_defend(state)
+        actions = self._generate_node_actions(state, defend)
+        actions.extend(self._generate_path_actions(state, defend))
+        if not actions:
+            # Fallback: first legal node placement.
+            for x in range(state.width):
+                for y in range(state.height):
+                    sim = deepcopy(state)
+                    sim.current_owner = self.owner
+                    ok, _ = sim.commit_place_node(x, y)
+                    if ok:
+                        return {'type': 'um_node', 'x': int(x), 'y': int(y), 'label': f'Bot placed a node at {x},{y}.'}
+            return {'type': 'starter', 'x': 0, 'y': 0, 'label': 'Bot could not move.'}
+        actions.sort(key=lambda item: item['score'], reverse=True)
+        return actions[0]['action']

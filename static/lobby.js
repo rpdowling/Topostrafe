@@ -145,9 +145,12 @@ function collectPayload() {
 }
 
 
+let umVsBot = false;
+
 function collectUmPayload() {
   return {
     game_mode: 'um',
+    vs_bot: umVsBot,
     is_private: !!el('um_is_private')?.checked,
     join_code: el('um_join_code')?.value.trim() || '',
     um_settings: {
@@ -184,6 +187,18 @@ function submitBotGame() {
 
 function submitNormalGame() {
   el('vs_bot').checked = false;
+}
+
+function submitUmNormalGame() {
+  umVsBot = false;
+  setStatus('');
+  el('um-form').requestSubmit();
+}
+
+function submitUmBotGame() {
+  umVsBot = true;
+  setStatus('');
+  el('um-form').requestSubmit();
 }
 
 async function createGame(evt) {
@@ -289,7 +304,8 @@ el('play-button').addEventListener('click', submitNormalGame);
 el('bot-button').addEventListener('click', submitBotGame);
 el('create-form').addEventListener('submit', createGame);
 if (el('um-form')) el('um-form').addEventListener('submit', createUmGame);
-if (el('um-play-button')) el('um-play-button').addEventListener('click', () => setStatus(''));
+if (el('um-play-button')) el('um-play-button').addEventListener('click', (evt) => { evt.preventDefault(); submitUmNormalGame(); });
+if (el('um-bot-button')) el('um-bot-button').addEventListener('click', (evt) => { evt.preventDefault(); submitUmBotGame(); });
 el('join-private-form').addEventListener('submit', joinPrivate);
 hookInfoModal();
 refreshGames();

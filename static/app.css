@@ -21,7 +21,7 @@ body {
 body.menu-page {
   position: relative;
   background:
-    linear-gradient(rgba(15,20,26,0.62), rgba(15,20,26,0.62)),
+    linear-gradient(rgba(15,20,26,0.88), rgba(15,20,26,0.88)),
     url("/static/Background_topostrafe.PNG") center center / cover no-repeat fixed;
 }
 body.menu-page::before {
@@ -900,6 +900,17 @@ body.info-modal-open {
 }
 .um-play-button:hover {
   background: linear-gradient(180deg, #f6e07e 0%, #d4b43f 100%);
+}
+
+.um-hero-actions-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.um-bot-button {
+  min-width: 160px;
+  align-self: center;
 }
 .um-layout .mode-buttons {
   grid-template-columns: repeat(2, 1fr);

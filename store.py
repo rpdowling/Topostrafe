@@ -68,7 +68,7 @@ class GameSession:
     is_private: bool
     join_code: str | None
     vs_bot: bool = False
-    bot: eng.HeuristicBot | None = None
+    bot: Any = None
     status: str = "open"
     created_at: float = field(default_factory=time.time)
     seat_keys: dict[int, str | None] = field(default_factory=lambda: {0: None, 1: None})
@@ -330,6 +330,7 @@ class GameStore:
             if game_mode == "um":
                 settings = self._um_settings_from_payload(payload)
                 map_data = None
+                vs_bot = bool(payload.get("vs_bot", False))
                 state = um.UmGameState(settings)
                 game = GameSession(
                     game_id=game_id,
@@ -338,11 +339,18 @@ class GameStore:
                     state=state,
                     is_private=is_private,
                     join_code=join_code,
-                    vs_bot=False,
-                    bot=None,
+                    vs_bot=vs_bot,
+                    bot=um.UmAggressiveBot(1) if vs_bot else None,
                     game_mode="um",
                 )
-                game.log.append("Um game created. Waiting for opponent.")
+                if vs_bot:
+                    game.seat_keys[1] = "BOT"
+                    game.status = "active"
+                    game.abandon_delete_at = None
+                    game.turn_started_at = time.monotonic()
+                    game.log.append("Um game created vs bot.")
+                else:
+                    game.log.append("Um game created. Waiting for opponent.")
             else:
                 settings_payload = dict(payload.get("settings", {}))
                 if "size_preset" in payload and "size_preset" not in settings_payload:
@@ -483,7 +491,7 @@ class GameStore:
                     "status": game.status,
                     "is_private": game.is_private,
                     "join_code": game.join_code if seat == 0 or seat == 1 else None,
-                    "vs_bot": False,
+                    "vs_bot": game.vs_bot,
                     "my_seat": seat,
                     "my_name": game.owner_name(seat) if seat is not None else "Spectator",
                     "current_owner": state.current_owner,
@@ -801,13 +809,22 @@ class GameStore:
         with self.lock:
             self._prune_expired_open_games_locked()
             game = self.games.get(game_id)
-            if game is None or game.game_mode != "topostrafe" or not game.vs_bot or game.bot is None:
+            if game is None or not game.vs_bot or game.bot is None:
                 return None
             if game.status != "active" or game.state.winner is not None or game.state.current_owner != 1:
                 return None
             self._check_timeout_passively(game)
             if game.state.winner is not None:
                 return game.state.win_reason
+            if game.game_mode == "um":
+                action = game.bot.choose_action(game.state)
+                label = action.get("label", "Bot moved.")
+                msg = self._execute_turn_action(game, 1, action)
+                if game.state.winner is not None:
+                    game.status = "finished"
+                msg = f"{label} {msg}".strip()
+                game.log.append(msg)
+                return msg
             action = game.bot.choose_action(game.state)
             label = action.get("label", "Bot moved.")
             if action["kind"] == "starter":
