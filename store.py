@@ -114,7 +114,7 @@ class GameStore:
     def defaults(self) -> dict[str, Any]:
         d = eng.GameSettings()
         d.map_type = "River"
-        um_defaults = um.UmSettings(board_width=6, board_height=6, require_move_confirmation=False, infinite_board=True)
+        um_defaults = um.UmSettings(board_width=6, board_height=6, require_move_confirmation=False, infinite_board=True, time_limit_enabled=True, time_bank_seconds=300)
         return {
             "settings": d.__dict__.copy(),
             "map_types": MAP_TYPES,
@@ -129,6 +129,8 @@ class GameStore:
                 "require_move_confirmation": um_defaults.require_move_confirmation,
                 "size_preset": "small",
                 "infinite_board": um_defaults.infinite_board,
+                "time_limit_enabled": um_defaults.time_limit_enabled,
+                "time_bank_seconds": um_defaults.time_bank_seconds,
             },
             "um_board_colors": um.BOARD_COLORS,
             "um_size_presets": {name: {"board_width": size[0], "board_height": size[1]} for name, size in um.SIZE_PRESETS.items()},
@@ -219,6 +221,8 @@ class GameStore:
                             "size": f"{game.state.width}x{game.state.height}",
                             "max_corners": game.settings.max_corners,
                             "board_color": game.settings.board_color,
+                            "time_limit_enabled": game.settings.time_limit_enabled,
+                            "time_bank_seconds": game.settings.time_bank_seconds,
                             "created_at": game.created_at,
                         }
                     )
@@ -274,6 +278,8 @@ class GameStore:
         board_color = str(raw.get("board_color", "yellow") or "yellow").strip().lower()
         require_move_confirmation = bool(raw.get("require_move_confirmation", False))
         infinite_board = bool(raw.get("infinite_board", True))
+        time_limit_enabled = bool(raw.get("time_limit_enabled", True))
+        time_bank_seconds = max(10, min(24 * 3600, int(raw.get("time_bank_seconds", 300))))
         if board_color not in um.BOARD_COLORS:
             board_color = "yellow"
         return um.UmSettings(
@@ -283,6 +289,8 @@ class GameStore:
             board_color=board_color,
             require_move_confirmation=require_move_confirmation,
             infinite_board=infinite_board,
+            time_limit_enabled=time_limit_enabled,
+            time_bank_seconds=time_bank_seconds,
         )
 
     def _map_from_payload(self, settings: eng.GameSettings, payload: dict[str, Any]) -> eng.MapData:
@@ -484,7 +492,10 @@ class GameStore:
                     "winner_name": game.owner_name(state.winner) if state.winner is not None else None,
                     "win_reason": state.win_reason,
                     "starter_placed": list(state.starter_placed),
-                    "time_remaining": {"0": 0.0, "1": 0.0},
+                    "time_remaining": {
+                        "0": self._effective_time_remaining(game, 0),
+                        "1": self._effective_time_remaining(game, 1),
+                    },
                     "settings": {
                         "board_width": game.settings.board_width,
                         "board_height": game.settings.board_height,
@@ -492,7 +503,7 @@ class GameStore:
                         "board_color": game.settings.board_color,
                         "require_move_confirmation": game.settings.require_move_confirmation,
                         "infinite_board": getattr(game.settings, "infinite_board", True),
-                        "time_limit_enabled": False,
+                        "time_limit_enabled": bool(getattr(game.settings, "time_limit_enabled", True)),
                         "time_bank_seconds": game.settings.time_bank_seconds,
                     },
                     "board": {
@@ -508,6 +519,8 @@ class GameStore:
                     "paths": paths,
                     "log": game.log[-16:],
                     "chat": game.chat[-100:],
+                    "my_premove": (seat is not None and game.pending_premoves.get(seat) is not None),
+                    "my_premove_action": (deepcopy(game.pending_premoves.get(seat)) if seat is not None else None),
                 }
             nodes = [
                 {"x": x, "y": y, "owner": node.owner, "starter": node.starter, "fort": bool(getattr(node, "fort", False)), "sapper": bool(getattr(node, "sapper", False)), "sap_dir": list(getattr(node, "sap_dir", []) or [])}
@@ -594,7 +607,13 @@ class GameStore:
             if t == "starter":
                 return {"type": "starter", "x": int(action["x"]), "y": int(action["y"])}
             if t == "um_node":
-                return {"type": "um_node", "x": int(action["x"]), "y": int(action["y"])}
+                payload = {"type": "um_node", "x": int(action["x"]), "y": int(action["y"])}
+                if isinstance(action.get("preview_ref"), dict):
+                    payload["preview_ref"] = {
+                        "width": int(action["preview_ref"].get("width", 0)),
+                        "height": int(action["preview_ref"].get("height", 0)),
+                    }
+                return payload
             if t == "um_paths":
                 segments = []
                 for seg in action.get("segments", []):
@@ -696,6 +715,27 @@ class GameStore:
             game.turn_started_at = time.monotonic() if game.settings.time_limit_enabled else game.turn_started_at
         return msg
 
+    def _resolve_um_premove_preview(self, game: GameSession, queued: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not queued or game.game_mode != "um" or queued.get("type") != "um_node":
+            return queued
+        x = int(queued.get("x", 0))
+        y = int(queued.get("y", 0))
+        if game.state.in_bounds((x, y)):
+            return queued
+        preview_ref = queued.get("preview_ref")
+        if not isinstance(preview_ref, dict):
+            return None
+        ref_w = int(preview_ref.get("width", -1))
+        ref_h = int(preview_ref.get("height", -1))
+        if game.state.width != ref_w + 2 or game.state.height != ref_h + 2:
+            return None
+        remapped = deepcopy(queued)
+        remapped["x"] = x + 1
+        remapped["y"] = y + 1
+        if not game.state.in_bounds((int(remapped["x"]), int(remapped["y"]))):
+            return None
+        return remapped
+
     def _apply_due_premoves(self, game: GameSession) -> list[str]:
         notes: list[str] = []
         loops = 0
@@ -706,7 +746,10 @@ class GameStore:
                 break
             game.pending_premoves[seat] = None
             try:
-                msg = self._execute_turn_action(game, seat, deepcopy(queued))
+                resolved = self._resolve_um_premove_preview(game, deepcopy(queued))
+                if resolved is None:
+                    raise ValueError("discard")
+                msg = self._execute_turn_action(game, seat, resolved)
                 notes.append(f"{game.owner_name(seat)} premove: {msg}")
             except Exception:
                 notes.append(f"{game.owner_name(seat)} premove discarded.")

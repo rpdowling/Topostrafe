@@ -14,6 +14,7 @@ let currentSegment = null;
 let hoverCell = null;
 let fadeEffects = [];
 let lastBoardCenterSignature = '';
+let latestStateReceivedAt = 0;
 
 const PLAYER_COLORS = { 0: '#ff00ff', 1: '#ffffff' };
 const PLAYER_OUTLINES = { 0: '#1a001c', 1: '#000000' };
@@ -51,6 +52,7 @@ function connect() {
 function receiveState(state) {
   previousState = latestState;
   latestState = state;
+  latestStateReceivedAt = performance.now();
   captureFadeEffects(previousState, latestState);
   renderState();
 }
@@ -81,8 +83,46 @@ function isMyTurn() {
   return latestState && mySeat() !== null && latestState.current_owner === mySeat() && latestState.status === 'active' && latestState.winner === null;
 }
 
+function canDraftOrQueue() {
+  return latestState && mySeat() !== null && latestState.status === 'active' && latestState.winner === null;
+}
+
 function requireMoveConfirmation() {
   return !!latestState?.settings?.require_move_confirmation;
+}
+
+function isActiveBoardCell(cell) {
+  if (!latestState || !cell) return false;
+  return cell[0] >= 0 && cell[1] >= 0 && cell[0] < (latestState.board?.width || 0) && cell[1] < (latestState.board?.height || 0);
+}
+
+function isPreviewRingCell(cell) {
+  if (!latestState || !cell) return false;
+  if (isActiveBoardCell(cell)) return false;
+  const px = latestState.board?.preview_margin_x || 0;
+  const py = latestState.board?.preview_margin_y || 0;
+  if (px <= 0 && py <= 0) return false;
+  const minX = -px;
+  const minY = -py;
+  const maxX = (latestState.board?.width || 0) + px - 1;
+  const maxY = (latestState.board?.height || 0) + py - 1;
+  return cell[0] >= minX && cell[1] >= minY && cell[0] <= maxX && cell[1] <= maxY;
+}
+
+function formatClock(seconds) {
+  const safe = Math.max(0, Math.floor(seconds));
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
+function displayedClock(owner) {
+  if (!latestState) return 0;
+  let remaining = Number(latestState.time_remaining?.[String(owner)] || 0);
+  if (latestState.status === 'active' && latestState.winner === null && latestState.settings?.time_limit_enabled && latestState.current_owner === owner && latestStateReceivedAt) {
+    remaining -= Math.max(0, (performance.now() - latestStateReceivedAt) / 1000);
+  }
+  return Math.max(0, remaining);
 }
 
 function nodeMap() {
@@ -100,6 +140,43 @@ function nodeAt(cell) {
   return (latestState.nodes || []).find(n => n.x === cell[0] && n.y === cell[1]) || null;
 }
 
+function normalizePremoveAction(action) {
+  if (!action || typeof action !== 'object') return null;
+  if (action.type === 'starter') return { type: 'starter', x: Number(action.x), y: Number(action.y) };
+  if (action.type === 'um_node') {
+    const out = { type: 'um_node', x: Number(action.x), y: Number(action.y) };
+    if (action.preview_ref && typeof action.preview_ref === 'object') {
+      out.preview_ref = { width: Number(action.preview_ref.width || 0), height: Number(action.preview_ref.height || 0) };
+    }
+    return out;
+  }
+  if (action.type === 'um_paths') return { type: 'um_paths', segments: (action.segments || []).map(seg => seg.map(c => [Number(c[0]), Number(c[1])])) };
+  return { type: String(action.type || '') };
+}
+
+function premoveActionsEqual(a, b) {
+  return JSON.stringify(normalizePremoveAction(a)) === JSON.stringify(normalizePremoveAction(b));
+}
+
+function myPremoveAction() {
+  return latestState ? normalizePremoveAction(latestState.my_premove_action) : null;
+}
+
+function sendUmAction(payload) {
+  if (isMyTurn()) {
+    send(payload);
+    return;
+  }
+  if (!canDraftOrQueue()) return;
+  const queued = myPremoveAction();
+  if (queued && premoveActionsEqual(queued, payload)) {
+    send({ type: 'clear_premove' });
+    setStatus('Premove cleared.');
+    return;
+  }
+  send({ type: 'premove', action: payload });
+  setStatus('Premove queued.');
+}
 
 function boardDimensions() {
   const activeW = latestState?.board?.width || 10;
@@ -224,7 +301,6 @@ function eventToCell(evt) {
   if (tx < 0 || ty < 0 || tx >= m.totalW || ty >= m.totalH) return null;
   const cx = tx - m.previewX;
   const cy = ty - m.previewY;
-  if (cx < 0 || cy < 0 || cx >= m.width || cy >= m.height) return null;
   return [cx, cy];
 }
 
@@ -250,13 +326,21 @@ function renderMeta() {
   el('winner-line').textContent = latestState.win_reason || '';
   el('castle0').textContent = latestState.starter_placed?.[0] ? 'Placed' : 'Unplaced';
   el('castle1').textContent = latestState.starter_placed?.[1] ? 'Placed' : 'Unplaced';
+  const clock0 = el('um_clock0');
+  const clock1 = el('um_clock1');
+  if (clock0) clock0.textContent = latestState.settings?.time_limit_enabled ? formatClock(displayedClock(0)) : 'No clock';
+  if (clock1) clock1.textContent = latestState.settings?.time_limit_enabled ? formatClock(displayedClock(1)) : 'No clock';
   const draftCount = (currentSegment && currentSegment.length > 1 ? 1 : 0) + draftSegments.length + (pendingNode ? 1 : 0);
   el('segment-count').textContent = String(draftCount);
-  el('share-line').textContent = latestState.join_code ? `Code: ${latestState.join_code}` : '';
+  if (latestState.is_private && latestState.join_code) el('share-line').textContent = `Code: ${latestState.join_code}`;
+  else el('share-line').textContent = latestState.status === 'open' ? `Share this URL: ${window.location.href}` : '';
   const stat0 = el('stat-player0');
   const stat1 = el('stat-player1');
   if (stat0) stat0.classList.toggle('active-turn', latestState.current_owner === 0 && latestState.winner === null);
   if (stat1) stat1.classList.toggle('active-turn', latestState.current_owner === 1 && latestState.winner === null);
+  if (latestState.my_premove && !isMyTurn() && latestState.winner === null) {
+    setStatus('Premove queued.');
+  }
   renderLog();
   renderChat();
   renderDraftLine();
@@ -331,7 +415,7 @@ function renderDraftLine() {
 
 function updateActionButtons() {
   const canConfirmNode = false;
-  const canConfirmPath = isMyTurn() && draftSegments.length > 0 && (!currentSegment || currentSegment.length <= 1);
+  const canConfirmPath = canDraftOrQueue() && draftSegments.length > 0 && (!currentSegment || currentSegment.length <= 1);
   const confirmButton = el('commit-path');
   const showConfirm = requireMoveConfirmation() || draftSegments.length > 0;
   if (confirmButton) {
@@ -352,7 +436,7 @@ function drawBoard() {
   ctx.fillStyle = '#0a0f14';
   ctx.fillRect(0, 0, board.width, board.height);
 
-  const altBoardColor = '#999999';
+  const altBoardColor = '#d9d9d9';
   const fillCheckerCell = (gx, gy, alpha = 1) => {
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -538,20 +622,22 @@ function drawFadeEffects(m) {
 function cleanupDraftIfInvalid() {
   if (!latestState) return;
   const seat = mySeat();
-  if (seat === null) {
-    clearDraft();
+  if (seat === null || !canDraftOrQueue()) {
+    pendingNode = null;
+    currentSegment = null;
+    draftSegments = [];
     return;
   }
   if (pendingNode) {
     const nk = keyOf(pendingNode);
     const occ = pathOccupancy();
     const occPaths = occ.get(nk) || [];
-    if (nodeAt(pendingNode) || occPaths.some(path => path.owner !== seat)) pendingNode = null;
+    if (nodeAt(pendingNode) || occPaths.some(path => path.owner !== seat) || (!isActiveBoardCell(pendingNode) && !isPreviewRingCell(pendingNode))) pendingNode = null;
   }
   draftSegments = draftSegments.filter(seg => Array.isArray(seg) && seg.length >= 2 && seg.every(cell => Array.isArray(cell) && cell.length === 2));
   if (currentSegment && currentSegment.length) {
     const startNode = nodeAt(currentSegment[0]);
-    if (!startNode || startNode.owner !== seat) currentSegment = null;
+    if (!startNode || startNode.owner !== seat || !isActiveBoardCell(currentSegment[0])) currentSegment = null;
   }
 }
 
@@ -588,6 +674,7 @@ function canDragExtendTo(cell) {
   const seat = mySeat();
   if (!latestState || seat === null || !currentSegment || !currentSegment.length) return false;
   const prev = currentSegment[currentSegment.length - 1];
+  if (!isActiveBoardCell(cell)) return false;
   if (Math.abs(cell[0] - prev[0]) + Math.abs(cell[1] - prev[1]) !== 1) return false;
   if (currentSegment.some(c => sameCell(c, cell))) return false;
   const node = nodeAt(cell);
@@ -622,6 +709,7 @@ function canStepTo(cell) {
   const seat = mySeat();
   if (!latestState || seat === null || !currentSegment || !currentSegment.length) return false;
   const prev = currentSegment[currentSegment.length - 1];
+  if (!isActiveBoardCell(cell)) return false;
   if (Math.abs(cell[0] - prev[0]) + Math.abs(cell[1] - prev[1]) !== 1) return false;
   if (currentSegment.some(c => sameCell(c, cell))) return false;
   const node = nodeAt(cell);
@@ -640,19 +728,23 @@ function canStepTo(cell) {
 
 function sendPendingNode() {
   if (!pendingNode) return;
-  send({ type: 'um_node', x: pendingNode[0], y: pendingNode[1] });
+  const payload = { type: 'um_node', x: pendingNode[0], y: pendingNode[1] };
+  if (!isMyTurn() && isPreviewRingCell(pendingNode)) {
+    payload.preview_ref = { width: latestState.board?.width || 0, height: latestState.board?.height || 0 };
+  }
+  sendUmAction(payload);
   pendingNode = null;
   renderState();
 }
 
 function sendPendingPaths() {
   if (!draftSegments.length) return;
-  send({ type: 'um_paths', segments: draftSegments });
+  sendUmAction({ type: 'um_paths', segments: draftSegments });
   clearDraft();
 }
 
 function commitPendingTurn() {
-  if (!isMyTurn()) return;
+  if (!canDraftOrQueue()) return;
   if (pendingNode) {
     sendPendingNode();
     return;
@@ -668,6 +760,12 @@ function handleNodePlacement(cell) {
   const occ = pathOccupancy();
   const nk = keyOf(cell);
   const occPaths = occ.get(nk) || [];
+  const previewCell = isPreviewRingCell(cell);
+  if (previewCell && isMyTurn()) {
+    setStatus('That square is outside the active board.', true);
+    return;
+  }
+  if (!isActiveBoardCell(cell) && !previewCell) return;
   if (nodeAt(cell)) {
     setStatus('That square is occupied.', true);
     return;
@@ -736,14 +834,15 @@ function handleBoardClick(evt) {
   const cell = eventToCell(evt);
   if (!cell) return;
   const seat = mySeat();
-  if (!isMyTurn() || seat === null) return;
+  if (seat === null || !canDraftOrQueue()) return;
   const minePlaced = latestState.starter_placed?.[seat];
   if (!minePlaced) {
+    if (!isActiveBoardCell(cell)) return;
     if (!ownHalf(cell, seat)) {
       setStatus('Your castle must be placed on your side.', true);
       return;
     }
-    send({ type: 'starter', x: cell[0], y: cell[1] });
+    sendUmAction({ type: 'starter', x: cell[0], y: cell[1] });
     return;
   }
 
@@ -776,7 +875,7 @@ function handleBoardClick(evt) {
   }
 
   const node = nodeAt(cell);
-  if (node && node.owner === seat) {
+  if (isActiveBoardCell(cell) && node && node.owner === seat) {
     startPathFrom(cell);
     return;
   }
@@ -786,10 +885,15 @@ function handleBoardClick(evt) {
 
 function handleMouseMove(evt) {
   hoverCell = eventToCell(evt);
-  if (currentSegment && currentSegment.length && isMyTurn() && hoverCell) {
+  if (currentSegment && currentSegment.length && canDraftOrQueue() && hoverCell) {
     extendPathByDrag(hoverCell);
   }
   drawBoard();
+}
+
+function tick() {
+  if (!latestState) return;
+  renderMeta();
 }
 
 function setupUi() {
@@ -798,7 +902,14 @@ function setupUi() {
   board.addEventListener('mouseleave', () => { hoverCell = null; drawBoard(); });
   window.addEventListener('resize', resizeCanvas);
   el('commit-path').addEventListener('click', commitPendingTurn);
-  el('clear-draft').addEventListener('click', clearDraft);
+  el('clear-draft').addEventListener('click', () => {
+    if (!isMyTurn() && myPremoveAction()) {
+      send({ type: 'clear_premove' });
+      setStatus('Premove cleared.');
+      return;
+    }
+    clearDraft();
+  });
   el('resign').addEventListener('click', () => send({ type: 'resign' }));
   el('chat-form').addEventListener('submit', (evt) => {
     evt.preventDefault();

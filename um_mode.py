@@ -26,8 +26,8 @@ class UmSettings:
     board_color: str = "yellow"
     require_move_confirmation: bool = False
     infinite_board: bool = True
-    time_limit_enabled: bool = False
-    time_bank_seconds: int = 600
+    time_limit_enabled: bool = True
+    time_bank_seconds: int = 300
 
 
 @dataclass
