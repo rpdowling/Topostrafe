@@ -523,12 +523,12 @@ function drawBoard() {
   if (!latestState) return;
   cleanupFadeEffects();
   const m = boardMetrics();
-  const boardColor = latestState.board?.color || '#efe3a3';
+  const boardColor = latestState.board?.color || '#bdb37b';
   ctx.clearRect(0, 0, board.width, board.height);
   ctx.fillStyle = '#0a0f14';
   ctx.fillRect(0, 0, board.width, board.height);
 
-  const altBoardColor = '#d9d9d9';
+  const altBoardColor = '#acacac';
   const fillCheckerCell = (gx, gy, alpha = 1) => {
     ctx.save();
     ctx.globalAlpha = alpha;
