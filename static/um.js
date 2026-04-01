@@ -580,10 +580,17 @@ function drawPremovePreview(m) {
   const r = m.cell * 0.26;
   const owner = mySeat() ?? 0;
   ctx.save();
-  ctx.globalAlpha = 0.4;
+  const isWhiteSeat = owner === 1;
+  ctx.globalAlpha = isWhiteSeat ? 0.62 : 0.4;
   ctx.lineWidth = Math.max(2, m.cell * 0.06);
   ctx.strokeStyle = PLAYER_COLORS[owner] || '#ffffff';
   ctx.setLineDash([Math.max(5, m.cell * 0.18), Math.max(3, m.cell * 0.12)]);
+  if (isWhiteSeat) {
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.beginPath();
   ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
   ctx.stroke();
