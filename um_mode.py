@@ -852,15 +852,17 @@ class UmAggressiveBot:
         return routes
 
     def _potential_path_area(self, state: UmGameState, owner: int) -> set[tuple[int, int]]:
-        nodes = self._owner_nodes(state, owner)
+        nodes = sorted(self._owner_nodes(state, owner), key=lambda p: (p[0], p[1]))
         if not nodes:
             return set()
         area = set(nodes)
-        nodes = sorted(nodes, key=lambda p: (p[0], p[1]))[:18]
+        # The bot's "total footprint" should mean every in-bounds square that could
+        # lie on a legal one-segment path between any pair of enemy nodes, not just a
+        # small sampled subset. The earlier sampling cap and distance cutoff made the
+        # footprint too narrow, so the bot sometimes believed it had escaped when it
+        # had not.
         for i, a in enumerate(nodes):
             for b in nodes[i + 1:]:
-                if self._manhattan(a, b) > max(state.width, state.height):
-                    continue
                 for route in self._simple_routes(state, a, b):
                     area.update(route)
         return area
@@ -1059,8 +1061,8 @@ class UmAggressiveBot:
         own_castle = state.castle_pos(owner)
         candidate_cells: set[tuple[int, int]] = set()
 
-        # First, search broadly enough that an actual escape square can be found
-        # even when all local radii around the bot are still inside the enemy footprint.
+        # Search the full active board for real escape squares outside the enemy's
+        # total footprint. Local-radius sampling was still missing some valid exits.
         for x in range(state.width):
             for y in range(state.height):
                 pos = (x, y)
@@ -1100,15 +1102,15 @@ class UmAggressiveBot:
             ranked.append(((anchor_dist, -enemy_dist, castle_dist, pos[1] * state.width + pos[0]), pos, anchor_dist))
         ranked.sort(key=lambda item: item[0])
 
-        actions: list[dict[str, object]] = []
-        for _, pos, anchor_dist in ranked[:140]:
+        safe_actions: list[dict[str, object]] = []
+        risky_actions: list[dict[str, object]] = []
+        for _, pos, anchor_dist in ranked:
             sim = deepcopy(state)
             sim.current_owner = owner
             ok, _ = sim.commit_place_node(*pos)
             if not ok:
                 continue
-            if self._enemy_can_cut_node_next(sim, pos):
-                continue
+            cuttable = self._enemy_can_cut_node_next(sim, pos)
             score = self._score_state(state, sim, {
                 'kind': 'node',
                 'pos': pos,
@@ -1118,11 +1120,16 @@ class UmAggressiveBot:
             })
             # Strongly reward truly escaping the footprint with some stand-off from it.
             score += min(160, min((self._manhattan(pos, cell) for cell in enemy_area), default=8) * 10)
-            actions.append({
+            entry = {
                 'score': score,
                 'action': {'type': 'um_node', 'x': pos[0], 'y': pos[1], 'label': f'Bot placed a node at {pos[0]},{pos[1]}.'},
-            })
-        return actions
+            }
+            if cuttable:
+                entry['score'] -= 500
+                risky_actions.append(entry)
+            else:
+                safe_actions.append(entry)
+        return safe_actions if safe_actions else risky_actions
 
     def _generate_node_actions(self, state: UmGameState, defend: bool) -> list[dict[str, object]]:
         actions: list[dict[str, object]] = []
