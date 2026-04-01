@@ -352,15 +352,28 @@ function drawBoard() {
   ctx.fillStyle = '#0a0f14';
   ctx.fillRect(0, 0, board.width, board.height);
 
-  if (m.previewX > 0 || m.previewY > 0) {
+  const altBoardColor = '#d9d9d9';
+  const fillCheckerCell = (gx, gy, alpha = 1) => {
     ctx.save();
-    ctx.globalAlpha = 0.28;
-    ctx.fillStyle = boardColor;
-    ctx.fillRect(m.ox, m.oy, m.boardW, m.boardH);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = ((gx + gy) % 2 === 0) ? boardColor : altBoardColor;
+    ctx.fillRect(m.ox + gx * m.cell, m.oy + gy * m.cell, m.cell, m.cell);
     ctx.restore();
+  };
+
+  if (m.previewX > 0 || m.previewY > 0) {
+    for (let y = 0; y < m.totalH; y++) {
+      for (let x = 0; x < m.totalW; x++) {
+        const inActive = x >= m.previewX && x < (m.previewX + m.width) && y >= m.previewY && y < (m.previewY + m.height);
+        if (!inActive) fillCheckerCell(x, y, 0.28);
+      }
+    }
   }
-  ctx.fillStyle = boardColor;
-  ctx.fillRect(m.activeOx, m.activeOy, m.activeBoardW, m.activeBoardH);
+  for (let y = 0; y < m.height; y++) {
+    for (let x = 0; x < m.width; x++) {
+      fillCheckerCell(x + m.previewX, y + m.previewY, 1);
+    }
+  }
 
   ctx.strokeStyle = 'rgba(0,0,0,0.22)';
   ctx.lineWidth = 1;
