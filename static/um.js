@@ -523,12 +523,12 @@ function drawBoard() {
   if (!latestState) return;
   cleanupFadeEffects();
   const m = boardMetrics();
-  const boardColor = latestState.board?.color || '#bdb37b';
+  const boardColor = latestState.board?.color || '#efe3a3';
   ctx.clearRect(0, 0, board.width, board.height);
   ctx.fillStyle = '#0a0f14';
   ctx.fillRect(0, 0, board.width, board.height);
 
-  const altBoardColor = '#acacac';
+  const altBoardColor = '#d9d9d9';
   const fillCheckerCell = (gx, gy, alpha = 1) => {
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -702,7 +702,7 @@ function drawPremovePreview(m) {
   const isWhiteSeat = owner === 1;
   ctx.globalAlpha = isWhiteSeat ? 0.62 : 0.4;
   ctx.lineWidth = Math.max(2, m.cell * 0.06);
-  ctx.strokeStyle = isWhiteSeat ? '#292929' : (PLAYER_COLORS[owner] || '#ffffff');
+  ctx.strokeStyle = isWhiteSeat ? '#555555' : (PLAYER_COLORS[owner] || '#ffffff');
   ctx.setLineDash([Math.max(5, m.cell * 0.18), Math.max(3, m.cell * 0.12)]);
   if (isWhiteSeat) {
     ctx.fillStyle = 'rgba(255,255,255,0.16)';

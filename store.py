@@ -720,13 +720,14 @@ class GameStore:
             return queued
         x = int(queued.get("x", 0))
         y = int(queued.get("y", 0))
-        if game.state.in_bounds((x, y)):
-            return queued
         preview_ref = queued.get("preview_ref")
         if not isinstance(preview_ref, dict):
-            return None
+            return queued if game.state.in_bounds((x, y)) else None
         ref_w = int(preview_ref.get("width", -1))
         ref_h = int(preview_ref.get("height", -1))
+        was_in_preview_ring = x < 0 or y < 0 or x >= ref_w or y >= ref_h
+        if not was_in_preview_ring:
+            return queued if game.state.in_bounds((x, y)) else None
         if game.state.width != ref_w + 2 or game.state.height != ref_h + 2:
             return None
         remapped = deepcopy(queued)
