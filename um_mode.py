@@ -856,15 +856,23 @@ class UmAggressiveBot:
         if not nodes:
             return set()
         area = set(nodes)
-        # The bot's "total footprint" should mean every in-bounds square that could
-        # lie on a legal one-segment path between any pair of enemy nodes, not just a
-        # small sampled subset. The earlier sampling cap and distance cutoff made the
-        # footprint too narrow, so the bot sometimes believed it had escaped when it
-        # had not.
+        # The intended "footprint" for bot escape logic is not just the exact cells
+        # occupied by currently drawable one-segment routes. It also includes the
+        # rectilinear interior spanned by enemy nodes, because a group that sits fully
+        # inside that area is effectively encompassed by future enemy walling pressure
+        # even before those nodes are path-connected.
         for i, a in enumerate(nodes):
             for b in nodes[i + 1:]:
                 for route in self._simple_routes(state, a, b):
                     area.update(route)
+                min_x = min(a[0], b[0])
+                max_x = max(a[0], b[0])
+                min_y = min(a[1], b[1])
+                max_y = max(a[1], b[1])
+                for x in range(min_x, max_x + 1):
+                    for y in range(min_y, max_y + 1):
+                        if state.in_bounds((x, y)):
+                            area.add((x, y))
         return area
 
     def _enemy_node_footprint_area(self, state: UmGameState, owner: int) -> set[tuple[int, int]]:
