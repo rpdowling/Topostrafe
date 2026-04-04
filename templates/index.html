@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/app.css?v=44" />
+  <link rel="stylesheet" href="/static/app.css?v=45" />
 </head>
 <body class="menu-page">
   <div class="page menu-three-col">
@@ -112,7 +112,8 @@
       <form id="um-form" class="stack gap-12 top-12 um-settings-section">
         <div class="um-settings-header">
           <h2>Um Settings</h2>
-                  </div>
+        </div>
+        <div class="um-rules-mini muted">Place your castle on your half. Click an empty square twice to place a node, or click a friendly node and trace node-to-node path chains. Segments must be orthogonal and obey the corner limit. Paths only cross enemy paths perpendicularly, and only if the crossing path is shorter, which cuts them. Enemy nodes die if snuffed on all orthogonal sides or trapped inside a connected enclosure. Infinite Board expands when edge nodes are placed. Win by the selected kill target, or by killing the enemy castle in To the Death.</div>
         <div class="grid two">
           <label>
             <span>Map Size</span>
@@ -147,6 +148,14 @@
             <span>Time Bank (seconds)</span>
             <input id="um_time_bank_seconds" type="number" min="10" max="86400" value="300" />
           </label>
+          <label>
+            <span>Game Mode</span>
+            <select id="um_game_end_mode">
+              <option value="death">To the Death</option>
+              <option value="to10">To 10</option>
+              <option value="to20">To 20</option>
+            </select>
+          </label>
           <label class="check um-private-check">
             <input id="um_is_private" type="checkbox" />
             <span>Private Game</span>
@@ -156,7 +165,6 @@
           <span>Private Join Code</span>
           <input id="um_join_code" type="text" maxlength="16" placeholder="Optional. Leave blank to auto-generate." />
         </label>
-        <div class="um-rules-mini muted">Place castles on your half, place or split nodes, draw connected node-to-node path chains with up to 1 corner per segment, cross enemy paths only perpendicularly, expand the board by placing a node on an edge when Infinite Board is on, encircle or snuff enemy nodes, and kill the enemy castle to win.</div>
       </form>
     </section>
 

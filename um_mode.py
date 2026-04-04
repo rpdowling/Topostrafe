@@ -29,6 +29,7 @@ class UmSettings:
     infinite_board: bool = True
     time_limit_enabled: bool = True
     time_bank_seconds: int = 300
+    game_end_mode: str = "death"
 
 
 @dataclass
@@ -73,6 +74,7 @@ class UmGameState:
         self.next_path_id = 1
         self.starter_placed = [False, False]
         self.starter_edge_placed = [False, False]
+        self.kill_counts = {0: 0, 1: 0}
 
     def has_starter(self, owner: int) -> bool:
         return any(node.owner == owner and node.starter for node in self.nodes.values())
@@ -128,6 +130,25 @@ class UmGameState:
 
     def owner_name(self, owner: int) -> str:
         return PLAYER_NAMES.get(owner, f"Player {owner + 1}")
+
+    def _kill_target(self) -> int | None:
+        mode = str(getattr(self.settings, "game_end_mode", "death") or "death").strip().lower()
+        if mode == "to10":
+            return 10
+        if mode == "to20":
+            return 20
+        return None
+
+    def _award_kills(self, owner: int, count: int):
+        count = int(count or 0)
+        if count <= 0:
+            return
+        self.kill_counts[owner] = int(self.kill_counts.get(owner, 0)) + count
+        target = self._kill_target()
+        if self.winner is None and target is not None and self.kill_counts[owner] >= target:
+            self.winner = owner
+            self.win_reason = f"{self.owner_name(owner)} reached {target} kills."
+
 
     def commit_starter(self, x: int, y: int):
         pos = (int(x), int(y))
@@ -289,6 +310,7 @@ class UmGameState:
             if removed.starter:
                 self.winner = owner
                 self.win_reason = f"{self.owner_name(owner)} captured the enemy castle."
+        self._award_kills(owner, removed_by_path)
         removed = ""
         if self.winner is None:
             removed = self._resolve_after_action(owner)
@@ -455,6 +477,7 @@ class UmGameState:
                     self.winner = owner
                     self.win_reason = f"{self.owner_name(owner)} captured the enemy castle."
         if self.winner is not None:
+            self._award_kills(owner, removed_nodes)
             return "Castle captured."
 
         enclosed_cells = self._enclosed_cells_for_owner(owner)
@@ -481,7 +504,11 @@ class UmGameState:
                     removed_paths += 1
 
         if self.winner is not None:
+            self._award_kills(owner, removed_nodes)
             return "Enemy castle destroyed."
+        self._award_kills(owner, removed_nodes)
+        if self.winner is not None:
+            return self.win_reason or "Victory."
         bits = []
         if removed_nodes:
             bits.append(f"{removed_nodes} enemy node{'s' if removed_nodes != 1 else ''} removed.")
@@ -946,43 +973,6 @@ class UmAggressiveBot:
         path_count = sum(1 for path in state.paths.values() if path.owner == owner)
         return node_count, path_count
 
-    def _immediate_enemy_threat_score(self, state: UmGameState) -> int:
-        owner = self.owner
-        enemy = 1 - owner
-        if state.winner == enemy:
-            return 1_000_000
-        if state.winner == owner:
-            return 0
-
-        before_own_nodes, before_own_paths = self._count_owner(state, owner)
-        own_castle = state.castle_pos(owner)
-        enemy_nodes = self._owner_nodes(state, enemy)
-        best = 0
-        max_pair_dist = max(state.width, state.height) + 4
-
-        for i, a in enumerate(enemy_nodes):
-            for b in enemy_nodes[i + 1:]:
-                d = self._manhattan(a, b)
-                if d < 2 or d > max_pair_dist:
-                    continue
-                for route in self._simple_routes(state, a, b):
-                    sim = deepcopy(state)
-                    sim.current_owner = enemy
-                    ok, _ = sim.commit_place_paths([route])
-                    if not ok:
-                        continue
-                    if sim.winner == enemy:
-                        return 1_000_000
-                    after_own_nodes, after_own_paths = self._count_owner(sim, owner)
-                    removed_nodes = before_own_nodes - after_own_nodes
-                    removed_paths = before_own_paths - after_own_paths
-                    threat = removed_nodes * 3000 + removed_paths * 1200
-                    if own_castle is not None and own_castle not in sim.nodes:
-                        threat = max(threat, 1_000_000)
-                    best = max(best, threat)
-
-        return best
-
     def _score_state(self, before: UmGameState, after: UmGameState, meta: dict[str, object]) -> int:
         owner = self.owner
         enemy = 1 - owner
@@ -1167,7 +1157,6 @@ class UmAggressiveBot:
             score += min(160, min((self._manhattan(pos, cell) for cell in enemy_area), default=8) * 10)
             entry = {
                 'score': score,
-                'after': sim,
                 'action': {'type': 'um_node', 'x': pos[0], 'y': pos[1], 'label': f'Bot placed a node at {pos[0]},{pos[1]}.'},
             }
             if cuttable:
@@ -1188,7 +1177,6 @@ class UmAggressiveBot:
             score = self._score_state(state, sim, {'kind': 'node', 'pos': pos, 'defend': defend})
             actions.append({
                 'score': score,
-                'after': sim,
                 'action': {'type': 'um_node', 'x': pos[0], 'y': pos[1], 'label': f'Bot placed a node at {pos[0]},{pos[1]}.'},
             })
         return actions
@@ -1225,7 +1213,6 @@ class UmAggressiveBot:
                 score = self._score_state(state, sim, {'kind': 'path', 'segments': [route], 'defend': defend})
                 actions.append({
                     'score': score,
-                    'after': sim,
                     'action': {'type': 'um_paths', 'segments': [route], 'label': f'Bot drew a path from {a} to {b}.'},
                 })
         return actions
@@ -1253,16 +1240,14 @@ class UmAggressiveBot:
     def choose_action(self, state: UmGameState) -> dict[str, object]:
         if not state.has_starter(self.owner):
             return self._choose_starter(state)
-
-        base_threat = self._immediate_enemy_threat_score(state)
-        defend = self._must_defend(state) or base_threat >= 2400
-
-        actions: list[dict[str, object]] = []
         if self._needs_escape_node(state):
-            actions.extend(self._generate_escape_node_actions(state))
-        actions.extend(self._generate_node_actions(state, defend))
+            escape_actions = self._generate_escape_node_actions(state)
+            if escape_actions:
+                escape_actions.sort(key=lambda item: item['score'], reverse=True)
+                return escape_actions[0]['action']
+        defend = self._must_defend(state)
+        actions = self._generate_node_actions(state, defend)
         actions.extend(self._generate_path_actions(state, defend))
-
         if not actions:
             # Fallback: first legal node placement.
             for x in range(state.width):
@@ -1273,19 +1258,5 @@ class UmAggressiveBot:
                     if ok:
                         return {'type': 'um_node', 'x': int(x), 'y': int(y), 'label': f'Bot placed a node at {x},{y}.'}
             return {'type': 'starter', 'x': 0, 'y': 0, 'label': 'Bot could not move.'}
-
-        if base_threat > 0:
-            for item in actions:
-                after = item.get('after')
-                if after is None:
-                    continue
-                threat_after = self._immediate_enemy_threat_score(after)
-                reduction = max(0, base_threat - threat_after)
-                item['score'] += reduction * 5
-                if threat_after == 0:
-                    item['score'] += 1800
-                elif threat_after < base_threat:
-                    item['score'] += 600
-
         actions.sort(key=lambda item: item['score'], reverse=True)
         return actions[0]['action']

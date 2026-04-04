@@ -424,6 +424,19 @@ function renderMeta() {
   if (clock1) clock1.textContent = latestState.settings?.time_limit_enabled ? formatClock(displayedClock(1)) : 'No clock';
   const draftCount = (currentSegment && currentSegment.length > 1 ? 1 : 0) + draftSegments.length + (pendingNode ? 1 : 0);
   el('segment-count').textContent = String(draftCount);
+  const seat = mySeat();
+  const mineOwner = seat === null ? 0 : seat;
+  const oppOwner = 1 - mineOwner;
+  const killMine = Number(latestState.kill_counts?.[String(mineOwner)] || 0);
+  const killOpp = Number(latestState.kill_counts?.[String(oppOwner)] || 0);
+  const killMineNode = el('kill-mine');
+  const killOppNode = el('kill-opp');
+  if (killMineNode) killMineNode.textContent = String(killMine);
+  if (killOppNode) killOppNode.textContent = String(killOpp);
+  const killMineLabel = el('kill-label-mine');
+  const killOppLabel = el('kill-label-opp');
+  if (killMineLabel) killMineLabel.textContent = seat === null ? 'P1 Kills' : 'Your Kills';
+  if (killOppLabel) killOppLabel.textContent = seat === null ? 'P2 Kills' : 'Enemy Kills';
   if (latestState.is_private && latestState.join_code) el('share-line').textContent = `Code: ${latestState.join_code}`;
   else el('share-line').textContent = latestState.status === 'open' ? `Share this URL: ${window.location.href}` : '';
   const stat0 = el('stat-player0');
@@ -437,7 +450,26 @@ function renderMeta() {
   renderChat();
   renderDraftLine();
   updateActionButtons();
+  renderEndPopup();
 }
+
+function renderEndPopup() {
+  const wrap = el('um-end-popup');
+  const textNode = el('um-end-popup-text');
+  if (!wrap || !textNode || !latestState) return;
+  const seat = mySeat();
+  if (latestState.winner === null || seat === null) {
+    wrap.classList.add('hidden');
+    wrap.classList.remove('win', 'loss');
+    return;
+  }
+  const won = latestState.winner === seat;
+  wrap.classList.remove('hidden');
+  wrap.classList.toggle('win', won);
+  wrap.classList.toggle('loss', !won);
+  textNode.textContent = won ? 'Win!' : 'Ded';
+}
+
 
 function renderLog() {
   const box = el('log');

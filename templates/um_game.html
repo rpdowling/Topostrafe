@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=42" />
+  <link rel="stylesheet" href="/static/app.css?v=45" />
 </head>
 <body>
   <div class="page game-layout um-layout">
@@ -53,6 +53,8 @@
           <div class="stat turn-stat" id="stat-player1"><span>Player 2</span><strong id="castle1">Castle</strong><small id="um_clock1">5:00</small></div>
           <div class="stat"><span>Your Seat</span><strong id="seat-line">Spectator</strong></div>
           <div class="stat"><span>Draft</span><strong id="segment-count">0</strong></div>
+          <div class="stat"><span id="kill-label-mine">Your Kills</span><strong id="kill-mine">0</strong></div>
+          <div class="stat"><span id="kill-label-opp">Enemy Kills</span><strong id="kill-opp">0</strong></div>
         </div>
 
         <div>
@@ -80,6 +82,11 @@
   <script>
     window.TOPOS_GAME_ID = "{{ game_id }}";
   </script>
-  <script src="/static/um.js?v=14"></script>
+  <script src="/static/um.js?v=15"></script>
+  <div id="um-end-popup" class="um-end-popup hidden" aria-hidden="true">
+    <div id="um-end-popup-card" class="um-end-popup-card">
+      <div id="um-end-popup-text">Win!</div>
+    </div>
+  </div>
 </body>
 </html>

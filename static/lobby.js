@@ -3,7 +3,7 @@ const settings = defaults.settings;
 const settingKeys = Object.keys(settings);
 
 const mapTypeLabels = defaults.map_type_labels || {};
-const umDefaults = defaults.um_defaults || { board_width: 6, board_height: 6, max_corners: 1, board_color: "yellow", require_move_confirmation: false, infinite_board: true, size_preset: "small", time_limit_enabled: true, time_bank_seconds: 300 };
+const umDefaults = defaults.um_defaults || { board_width: 6, board_height: 6, max_corners: 1, board_color: "yellow", require_move_confirmation: false, infinite_board: true, size_preset: "small", time_limit_enabled: true, time_bank_seconds: 300, game_end_mode: "death" };
 const umBoardColors = defaults.um_board_colors || { yellow: "#e8cf52" };
 const umSizePresets = defaults.um_size_presets || { small: { board_width: 6, board_height: 6 }, medium: { board_width: 10, board_height: 10 }, large: { board_width: 20, board_height: 20 } };
 
@@ -62,6 +62,7 @@ function buildForm() {
   if (el('um_infinite_board')) el('um_infinite_board').checked = umDefaults.infinite_board !== false;
   if (el('um_time_limit_enabled')) el('um_time_limit_enabled').checked = umDefaults.time_limit_enabled !== false;
   if (el('um_time_bank_seconds')) el('um_time_bank_seconds').value = String(umDefaults.time_bank_seconds ?? 300);
+  if (el('um_game_end_mode')) el('um_game_end_mode').value = umDefaults.game_end_mode || 'death';
 }
 
 
@@ -161,6 +162,7 @@ function collectUmPayload() {
       infinite_board: !!el('um_infinite_board')?.checked,
       time_limit_enabled: !!el('um_time_limit_enabled')?.checked,
       time_bank_seconds: Number(el('um_time_bank_seconds')?.value || 300),
+      game_end_mode: el('um_game_end_mode')?.value || 'death',
     },
   };
 }
