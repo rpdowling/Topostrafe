@@ -114,7 +114,7 @@ class GameStore:
     def defaults(self) -> dict[str, Any]:
         d = eng.GameSettings()
         d.map_type = "River"
-        um_defaults = um.UmSettings(board_width=6, board_height=6, require_move_confirmation=False, infinite_board=True, time_limit_enabled=True, time_bank_seconds=300, game_end_mode="death")
+        um_defaults = um.UmSettings(board_width=6, board_height=6, require_move_confirmation=False, infinite_board=True, time_limit_enabled=True, time_bank_seconds=300, game_end_mode="death", starting_nodes=0)
         return {
             "settings": d.__dict__.copy(),
             "map_types": MAP_TYPES,
@@ -132,6 +132,7 @@ class GameStore:
                 "time_limit_enabled": um_defaults.time_limit_enabled,
                 "time_bank_seconds": um_defaults.time_bank_seconds,
                 "game_end_mode": um_defaults.game_end_mode,
+                "starting_nodes": um_defaults.starting_nodes,
             },
             "um_board_colors": um.BOARD_COLORS,
             "um_size_presets": {name: {"board_width": size[0], "board_height": size[1]} for name, size in um.SIZE_PRESETS.items()},
@@ -284,6 +285,7 @@ class GameStore:
         game_end_mode = str(raw.get("game_end_mode", "death") or "death").strip().lower()
         if game_end_mode not in {"death", "to10", "to20"}:
             game_end_mode = "death"
+        starting_nodes = max(0, min(20, int(raw.get("starting_nodes", 0))))
         if board_color not in um.BOARD_COLORS:
             board_color = "yellow"
         return um.UmSettings(
@@ -296,6 +298,7 @@ class GameStore:
             time_limit_enabled=time_limit_enabled,
             time_bank_seconds=time_bank_seconds,
             game_end_mode=game_end_mode,
+            starting_nodes=starting_nodes,
         )
 
     def _map_from_payload(self, settings: eng.GameSettings, payload: dict[str, Any]) -> eng.MapData:
@@ -519,6 +522,7 @@ class GameStore:
                         "time_limit_enabled": bool(getattr(game.settings, "time_limit_enabled", True)),
                         "time_bank_seconds": game.settings.time_bank_seconds,
                         "game_end_mode": getattr(game.settings, "game_end_mode", "death"),
+                        "starting_nodes": int(getattr(game.settings, "starting_nodes", 0)),
                     },
                     "board": {
                         "width": state.width,
@@ -532,6 +536,8 @@ class GameStore:
                     "nodes": nodes,
                     "paths": paths,
                     "kill_counts": {"0": int(getattr(state, "kill_counts", {}).get(0, 0)), "1": int(getattr(state, "kill_counts", {}).get(1, 0))},
+                    "starting_nodes_placed": {"0": int(getattr(state, "starting_nodes_placed", {}).get(0, 0)), "1": int(getattr(state, "starting_nodes_placed", {}).get(1, 0))},
+                    "barrier_active": bool(getattr(state, "barrier_active", lambda: False)()),
                     "log": game.log[-16:],
                     "chat": game.chat[-100:],
                     "my_premove": (seat is not None and game.pending_premoves.get(seat) is not None),

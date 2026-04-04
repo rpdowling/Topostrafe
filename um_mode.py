@@ -30,6 +30,7 @@ class UmSettings:
     time_limit_enabled: bool = True
     time_bank_seconds: int = 300
     game_end_mode: str = "death"
+    starting_nodes: int = 0
 
 
 @dataclass
@@ -75,6 +76,7 @@ class UmGameState:
         self.starter_placed = [False, False]
         self.starter_edge_placed = [False, False]
         self.kill_counts = {0: 0, 1: 0}
+        self.starting_nodes_placed = {0: 0, 1: 0}
 
     def has_starter(self, owner: int) -> bool:
         return any(node.owner == owner and node.starter for node in self.nodes.values())
@@ -127,6 +129,28 @@ class UmGameState:
             if node.owner == owner and node.starter:
                 return pos
         return None
+
+    def _starting_nodes_target(self) -> int:
+        return max(0, int(getattr(self.settings, "starting_nodes", 0) or 0))
+
+    def barrier_active(self) -> bool:
+        if not all(self.starter_placed):
+            return True
+        target = self._starting_nodes_target()
+        if target <= 0:
+            return False
+        return any(int(self.starting_nodes_placed.get(owner, 0)) < target for owner in (0, 1))
+
+    def _own_side_only(self, owner: int, pos: tuple[int, int]) -> bool:
+        mid = self.width / 2.0
+        x = pos[0]
+        return x < mid if owner == 0 else x >= mid
+
+    def _starting_barrier_message(self) -> str:
+        target = self._starting_nodes_target()
+        if target <= 0:
+            return "Enemy side is off-limits until both castles are placed."
+        return f"Enemy side is off-limits until each player places {target} starting node{'s' if target != 1 else ''}."
 
     def owner_name(self, owner: int) -> str:
         return PLAYER_NAMES.get(owner, f"Player {owner + 1}")
@@ -185,6 +209,8 @@ class UmGameState:
             return False, "Out of bounds."
         if pos in self.nodes:
             return False, "Cell occupied."
+        if self.barrier_active() and not self._own_side_only(self.current_owner, pos):
+            return False, self._starting_barrier_message()
         occupant_paths = [self.paths[pid] for pid in sorted(self.path_lookup.get(pos, set())) if pid in self.paths]
         if any(path.owner != self.current_owner for path in occupant_paths):
             return False, "Cannot place a node on an enemy path."
@@ -214,6 +240,7 @@ class UmGameState:
             self.next_path_id = next_path_id_snapshot
             return False, "You cannot place a node where the enemy could immediately snuff it out against the wall."
 
+        self.starting_nodes_placed[self.current_owner] = int(self.starting_nodes_placed.get(self.current_owner, 0)) + 1
         removed = self._resolve_after_action(self.current_owner)
         expanded = False
         new_w = self.width
@@ -252,6 +279,8 @@ class UmGameState:
         to_add: list[UmPath] = []
 
         for seg in norm_segments:
+            if self.barrier_active() and any(not self._own_side_only(owner, cell) for cell in seg):
+                return False, self._starting_barrier_message()
             ok, msg = self._validate_segment(seg, owner, prev_end, new_internal_cells, used_start_nodes)
             if not ok:
                 return False, msg

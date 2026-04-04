@@ -600,7 +600,7 @@ function drawBoard() {
     ctx.stroke();
   }
 
-  if (!latestState.starter_placed?.every(Boolean)) {
+  if (barrierActive()) {
     const splitX = m.activeOx + (m.width / 2) * m.cell;
     ctx.save();
     ctx.strokeStyle = 'rgba(0,0,0,0.78)';
@@ -841,6 +841,10 @@ function ownHalf(cell, seat) {
   return seat === 0 ? cell[0] < split : cell[0] >= split;
 }
 
+function barrierActive() {
+  return !!latestState?.barrier_active;
+}
+
 function countCorners(seg) {
   if (!seg || seg.length < 3) return 0;
   let corners = 0;
@@ -863,6 +867,7 @@ function canDragExtendTo(cell) {
   if (!latestState || seat === null || !currentSegment || !currentSegment.length) return false;
   const prev = currentSegment[currentSegment.length - 1];
   if (!isActiveBoardCell(cell)) return false;
+  if (barrierActive() && !ownHalf(cell, seat)) return false;
   if (Math.abs(cell[0] - prev[0]) + Math.abs(cell[1] - prev[1]) !== 1) return false;
   if (currentSegment.some(c => sameCell(c, cell))) return false;
   const node = nodeAt(cell);
@@ -898,6 +903,7 @@ function canStepTo(cell) {
   if (!latestState || seat === null || !currentSegment || !currentSegment.length) return false;
   const prev = currentSegment[currentSegment.length - 1];
   if (!isActiveBoardCell(cell)) return false;
+  if (barrierActive() && !ownHalf(cell, seat)) return false;
   if (Math.abs(cell[0] - prev[0]) + Math.abs(cell[1] - prev[1]) !== 1) return false;
   if (currentSegment.some(c => sameCell(c, cell))) return false;
   const node = nodeAt(cell);
@@ -954,6 +960,10 @@ function handleNodePlacement(cell) {
     return;
   }
   if (!isActiveBoardCell(cell) && !previewCell) return;
+  if (barrierActive() && isActiveBoardCell(cell) && !ownHalf(cell, seat)) {
+    setStatus('Enemy side is off-limits until the starting barrier is removed.', true);
+    return;
+  }
   if (nodeAt(cell)) {
     setStatus('That square is occupied.', true);
     return;
