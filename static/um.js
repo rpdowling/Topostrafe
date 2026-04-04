@@ -583,6 +583,18 @@ function drawBoard() {
     }
   }
 
+  if (barrierActive() && mySeat() !== null) {
+    const splitX = m.activeOx + (m.width / 2) * m.cell;
+    ctx.save();
+    ctx.fillStyle = 'rgba(110,110,110,0.28)';
+    if (mySeat() === 0) {
+      ctx.fillRect(splitX, m.activeOy, m.activeBoardW / 2, m.activeBoardH);
+    } else {
+      ctx.fillRect(m.activeOx, m.activeOy, m.activeBoardW / 2, m.activeBoardH);
+    }
+    ctx.restore();
+  }
+
   ctx.strokeStyle = 'rgba(0,0,0,0.22)';
   ctx.lineWidth = 1;
   for (let x = 0; x <= m.totalW; x++) {

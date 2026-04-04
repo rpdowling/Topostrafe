@@ -936,6 +936,139 @@ class UmAggressiveBot:
         area.update(self._owner_nodes(state, owner))
         return area
 
+    def _owner_connected_footprint_size(self, state: UmGameState, owner: int) -> int:
+        return len(self._footprint_cells(state, owner))
+
+    def _path_connected_to_castle(self, state: UmGameState, owner: int, path: UmPath) -> bool:
+        comp = self._castle_component(state, owner)
+        if not comp:
+            return False
+        endpoints = []
+        if path.cells:
+            endpoints = [path.cells[0], path.cells[-1]]
+        return any(pt in comp for pt in endpoints)
+
+    def _owner_can_cut_specific_path_now(self, state: UmGameState, owner: int, target_pid: int) -> bool:
+        target = state.paths.get(target_pid)
+        if target is None:
+            return False
+        own_nodes = self._owner_nodes(state, owner)
+        if len(own_nodes) < 2:
+            return False
+        for i, a in enumerate(own_nodes):
+            for b in own_nodes[i + 1:]:
+                for route in self._simple_routes(state, a, b):
+                    sim = deepcopy(state)
+                    sim.current_owner = owner
+                    ok, _ = sim.commit_place_paths([route])
+                    if ok and target_pid not in sim.paths:
+                        return True
+        return False
+
+    def _threatening_connected_enemy_path(self, state: UmGameState) -> UmPath | None:
+        owner = self.owner
+        enemy = 1 - owner
+        own_footprint_size = self._owner_connected_footprint_size(state, owner)
+        candidates: list[tuple[int, UmPath]] = []
+        for path in state.paths.values():
+            if path.owner != enemy:
+                continue
+            if path.length <= own_footprint_size:
+                continue
+            if not self._path_connected_to_castle(state, enemy, path):
+                continue
+            if self._owner_can_cut_specific_path_now(state, owner, path.path_id):
+                continue
+            candidates.append((path.length, path))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
+
+    def _move_kills_side_node(self, before: UmGameState, after: UmGameState, target_path: UmPath) -> bool:
+        enemy = 1 - self.owner
+        before_comp = self._castle_component(before, enemy)
+        after_nodes = {pos for pos, node in after.nodes.items() if node.owner == enemy}
+        side_nodes = set(before_comp)
+        side_nodes.update(cell for cell in target_path.cells if cell in before_comp)
+        return any(pos not in after_nodes for pos in side_nodes)
+
+    def _node_enables_cut_of_path(self, state: UmGameState, node_pos: tuple[int, int], target_pid: int) -> bool:
+        owner = self.owner
+        target = state.paths.get(target_pid)
+        if target is None:
+            return False
+        sim = deepcopy(state)
+        sim.current_owner = owner
+        ok, _ = sim.commit_place_node(*node_pos)
+        if not ok:
+            return False
+        own_nodes = self._owner_nodes(sim, owner)
+        for anchor in own_nodes:
+            if anchor == node_pos:
+                continue
+            for route in self._simple_routes(sim, anchor, node_pos):
+                test = deepcopy(sim)
+                test.current_owner = owner
+                ok2, _ = test.commit_place_paths([route])
+                if ok2 and target_pid not in test.paths:
+                    return True
+        return False
+
+    def _outside_threat_side(self, path: UmPath, pos: tuple[int, int]) -> bool:
+        xs = [c[0] for c in path.cells]
+        ys = [c[1] for c in path.cells]
+        span_x = max(xs) - min(xs)
+        span_y = max(ys) - min(ys)
+        if span_x >= span_y:
+            return pos[0] < min(xs) or pos[0] > max(xs)
+        return pos[1] < min(ys) or pos[1] > max(ys)
+
+    def _generate_long_side_defense_actions(self, state: UmGameState, target_path: UmPath) -> list[dict[str, object]]:
+        owner = self.owner
+        own_castle = state.castle_pos(owner)
+        enemy = 1 - owner
+        threat_cells = set(target_path.cells)
+        candidate_cells: set[tuple[int, int]] = set()
+        for cell in threat_cells:
+            for dx in range(-4, 5):
+                for dy in range(-4, 5):
+                    if abs(dx) + abs(dy) > 5:
+                        continue
+                    pos = (cell[0] + dx, cell[1] + dy)
+                    if state.in_bounds(pos):
+                        candidate_cells.add(pos)
+        for pos in self._candidate_cells(state, defend=True):
+            candidate_cells.add(pos)
+        buckets = {0: [], 1: [], 2: []}
+        for pos in candidate_cells:
+            sim = deepcopy(state)
+            sim.current_owner = owner
+            ok, _ = sim.commit_place_node(*pos)
+            if not ok:
+                continue
+            if self._enemy_can_cut_node_next(sim, pos):
+                continue
+            score = self._score_state(state, sim, {'kind': 'node', 'pos': pos, 'defend': True})
+            d_castle = self._manhattan(pos, own_castle) if own_castle is not None else 99
+            d_threat = min((self._manhattan(pos, cell) for cell in threat_cells), default=99)
+            if self._move_kills_side_node(state, sim, target_path):
+                score += 1200
+                buckets[0].append({'score': score, 'action': {'type': 'um_node', 'x': pos[0], 'y': pos[1], 'label': f'Bot placed a node at {pos[0]},{pos[1]}.'}})
+                continue
+            if self._node_enables_cut_of_path(state, pos, target_path.path_id):
+                score += 850 - d_threat * 18
+                buckets[1].append({'score': score, 'action': {'type': 'um_node', 'x': pos[0], 'y': pos[1], 'label': f'Bot placed a node at {pos[0]},{pos[1]}.'}})
+                continue
+            if self._outside_threat_side(target_path, pos):
+                score += 420 + max(0, 120 - d_castle * 14) + max(0, 80 - d_threat * 10)
+                buckets[2].append({'score': score, 'action': {'type': 'um_node', 'x': pos[0], 'y': pos[1], 'label': f'Bot placed a node at {pos[0]},{pos[1]}.'}})
+        for key in (0, 1, 2):
+            if buckets[key]:
+                buckets[key].sort(key=lambda item: item['score'], reverse=True)
+                return buckets[key]
+        return []
+
     def _safe_owner_nodes(self, state: UmGameState, owner: int) -> list[tuple[int, int]]:
         if owner != self.owner:
             return self._owner_nodes(state, owner)
@@ -954,6 +1087,8 @@ class UmAggressiveBot:
         owner = self.owner
         enemy = 1 - owner
         if self._needs_escape_node(state):
+            return True
+        if self._threatening_connected_enemy_path(state) is not None:
             return True
         castle = state.castle_pos(owner)
         if castle is None:
@@ -1274,6 +1409,12 @@ class UmAggressiveBot:
             if escape_actions:
                 escape_actions.sort(key=lambda item: item['score'], reverse=True)
                 return escape_actions[0]['action']
+        long_side = self._threatening_connected_enemy_path(state)
+        if long_side is not None:
+            side_actions = self._generate_long_side_defense_actions(state, long_side)
+            if side_actions:
+                side_actions.sort(key=lambda item: item['score'], reverse=True)
+                return side_actions[0]['action']
         defend = self._must_defend(state)
         actions = self._generate_node_actions(state, defend)
         actions.extend(self._generate_path_actions(state, defend))
