@@ -57,7 +57,6 @@ function buildForm() {
     umColorSelect.value = umDefaults.board_color || 'yellow';
   }
   if (el('um_size_preset')) el('um_size_preset').value = umDefaults.size_preset || 'small';
-  if (el('um_max_corners')) el('um_max_corners').value = String(umDefaults.max_corners ?? 1);
   if (el('um_require_move_confirmation')) el('um_require_move_confirmation').checked = !!umDefaults.require_move_confirmation;
   if (el('um_infinite_board')) el('um_infinite_board').checked = umDefaults.infinite_board !== false;
   if (el('um_time_limit_enabled')) el('um_time_limit_enabled').checked = umDefaults.time_limit_enabled !== false;
@@ -156,7 +155,7 @@ function collectUmPayload() {
     join_code: el('um_join_code')?.value.trim() || '',
     um_settings: {
       size_preset: el('um_size_preset')?.value || 'small',
-      max_corners: Number(el('um_max_corners')?.value || 1),
+      max_corners: 1,
       board_color: el('um_board_color')?.value || 'yellow',
       require_move_confirmation: !!el('um_require_move_confirmation')?.checked,
       infinite_board: !!el('um_infinite_board')?.checked,
@@ -237,7 +236,7 @@ async function refreshGames() {
       row.className = 'game-row';
       const left = document.createElement('div');
       if (game.game_mode === 'um') {
-        left.innerHTML = `<strong>${game.game_id}</strong><small>Um · ${game.size}</small><small>Max Corners ${game.max_corners} · ${String(game.board_color || '').replace(/^./, c => c.toUpperCase())} · ${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
+        left.innerHTML = `<strong>${game.game_id}</strong><small>Um · ${game.size}</small><small>${String(game.board_color || '').replace(/^./, c => c.toUpperCase())} · ${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
       } else {
         left.innerHTML = `<strong>${game.game_id}</strong><small>${displayMapType(game.map_type)} · ${game.size}</small><small>Path ${game.path_count} · Link ${game.max_link_distance} · ${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
       }

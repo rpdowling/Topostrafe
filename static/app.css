@@ -411,6 +411,15 @@ button:hover, .button-link:hover { background: var(--button-active); }
 .menu-bot-button:hover {
   background: linear-gradient(180deg, #a6e0ff 0%, #5a9ee4 100%);
 }
+.menu-info-button {
+  background: linear-gradient(180deg, #ffb24b 0%, #e07a22 100%);
+  border-color: #ffc97b;
+  color: #fff7ef;
+  box-shadow: 0 8px 20px rgba(224,122,34,0.28);
+}
+.menu-info-button:hover {
+  background: linear-gradient(180deg, #ffc15d 0%, #ec8932 100%);
+}
 .play-button {
   align-self: flex-start;
   min-width: 176px;
@@ -863,6 +872,12 @@ body.info-modal-open {
 }
 .um-settings-header h2 {
   margin: 0 0 4px;
+}
+.um-rules-box {
+  margin: 8px 0 14px;
+}
+.um-rules-mini {
+  line-height: 1.45;
 }
 .um-private-check {
   margin-top: 22px;

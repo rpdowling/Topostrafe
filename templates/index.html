@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/app.css?v=45" />
+  <link rel="stylesheet" href="/static/app.css?v=46" />
 </head>
 <body class="menu-page">
   <div class="page menu-three-col">
@@ -113,7 +113,10 @@
         <div class="um-settings-header">
           <h2>Um Settings</h2>
         </div>
-        <div class="um-rules-mini muted">Place your castle on your half. Click an empty square twice to place a node, or click a friendly node and trace node-to-node path chains. Segments must be orthogonal and obey the corner limit. Paths only cross enemy paths perpendicularly, and only if the crossing path is shorter, which cuts them. Enemy nodes die if snuffed on all orthogonal sides or trapped inside a connected enclosure. Infinite Board expands when edge nodes are placed. Win by the selected kill target, or by killing the enemy castle in To the Death.</div>
+        <details open class="rules-box um-rules-box">
+          <summary>Um Rules</summary>
+          <div class="um-rules-mini muted">Place your castle on your half. Click an empty square twice to place a node, or click a friendly node to start tracing a node-to-node path chain. Each segment must be orthogonal and may use only one corner. Paths only cross enemy paths perpendicularly, and only if the crossing path is shorter, which cuts them. Nodes next to each other are not connected unless a path is actually drawn between them. Enemy nodes die if snuffed on all orthogonal sides or trapped inside a connected enclosure. Infinite Board expands when edge nodes are placed. Win by the selected kill target, or by killing the enemy castle in To the Death.</div>
+        </details>
         <div class="grid two">
           <label>
             <span>Map Size</span>
@@ -127,10 +130,6 @@
           <label>
             <span>Board Color</span>
             <select id="um_board_color"></select>
-          </label>
-          <label>
-            <span>Max Corners</span>
-            <input id="um_max_corners" type="number" min="0" max="6" value="1" />
           </label>
           <label class="check">
             <input id="um_require_move_confirmation" type="checkbox" />
@@ -179,20 +178,10 @@
             <button id="play-button" class="play-button" type="submit" form="create-form">Play</button>
             <div class="menu-subactions">
               <button id="bot-button" class="menu-secondary menu-bot-button" type="button" form="create-form">Play vs Bot (In Dev.)</button>
+              <button id="info-button" class="menu-secondary menu-info-button" type="button">Info</button>
               <a class="button-link menu-secondary menu-editor-button" href="/editor">Map Editor</a>
             </div>
             <span id="create-status" class="muted"></span>
-          </div>
-        </div>
-      </div>
-
-      <div class="hero-card menu-hero-card info-hero-card">
-        <div class="hero-bg info-hero-bg" aria-hidden="true"></div>
-        <div class="hero-content info-hero-content">
-          <h2 class="info-hero-title">Unit Library</h2>
-          <p class="hero-subtitle info-hero-subtitle">Reference for node types and terrain tools.</p>
-          <div class="actions info-hero-actions">
-            <button id="info-button" class="info-button" type="button">Info</button>
           </div>
         </div>
       </div>
@@ -276,6 +265,6 @@
   <script>
     window.TOPOS_DEFAULTS = {{ defaults_json | safe }};
   </script>
-  <script src="/static/lobby.js?v=14"></script>
+  <script src="/static/lobby.js?v=15"></script>
 </body>
 </html>
