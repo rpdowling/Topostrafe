@@ -416,6 +416,10 @@ button:hover, .button-link:hover { background: var(--button-active); }
   border-color: #ffc97b;
   color: #fff7ef;
   box-shadow: 0 8px 20px rgba(224,122,34,0.28);
+  width: auto;
+  min-width: 52px;
+  align-self: flex-start;
+  padding: 8px 12px;
 }
 .menu-info-button:hover {
   background: linear-gradient(180deg, #ffc15d 0%, #ec8932 100%);
