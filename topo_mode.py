@@ -294,7 +294,7 @@ class TopoGameState:
                 if path is None:
                     continue
                 enemy_priv = self.path_privilege(path)
-                if not (seg_length < path.length or seg_priv <= enemy_priv):
+                if not (seg_length < path.length or seg_priv < enemy_priv):
                     return False, "That enemy path is too strong to cut from this group."
                 remove_enemy_paths.add(pid)
             path = TopoPath(self.next_path_id, owner, seg[:])
