@@ -6,8 +6,8 @@
   <title>{{ title }}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/app.css?v=46" />
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@700;800&family=Roboto:wght@500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css?v=47" />
 </head>
 <body class="menu-page">
   <div class="page menu-three-col">
@@ -142,7 +142,17 @@
       <div class="hero-card menu-hero-card">
         <div class="hero-bg" aria-hidden="true"></div>
         <div class="hero-content">
-          <h1 class="site-title">Topostrafe</h1>
+          <h1 class="site-title topo-title">
+            <span class="topo-mark" aria-hidden="true">
+              <span class="topo-mark-node topo-mark-node-left"></span>
+              <span class="topo-mark-node topo-mark-node-top"></span>
+              <span class="topo-mark-node topo-mark-node-bottom"></span>
+              <span class="topo-mark-bar topo-mark-bar-top"></span>
+              <span class="topo-mark-bar topo-mark-bar-stem"></span>
+              <span class="topo-mark-bar topo-mark-bar-tail"></span>
+            </span>
+            <span class="topo-word" aria-label="Topostrafe"><span class="topo-o-node"></span><span class="topo-letter">P</span><span class="topo-o-node"></span><span class="topo-letter">STRAFE</span></span>
+          </h1>
           <p class="hero-subtitle">Take the high ground!</p>
 
           <div class="actions menu-actions hero-actions">
@@ -159,7 +169,7 @@
       <div class="hero-card menu-hero-card um-hero-card">
         <div class="hero-bg um-hero-bg" aria-hidden="true"></div>
         <div class="hero-content um-hero-content">
-          <h2 class="info-hero-title">Um</h2>
+          <h2 class="info-hero-title um-logo-title">UM</h2>
           <p class="hero-subtitle info-hero-subtitle">Surround the enemy!</p>
           <div class="actions info-hero-actions um-hero-actions-stack">
             <button id="um-play-button" class="um-play-button" type="submit" form="um-form">Play Um</button>
