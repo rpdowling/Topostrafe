@@ -140,6 +140,9 @@ class TopoGameState:
     def _dot_color(self, owner: int) -> str:
         return ELEVATION_COLORS[self.current_privilege(owner)]
 
+    def _min_placeable_elevation(self, owner: int) -> int:
+        return max(1, self.current_privilege(owner) - 1)
+
     def commit_starter(self, x: int, y: int):
         pos = (int(x), int(y))
         if self.winner is not None:
@@ -181,7 +184,7 @@ class TopoGameState:
         occupant_paths = [self.paths[pid] for pid in sorted(self.path_lookup.get(pos, set())) if pid in self.paths]
         if any(path.owner != self.current_owner for path in occupant_paths):
             return False, "Cannot place a node on an enemy path."
-        if self.elevation(pos) < self.current_privilege(self.current_owner):
+        if self.elevation(pos) < self._min_placeable_elevation(self.current_owner):
             return False, "That elevation is not unlocked yet."
         enemy_owner = 1 - self.current_owner
         enemy_enclosed = self._enclosed_cells_for_owner(enemy_owner)
@@ -328,7 +331,7 @@ class TopoGameState:
             return False, "Path must end on a friendly node."
         if end in used_start_nodes:
             return False, "You cannot end a segment on a node that already started one earlier this turn."
-        if self.elevation(start) < self.current_privilege(owner) or self.elevation(end) < self.current_privilege(owner):
+        if self.elevation(start) < self._min_placeable_elevation(owner) or self.elevation(end) < self._min_placeable_elevation(owner):
             return False, "That elevation is not unlocked yet."
         for a, b in zip(seg, seg[1:]):
             if abs(a[0] - b[0]) + abs(a[1] - b[1]) != 1:
