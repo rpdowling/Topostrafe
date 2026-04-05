@@ -197,14 +197,14 @@ function resizeCanvas() {
   if (!board) return;
   const panel = boardScroll?.closest('.um-board-panel') || board.parentElement;
   const toolbar = panel?.querySelector('.toolbar');
-  const viewportW = Math.max(480, Math.floor((boardScroll?.clientWidth || panel?.clientWidth || 1200) - 2));
-  const viewportH = Math.max(420, Math.floor(window.innerHeight - (toolbar?.offsetHeight || 56) - 80));
+  const viewportW = Math.max(520, Math.floor((boardScroll?.clientWidth || panel?.clientWidth || 1400) - 2));
+  const viewportH = Math.max(500, Math.floor(window.innerHeight - (toolbar?.offsetHeight || 56) - 42));
   const dims = boardDimensions();
-  const pad = 40;
+  const pad = 24;
   const largeBoard = Math.max(dims.activeW, dims.activeH) > 30 || Math.max(dims.totalW, dims.totalH) > 30;
   let cell;
   if (largeBoard) {
-    cell = 24;
+    cell = 28;
     if (boardScroll) boardScroll.classList.add('can-pan');
   } else {
     cell = Math.max(18, Math.floor(Math.min((viewportW - pad * 2) / Math.max(1, dims.totalW), (viewportH - pad * 2) / Math.max(1, dims.totalH))));

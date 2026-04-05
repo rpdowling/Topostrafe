@@ -49,6 +49,20 @@ body.menu-page::before {
   gap: 12px;
   align-items: start;
 }
+
+.topo-layout {
+  grid-template-columns: 190px minmax(980px, 1fr) 270px;
+  gap: 10px;
+}
+.topo-layout .chat-panel { width: 100%; }
+.topo-layout .sidebar { width: 100%; }
+.topo-board-panel { min-height: calc(100vh - 20px); }
+.topo-board-panel #board {
+  background: #0a0f14;
+}
+@media (max-width: 1450px) {
+  .topo-layout { grid-template-columns: 180px minmax(860px, 1fr) 250px; }
+}
 .editor-layout {
   display: grid;
   grid-template-columns: 360px minmax(680px, 1fr);

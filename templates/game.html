@@ -4,10 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=47" />
+  <link rel="stylesheet" href="/static/app.css?v=48" />
 </head>
 <body>
-  <div class="page game-layout um-layout">
+  <div class="page game-layout um-layout topo-layout">
     <section class="panel chat-panel">
       <div class="chat-header">
         <div>
@@ -36,7 +36,7 @@
       </div>
     </section>
 
-    <section class="panel board-panel um-board-panel">
+    <section class="panel board-panel um-board-panel topo-board-panel">
       <div class="toolbar">
         <div>
           <strong id="game-title">Topostrafe {{ game_id }}</strong>
@@ -92,6 +92,6 @@
   <script>
     window.TOPOS_GAME_ID = "{{ game_id }}";
   </script>
-  <script src="/static/game.js?v=1"></script>
+  <script src="/static/game.js?v=2"></script>
 </body>
 </html>
