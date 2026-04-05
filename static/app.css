@@ -475,24 +475,27 @@ button:hover, .button-link:hover { background: var(--button-active); }
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.32em;
+  gap: 0;
   font-weight: 900;
 }
 .topo-mark {
   position: relative;
-  width: 2.15em;
+  width: 2.85em;
   height: 1.58em;
   flex: 0 0 auto;
+  margin-right: -0.82em;
+  overflow: visible;
 }
 .topo-mark-bar {
   position: absolute;
+  z-index: 1;
   background: linear-gradient(180deg, #ff51f1 0%, #ea39e6 100%);
   border-radius: 999px;
   box-shadow: 0 0 0 0.06em #111111;
 }
 .topo-mark-bar-top {
   left: 0.18em;
-  right: 0.18em;
+  right: -0.78em;
   top: 0.18em;
   height: 0.18em;
 }
@@ -510,6 +513,7 @@ button:hover, .button-link:hover { background: var(--button-active); }
 }
 .topo-mark-node {
   position: absolute;
+  z-index: 2;
   width: 0.34em;
   height: 0.34em;
   border-radius: 50%;
@@ -525,21 +529,18 @@ button:hover, .button-link:hover { background: var(--button-active); }
   align-items: center;
   gap: 0.05em;
   letter-spacing: 0.015em;
+  position: relative;
+  z-index: 0;
 }
 .topo-letter {
   display: inline-block;
   color: #f5f8fc;
 }
-.topo-o-node {
+.topo-word-full {
   display: inline-block;
-  width: 0.66em;
-  height: 0.66em;
-  border-radius: 50%;
-  background: #f4f5f7;
-  border: 0.08em solid #111111;
-  box-shadow: inset 0 -0.05em 0 rgba(0,0,0,0.10), 0 0 0 0.03em rgba(255,255,255,0.06);
-  transform: translateY(0.02em);
-  margin: 0 0.02em;
+  color: #f5f8fc;
+  letter-spacing: 0.015em;
+  margin-left: 0.04em;
 }
 .um-logo-title {
   font-family: "Rajdhani", "Roboto", "Avenir Next", sans-serif;
