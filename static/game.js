@@ -197,17 +197,27 @@ function resizeCanvas() {
   if (!board) return;
   const panel = boardScroll?.closest('.um-board-panel') || board.parentElement;
   const toolbar = panel?.querySelector('.toolbar');
-  const viewportW = Math.max(520, Math.floor((boardScroll?.clientWidth || panel?.clientWidth || 1400) - 2));
-  const viewportH = Math.max(500, Math.floor(window.innerHeight - (toolbar?.offsetHeight || 56) - 42));
+  const isTopo = !!panel?.classList.contains('topo-board-panel');
+  const viewportW = Math.max(isTopo ? 760 : 520, Math.floor((boardScroll?.clientWidth || panel?.clientWidth || 1400) - (isTopo ? 0 : 2)));
+  const viewportH = Math.max(
+    isTopo ? 680 : 500,
+    Math.floor(
+      isTopo
+        ? ((boardScroll?.clientHeight || 0) || (window.innerHeight - (toolbar?.offsetHeight || 56) - 16))
+        : (window.innerHeight - (toolbar?.offsetHeight || 56) - 42)
+    )
+  );
   const dims = boardDimensions();
-  const pad = 24;
-  const largeBoard = Math.max(dims.activeW, dims.activeH) > 30 || Math.max(dims.totalW, dims.totalH) > 30;
+  const pad = isTopo ? 8 : 24;
+  const largeBoard = isTopo
+    ? (Math.max(dims.activeW, dims.activeH) > 46 || Math.max(dims.totalW, dims.totalH) > 46)
+    : (Math.max(dims.activeW, dims.activeH) > 30 || Math.max(dims.totalW, dims.totalH) > 30);
   let cell;
   if (largeBoard) {
-    cell = 28;
+    cell = isTopo ? 24 : 28;
     if (boardScroll) boardScroll.classList.add('can-pan');
   } else {
-    cell = Math.max(18, Math.floor(Math.min((viewportW - pad * 2) / Math.max(1, dims.totalW), (viewportH - pad * 2) / Math.max(1, dims.totalH))));
+    cell = Math.max(isTopo ? 20 : 18, Math.floor(Math.min((viewportW - pad * 2) / Math.max(1, dims.totalW), (viewportH - pad * 2) / Math.max(1, dims.totalH))));
     if (boardScroll) boardScroll.classList.remove('can-pan');
   }
   const canvasW = pad * 2 + dims.totalW * cell;
@@ -325,7 +335,7 @@ function drawNodeBody(p, r, owner, starter = false, alpha = 1, outlineScale = 1)
   ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.lineWidth = Math.max(2, r * 0.26) * outlineScale;
+  ctx.lineWidth = Math.max(starter ? 2.4 : 1.35, r * (starter ? 0.26 : 0.12)) * outlineScale;
   ctx.strokeStyle = '#000000';
   ctx.stroke();
 

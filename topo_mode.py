@@ -131,7 +131,7 @@ class TopoGameState:
         enclosed = self._enclosed_cells_for_owner(owner)
         if enclosed:
             lowest = min(self.elevation(cell) for cell in enclosed)
-            best = min(best, max(1, lowest - 1))
+            best = min(best, lowest)
         return best
 
     def current_privilege(self, owner: int) -> int:
