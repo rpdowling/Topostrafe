@@ -478,14 +478,15 @@ button:hover, .button-link:hover { background: var(--button-active); }
   justify-content: center;
   gap: 0;
   font-weight: 900;
+  transform: translateX(-40px);
 }
 .topo-mark {
   position: relative;
   z-index: 3;
-  width: 6.45em;
-  height: 1.88em;
+  width: 9.2em;
+  height: 2.65em;
   flex: 0 0 auto;
-  margin-right: -4.15em;
+  margin-right: -5.35em;
   overflow: visible;
 }
 .topo-mark-svg {
@@ -497,14 +498,14 @@ button:hover, .button-link:hover { background: var(--button-active); }
 .topo-mark-path-outline {
   fill: none;
   stroke: #111111;
-  stroke-width: 22;
+  stroke-width: 29;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 .topo-mark-path-fill {
   fill: none;
   stroke: #ef39ea;
-  stroke-width: 15.5;
+  stroke-width: 20.5;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -530,7 +531,7 @@ button:hover, .button-link:hover { background: var(--button-active); }
   display: inline-block;
   color: #f5f8fc;
   letter-spacing: 0.015em;
-  margin-left: -0.06em;
+  margin-left: -0.02em;
 }
 .um-logo-title {
   font-family: "Rajdhani", "Roboto", "Avenir Next", sans-serif;
