@@ -114,7 +114,9 @@ class GameStore:
 
     def defaults(self) -> dict[str, Any]:
         d = eng.GameSettings()
-        d.map_type = "River"
+        d.map_type = "Three Mountains"
+        d.map_width = 22
+        d.map_height = 22
         um_defaults = um.UmSettings(board_width=6, board_height=6, require_move_confirmation=False, infinite_board=True, time_limit_enabled=True, time_bank_seconds=300, game_end_mode="death", starting_nodes=0)
         return {
             "settings": d.__dict__.copy(),
