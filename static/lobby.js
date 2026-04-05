@@ -1,6 +1,6 @@
 const defaults = window.TOPOS_DEFAULTS;
 const settings = defaults.settings;
-const settingKeys = Object.keys(settings);
+const settingKeys = ['map_type','map_width','map_height','time_limit_enabled','time_bank_seconds','require_move_confirmation'];
 
 const mapTypeLabels = defaults.map_type_labels || {};
 const umDefaults = defaults.um_defaults || { board_width: 6, board_height: 6, max_corners: 1, board_color: "yellow", require_move_confirmation: false, infinite_board: true, size_preset: "small", time_limit_enabled: true, time_bank_seconds: 300, game_end_mode: "death", starting_nodes: 0 };
@@ -67,20 +67,18 @@ function buildForm() {
 
 
 const SIZE_PRESETS = {
-  small: { map_width: 14, map_height: 14, max_link_distance: 7, path_count: 8 },
-  medium: { map_width: 22, map_height: 22, max_link_distance: 11, path_count: 12 },
-  large: { map_width: 30, map_height: 30, max_link_distance: 15, path_count: 16 },
-  huge: { map_width: 46, map_height: 46, max_link_distance: 23, path_count: 24 },
-  ginormous: { map_width: 70, map_height: 70, max_link_distance: 35, path_count: 36 },
+  small: { map_width: 14, map_height: 14 },
+  medium: { map_width: 22, map_height: 22 },
+  large: { map_width: 30, map_height: 30 },
+  huge: { map_width: 46, map_height: 46 },
+  ginormous: { map_width: 70, map_height: 70 },
 };
 
 function detectPreset() {
   const width = Number(el('map_width').value);
   const height = Number(el('map_height').value);
-  const link = Number(el('max_link_distance').value);
-  const paths = Number(el('path_count').value);
   for (const [name, cfg] of Object.entries(SIZE_PRESETS)) {
-    if (width === cfg.map_width && height === cfg.map_height && link === cfg.max_link_distance && paths === cfg.path_count) return name;
+    if (width === cfg.map_width && height === cfg.map_height) return name;
   }
   return 'custom';
 }
@@ -91,13 +89,11 @@ function applyPreset(name) {
   if (cfg) {
     el('map_width').value = cfg.map_width;
     el('map_height').value = cfg.map_height;
-    el('max_link_distance').value = cfg.max_link_distance;
-    el('path_count').value = cfg.path_count;
   }
-  for (const id of ['map_width', 'map_height', 'max_link_distance', 'path_count']) {
-    el(id).disabled = !custom;
+  for (const id of ['map_width', 'map_height']) {
+    if (el(id)) el(id).disabled = !custom;
   }
-  for (const id of ['map_width_wrap', 'map_height_wrap', 'max_link_distance_wrap', 'path_count_wrap']) {
+  for (const id of ['map_width_wrap', 'map_height_wrap']) {
     const node = el(id);
     if (node) node.style.display = custom ? '' : 'none';
   }
@@ -109,7 +105,8 @@ function hookSizePreset() {
   preset.value = detectPreset();
   applyPreset(preset.value);
   preset.addEventListener('change', () => applyPreset(preset.value));
-  for (const id of ['map_width', 'map_height', 'max_link_distance', 'path_count']) {
+  for (const id of ['map_width', 'map_height']) {
+    if (!el(id)) continue;
     el(id).addEventListener('input', () => {
       const next = detectPreset();
       if (preset.value !== 'custom') {
@@ -120,6 +117,7 @@ function hookSizePreset() {
   }
 }
 
+
 function collectPayload() {
   const payload = {
     settings: {},
@@ -128,6 +126,7 @@ function collectPayload() {
     join_code: el('join_code').value.trim(),
     custom_map_json: el('custom_map_json').value.trim(),
     size_preset: el('size_preset').value,
+    game_mode: 'topostrafe',
   };
   for (const key of settingKeys) {
     const node = el(key);
@@ -139,8 +138,6 @@ function collectPayload() {
     const cfg = SIZE_PRESETS[preset];
     payload.settings.map_width = cfg.map_width;
     payload.settings.map_height = cfg.map_height;
-    payload.settings.max_link_distance = cfg.max_link_distance;
-    payload.settings.path_count = cfg.path_count;
   }
   return payload;
 }
@@ -240,7 +237,7 @@ async function refreshGames() {
       if (game.game_mode === 'um') {
         left.innerHTML = `<strong>${game.game_id}</strong><small>Um · ${game.size}</small><small>${String(game.board_color || '').replace(/^./, c => c.toUpperCase())} · ${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
       } else {
-        left.innerHTML = `<strong>${game.game_id}</strong><small>${displayMapType(game.map_type)} · ${game.size}</small><small>Path ${game.path_count} · Link ${game.max_link_distance} · ${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
+        left.innerHTML = `<strong>${game.game_id}</strong><small>${displayMapType(game.map_type)} · ${game.size}</small><small>${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
       }
       const btn = document.createElement('button');
       btn.className = `join-button${game.game_mode === 'um' ? ' um-join-button' : ''}`;
@@ -310,36 +307,7 @@ if (el('um-form')) el('um-form').addEventListener('submit', createUmGame);
 if (el('um-play-button')) el('um-play-button').addEventListener('click', (evt) => { evt.preventDefault(); submitUmNormalGame(); });
 if (el('um-bot-button')) el('um-bot-button').addEventListener('click', (evt) => { evt.preventDefault(); submitUmBotGame(); });
 el('join-private-form').addEventListener('submit', joinPrivate);
-hookInfoModal();
 refreshGames();
 setInterval(refreshGames, 3000);
 
 
-function hookInfoModal() {
-  const openBtn = el('info-button');
-  const overlay = el('info-overlay');
-  const closeBtn = el('info-close');
-  const modal = el('info-modal');
-  if (!openBtn || !overlay || !closeBtn || !modal) return;
-
-  function openModal() {
-    overlay.classList.remove('hidden');
-    overlay.setAttribute('aria-hidden', 'false');
-    document.body.classList.add('info-modal-open');
-  }
-
-  function closeModal() {
-    overlay.classList.add('hidden');
-    overlay.setAttribute('aria-hidden', 'true');
-    document.body.classList.remove('info-modal-open');
-  }
-
-  openBtn.addEventListener('click', openModal);
-  closeBtn.addEventListener('click', closeModal);
-  overlay.addEventListener('click', (evt) => {
-    if (evt.target === overlay) closeModal();
-  });
-  document.addEventListener('keydown', (evt) => {
-    if (evt.key === 'Escape' && !overlay.classList.contains('hidden')) closeModal();
-  });
-}

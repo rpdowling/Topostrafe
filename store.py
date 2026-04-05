@@ -10,6 +10,7 @@ from typing import Any
 
 import engine_core as eng
 import um_mode as um
+import topo_mode as topo
 from preset_maps import ALTAR_MAP, MOSAIC_MAP, PRISON_MAP, RIVER_MAP
 
 
@@ -366,7 +367,7 @@ class GameStore:
                 settings = self._settings_from_payload(settings_payload)
                 map_data = self._map_from_payload(settings, payload)
                 vs_bot = bool(payload.get("vs_bot", False))
-                state = eng.GameState(settings, map_data.copy())
+                state = topo.TopoGameState(settings, map_data.copy())
                 game = GameSession(
                     game_id=game_id,
                     settings=settings,
@@ -375,7 +376,7 @@ class GameStore:
                     is_private=is_private,
                     join_code=join_code,
                     vs_bot=vs_bot,
-                    bot=eng.HeuristicBot(1) if vs_bot else None,
+                    bot=um.UmAggressiveBot(1) if vs_bot else None,
                     game_mode="topostrafe",
                 )
                 if vs_bot:
@@ -544,12 +545,12 @@ class GameStore:
                     "my_premove_action": (deepcopy(game.pending_premoves.get(seat)) if seat is not None else None),
                 }
             nodes = [
-                {"x": x, "y": y, "owner": node.owner, "starter": node.starter, "fort": bool(getattr(node, "fort", False)), "sapper": bool(getattr(node, "sapper", False)), "sap_dir": list(getattr(node, "sap_dir", []) or [])}
+                {"x": x, "y": y, "owner": node.owner, "starter": node.starter, "privilege": int(state.current_privilege(node.owner))}
                 for (x, y), node in sorted(state.nodes.items())
             ]
-            roads = [
-                {"road_id": road.road_id, "owner": road.owner, "path": [[x, y] for (x, y) in road.path], "sapper": bool(getattr(road, "sapper", False))}
-                for road in sorted(state.roads.values(), key=lambda r: r.road_id)
+            paths = [
+                {"path_id": path.path_id, "owner": path.owner, "cells": [[x, y] for (x, y) in path.cells], "length": path.length}
+                for path in sorted(state.paths.values(), key=lambda p: p.path_id)
             ]
             return {
                 "game_id": game.game_id,
@@ -565,22 +566,29 @@ class GameStore:
                 "winner": state.winner,
                 "winner_name": game.owner_name(state.winner) if state.winner is not None else None,
                 "win_reason": state.win_reason,
-                "remaining_path": state.remaining_path,
-                "rally_origin": (list(state.rally_origin) if getattr(state, "rally_origin", None) is not None else None),
                 "starter_placed": list(state.starter_placed),
                 "time_remaining": {
                     "0": self._effective_time_remaining(game, 0),
                     "1": self._effective_time_remaining(game, 1),
                 },
-                "settings": game.settings.__dict__.copy(),
-                "map": {
-                    "width": state.map.width,
-                    "height": state.map.height,
-                    "grid": [row[:] for row in state.map.grid],
+                "settings": {
+                    "map_type": game.settings.map_type,
+                    "time_limit_enabled": bool(game.settings.time_limit_enabled),
+                    "time_bank_seconds": int(game.settings.time_bank_seconds),
+                    "require_move_confirmation": bool(getattr(game.settings, 'require_move_confirmation', False)),
+                },
+                "board": {
+                    "width": state.width,
+                    "height": state.height,
+                    "grid": [row[:] for row in state.grid],
+                    "preview_margin_x": state._preview_margin_x(),
+                    "preview_margin_y": state._preview_margin_y(),
+                    "infinite_board": True,
                 },
                 "nodes": nodes,
-                "roads": roads,
-                "retake_locks": [{"x": x, "y": y, "blocked_owner": blocked} for (x, y), blocked in state.retake_locks.items()],
+                "paths": paths,
+                "kill_counts": {"0": int(getattr(state, "kill_counts", {}).get(0, 0)), "1": int(getattr(state, "kill_counts", {}).get(1, 0))},
+                "privileges": {"0": int(state.current_privilege(0)), "1": int(state.current_privilege(1))},
                 "log": game.log[-16:],
                 "chat": game.chat[-100:],
                 "my_premove": (seat is not None and game.pending_premoves.get(seat) is not None),
@@ -641,25 +649,21 @@ class GameStore:
                     segments.append([(int(x), int(y)) for x, y in seg])
                 return {"type": "um_paths", "segments": segments}
             return {"type": "resign"}
-        if t not in {"starter", "routes", "fortify", "demolish", "entrench", "end_turn", "resign"}:
+        if t not in {"starter", "um_node", "um_paths", "resign"}:
             raise ValueError("Unknown action.")
         if t == "starter":
             return {"type": "starter", "x": int(action["x"]), "y": int(action["y"])}
-        if t == "routes":
-            routes = []
-            for route in action.get("routes", []):
-                routes.append([(int(x), int(y)) for x, y in route])
-            return {"type": "routes", "routes": routes}
-        if t == "fortify":
-            return {"type": "fortify", "x": int(action["x"]), "y": int(action["y"])}
-        if t == "demolish":
-            return {"type": "demolish", "x": int(action["x"]), "y": int(action["y"])}
-        if t == "entrench":
-            route = []
-            for cell in action.get("route", []):
-                route.append((int(cell[0]), int(cell[1])))
-            return {"type": "entrench", "route": route}
-        return {"type": t}
+        if t == "um_node":
+            payload = {"type": "um_node", "x": int(action["x"]), "y": int(action["y"])}
+            if isinstance(action.get("preview_ref"), dict):
+                payload["preview_ref"] = {"width": int(action["preview_ref"].get("width", 0)), "height": int(action["preview_ref"].get("height", 0))}
+            return payload
+        if t == "um_paths":
+            segments = []
+            for seg in action.get("segments", []):
+                segments.append([(int(x), int(y)) for x, y in seg])
+            return {"type": "um_paths", "segments": segments}
+        return {"type": "resign"}
 
     def _execute_turn_action(self, game: GameSession, seat: int, action: dict[str, Any]) -> str:
         t = action.get("type")
@@ -701,23 +705,12 @@ class GameStore:
         if t == "starter":
             ok, msg = game.state.commit_starter(int(action["x"]), int(action["y"]))
             auto_end_turn = ok
-        elif t == "routes":
-            routes = action.get("routes", [])
-            ok, msg = game.state.commit_routes(routes)
-            auto_end_turn = ok and getattr(game.state, "rally_origin", None) is None
-        elif t == "fortify":
-            ok, msg = game.state.commit_fortify((int(action["x"]), int(action["y"])))
+        elif t == "um_node":
+            ok, msg = game.state.commit_place_node(int(action["x"]), int(action["y"]))
             auto_end_turn = ok
-        elif t == "demolish":
-            ok, msg = game.state.commit_demolish((int(action["x"]), int(action["y"])))
+        elif t == "um_paths":
+            ok, msg = game.state.commit_place_paths(action.get("segments", []))
             auto_end_turn = ok
-        elif t == "entrench":
-            ok, msg = game.state.commit_entrench(action.get("route", []))
-            auto_end_turn = ok
-        elif t == "end_turn":
-            ok, msg = game.state.end_turn()
-            if ok:
-                self._start_next_turn(game)
         else:
             raise ValueError("Unknown action.")
 
@@ -732,12 +725,10 @@ class GameStore:
 
         if game.state.winner is not None:
             game.status = "finished"
-        elif t != "end_turn":
-            game.turn_started_at = time.monotonic() if game.settings.time_limit_enabled else game.turn_started_at
         return msg
 
     def _resolve_um_premove_preview(self, game: GameSession, queued: dict[str, Any] | None) -> dict[str, Any] | None:
-        if not queued or game.game_mode != "um" or queued.get("type") != "um_node":
+        if not queued or game.game_mode not in {"um", "topostrafe"} or queued.get("type") != "um_node":
             return queued
         x = int(queued.get("x", 0))
         y = int(queued.get("y", 0))

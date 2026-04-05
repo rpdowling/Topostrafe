@@ -34,7 +34,6 @@
               <option value="ginormous">Ginormous</option>
               <option value="custom">Custom</option>
             </select>
-            <small class="muted">Small 14x14 · link 7 · path 8. Medium 22x22 · link 11 · path 12. Large 30x30 · link 15 · path 16. Huge 46x46 · link 23 · path 24. Ginormous 70x70 · link 35 · path 36.</small>
           </label>
           <label class="custom-size-field" id="map_width_wrap">
             <span>Map Width</span>
@@ -44,61 +43,28 @@
             <span>Map Height</span>
             <input id="map_height" type="number" min="5" max="80" />
           </label>
-          <label class="custom-size-field" id="path_count_wrap">
-            <span>Path Count / Turn</span>
-            <input id="path_count" type="number" min="1" max="128" />
-          </label>
-          <label class="custom-size-field" id="max_link_distance_wrap">
-            <span>Max Link Length</span>
-            <input id="max_link_distance" type="number" min="1" max="64" />
-          </label>
-          <label>
-            <span>Cell Size</span>
-            <input id="cell_size" type="number" min="8" max="80" />
+          <label class="check">
+            <input id="time_limit_enabled" type="checkbox" />
+            <span>Use Time Bank</span>
           </label>
           <label>
             <span>Time Bank / Side (sec)</span>
             <input id="time_bank_seconds" type="number" min="10" max="86400" />
           </label>
-        </div>
-
-        <div class="grid two compact-checks">
-          <label class="check"><input id="time_limit_enabled" type="checkbox" /><span>Use Time Limit</span></label>
-          <label class="check"><input id="is_private" type="checkbox" /><span>Private Game</span></label>
+          <label class="check">
+            <input id="is_private" type="checkbox" />
+            <span>Private Game</span>
+          </label>
+          <label class="check">
+            <input id="require_move_confirmation" type="checkbox" />
+            <span>Require Move Confirmation</span>
+          </label>
           <input id="vs_bot" type="checkbox" hidden />
-          <label class="check"><input id="retake_rule" type="checkbox" /><span>Retake Lock</span></label>
-          <label class="check"><input id="inherited_attack_rule" type="checkbox" /><span>Shared Attack Privilege</span></label>
-          <label class="check"><input id="show_unattackable_range_targets" type="checkbox" /><span>Show Unattackable Targets</span></label>
-          <label class="check"><input id="low_point_restrict" type="checkbox" /><span>Low Point Restrict</span></label>
-          <label class="check"><input id="entrench_rule" type="checkbox" /><span>Sap</span></label>
-          <label class="check"><input id="sap_adj_ignore" type="checkbox" /><span>Sap Adj. Ignore</span></label>
-          <label class="check"><input id="fortify_rule" type="checkbox" /><span>Fortify</span></label>
-          <label class="check"><input id="demolish_rule" type="checkbox" /><span>Demolish Path</span></label>
-          <label class="check"><input id="north_shading" type="checkbox" /><span>North Shading</span></label>
-          <label class="check"><input id="require_move_confirmation" type="checkbox" /><span>Require Move Confirmation</span></label>
         </div>
-
-        <details>
-          <summary>Bot Weights</summary>
-          <div class="grid two bot-grid">
-            <label><span>Castle Survival</span><input id="bot_castle_survival" type="number" /></label>
-            <label><span>Castle Kill Threat</span><input id="bot_castle_kill_threat" type="number" /></label>
-            <label><span>Disconnect Enemy</span><input id="bot_disconnect_enemy" type="number" /></label>
-            <label><span>Avoid Disconnect</span><input id="bot_avoid_disconnect" type="number" /></label>
-            <label><span>Redundancy</span><input id="bot_redundancy" type="number" /></label>
-            <label><span>High Ground</span><input id="bot_high_ground" type="number" /></label>
-            <label><span>Mobility</span><input id="bot_mobility" type="number" /></label>
-            <label><span>Local Expansion</span><input id="bot_local_expansion" type="number" /></label>
-            <label><span>Forward Pressure</span><input id="bot_forward_pressure" type="number" /></label>
-            <label><span>Castle Protect</span><input id="bot_castle_protect" type="number" /></label>
-          </div>
-        </details>
-
         <label>
           <span>Private Join Code</span>
           <input id="join_code" type="text" maxlength="16" placeholder="Optional. Leave blank to auto-generate." />
         </label>
-
         <label>
           <span>Custom Map JSON</span>
           <textarea id="custom_map_json" rows="8" placeholder='{"width":30,"height":30,"grid":[[5,...], ...]}'></textarea>
@@ -185,8 +151,7 @@
               <button id="bot-button" class="menu-secondary menu-bot-button" type="button" form="create-form">Play vs Bot (In Dev.)</button>
               <a class="button-link menu-secondary menu-editor-button" href="/editor">Map Editor</a>
             </div>
-            <button id="info-button" class="menu-secondary menu-info-button" type="button">Info</button>
-            <span id="create-status" class="muted"></span>
+                        <span id="create-status" class="muted"></span>
           </div>
         </div>
       </div>
@@ -215,61 +180,6 @@
   </div>
 
 
-  <div id="info-overlay" class="info-overlay hidden" aria-hidden="true">
-    <div id="info-modal" class="info-modal" role="dialog" aria-modal="true" aria-labelledby="info-modal-title">
-      <div class="info-modal-header">
-        <div>
-          <h2 id="info-modal-title">Library</h2>
-          <p class="info-modal-subtitle">Moves and node types</p>
-        </div>
-        <button id="info-close" class="info-close" type="button" aria-label="Close info">✕</button>
-      </div>
-      <div class="info-modal-body">
-        <div class="info-entry">
-          <div class="info-entry-icon icon-castle" aria-hidden="true">
-            <span class="icon-castle-ring"></span>
-            <span class="icon-castle-dot"></span>
-          </div>
-          <div class="info-entry-copy">
-            <h3>Castle Node</h3>
-            <p>Your king commands your army, keep him safe or you lose. He is always placed on a blue square, and always on the edge of the map.</p>
-          </div>
-        </div>
-        <div class="info-entry">
-          <div class="info-entry-icon icon-camp" aria-hidden="true">
-            <span class="icon-camp-ring"></span>
-            <span class="icon-camp-dot"></span>
-          </div>
-          <div class="info-entry-copy">
-            <h3>Army Camp</h3>
-            <p>Your Army Camps are the backbone of your army, keep them well connected and well supplied, so they can expand your territory. Army camps that have their supply lines cut will fall.</p>
-          </div>
-        </div>
-        <div class="info-entry">
-          <div class="info-entry-icon icon-fort" aria-hidden="true">
-            <span class="icon-fort-diamond"></span>
-          </div>
-          <div class="info-entry-copy">
-            <h3>Fort</h3>
-            <p>A fortified Army Camp, Forts can deploy Sappers.</p>
-          </div>
-        </div>
-        <div class="info-entry">
-          <div class="info-entry-icon icon-sapper" aria-hidden="true">
-            <span class="icon-sapper-triangle"></span>
-          </div>
-          <div class="info-entry-copy">
-            <h3>Sapper</h3>
-            <p>A temporarily deployed unit which can decrease terrain elevation by one level, and will take two turns to return to its Fort. Sappers can indirectly cut paths and attack Army Camps and Forts if they can reduce their elevation to be more than one level below adjacent paths.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    window.TOPOS_DEFAULTS = {{ defaults_json | safe }};
-  </script>
   <script src="/static/lobby.js?v=15"></script>
 </body>
 </html>
