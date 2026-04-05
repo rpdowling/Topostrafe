@@ -545,7 +545,7 @@ class GameStore:
                     "my_premove_action": (deepcopy(game.pending_premoves.get(seat)) if seat is not None else None),
                 }
             nodes = [
-                {"x": x, "y": y, "owner": node.owner, "starter": node.starter, "privilege": int(state.current_privilege(node.owner))}
+                {"x": x, "y": y, "owner": node.owner, "starter": node.starter, "privilege": int(state.node_privilege((x, y)))}
                 for (x, y), node in sorted(state.nodes.items())
             ]
             paths = [

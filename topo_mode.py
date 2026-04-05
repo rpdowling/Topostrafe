@@ -126,19 +126,40 @@ class TopoGameState:
         if count > 0:
             self.kill_counts[owner] = int(self.kill_counts.get(owner, 0)) + int(count)
 
-    def _captured_privilege(self, owner: int) -> int:
-        best = 5
-        enclosed = self._enclosed_cells_for_owner(owner)
-        if enclosed:
-            # Elevation values are inverted: 5=blue lowest, 1=red highest.
-            # The privilege gained by an enclosure is the lowest elevation present
-            # in the enclosed area, i.e. the largest numeric elevation value inside it.
-            lowest_present = max(self.elevation(cell) for cell in enclosed)
-            best = min(best, lowest_present)
-        return best
+    def _component_privileges(self, owner: int) -> dict[tuple[int, int], int]:
+        comp_privs: dict[tuple[int, int], int] = {}
+        for nodes, path_ids in self._owner_component_paths(owner):
+            priv = 5
+            paths = [self.paths[pid] for pid in path_ids if pid in self.paths]
+            enclosed: set[tuple[int, int]] = set()
+            for comp in self._path_region_components_for_paths(paths):
+                enclosed.update(comp)
+            if enclosed:
+                # Elevation values are inverted: 5=blue lowest, 1=red highest.
+                # The privilege gained by a connected enclosing group is the lowest
+                # elevation present in that enclosed area, i.e. the largest numeric
+                # elevation value inside it.
+                priv = max(self.elevation(cell) for cell in enclosed)
+            for pos in nodes:
+                comp_privs[pos] = priv
+        return comp_privs
+
+    def node_privilege(self, pos: tuple[int, int]) -> int:
+        node = self.nodes.get(tuple(pos))
+        if node is None:
+            return 5
+        return self._component_privileges(node.owner).get(tuple(pos), 5)
+
+    def path_privilege(self, path: TopoPath) -> int:
+        if not path.cells:
+            return 5
+        return self.node_privilege(path.cells[0])
 
     def current_privilege(self, owner: int) -> int:
-        return self._captured_privilege(owner)
+        comp_privs = self._component_privileges(owner)
+        if not comp_privs:
+            return 5
+        return min(comp_privs.values())
 
     def _dot_color(self, owner: int) -> str:
         return ELEVATION_COLORS[self.current_privilege(owner)]
@@ -235,7 +256,7 @@ class TopoGameState:
         prev_end: tuple[int, int] | None = None
         used_start_nodes: set[tuple[int, int]] = set()
         to_add: list[TopoPath] = []
-        my_priv = self.current_privilege(owner)
+        my_priv = 5
 
         for seg in norm_segments:
             ok, msg = self._validate_segment(seg, owner, prev_end, new_internal_cells, used_start_nodes)
@@ -243,6 +264,7 @@ class TopoGameState:
                 return False, msg
             seg_internal = set(seg[1:-1])
             seg_length = len(seg) - 1
+            seg_priv = self.node_privilege(seg[0])
             crossed_enemy: set[int] = set()
             for cell in seg_internal:
                 node = self.nodes.get(cell)
@@ -267,8 +289,8 @@ class TopoGameState:
                 path = self.paths.get(pid)
                 if path is None:
                     continue
-                enemy_priv = self.current_privilege(path.owner)
-                if not (seg_length < path.length or my_priv < enemy_priv):
+                enemy_priv = self.path_privilege(path)
+                if not (seg_length < path.length or seg_priv <= enemy_priv):
                     return False, "That enemy path is too strong to cut from this group."
                 remove_enemy_paths.add(pid)
             path = TopoPath(self.next_path_id, owner, seg[:])
