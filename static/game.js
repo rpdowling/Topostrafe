@@ -198,26 +198,26 @@ function resizeCanvas() {
   const panel = boardScroll?.closest('.um-board-panel') || board.parentElement;
   const toolbar = panel?.querySelector('.toolbar');
   const isTopo = !!panel?.classList.contains('topo-board-panel');
-  const viewportW = Math.max(isTopo ? 760 : 520, Math.floor((boardScroll?.clientWidth || panel?.clientWidth || 1400) - (isTopo ? 0 : 2)));
+  const viewportW = Math.max(isTopo ? 980 : 520, Math.floor((boardScroll?.clientWidth || panel?.clientWidth || 1800) - (isTopo ? 0 : 2)));
   const viewportH = Math.max(
-    isTopo ? 680 : 500,
+    isTopo ? 860 : 500,
     Math.floor(
       isTopo
-        ? ((boardScroll?.clientHeight || 0) || (window.innerHeight - (toolbar?.offsetHeight || 56) - 16))
+        ? (window.innerHeight - 12)
         : (window.innerHeight - (toolbar?.offsetHeight || 56) - 42)
     )
   );
   const dims = boardDimensions();
-  const pad = isTopo ? 8 : 24;
+  const pad = isTopo ? 4 : 24;
   const largeBoard = isTopo
     ? (Math.max(dims.activeW, dims.activeH) > 46 || Math.max(dims.totalW, dims.totalH) > 46)
     : (Math.max(dims.activeW, dims.activeH) > 30 || Math.max(dims.totalW, dims.totalH) > 30);
   let cell;
   if (largeBoard) {
-    cell = isTopo ? 24 : 28;
+    cell = isTopo ? 28 : 28;
     if (boardScroll) boardScroll.classList.add('can-pan');
   } else {
-    cell = Math.max(isTopo ? 20 : 18, Math.floor(Math.min((viewportW - pad * 2) / Math.max(1, dims.totalW), (viewportH - pad * 2) / Math.max(1, dims.totalH))));
+    cell = Math.max(isTopo ? 28 : 18, Math.floor(Math.min((viewportW - pad * 2) / Math.max(1, dims.totalW), (viewportH - pad * 2) / Math.max(1, dims.totalH))));
     if (boardScroll) boardScroll.classList.remove('can-pan');
   }
   const canvasW = pad * 2 + dims.totalW * cell;
@@ -794,7 +794,7 @@ function drawNodes(m) {
   for (const node of latestState.nodes || []) {
     const p = cellCenter([node.x, node.y], m);
     const r = m.cell * 0.23;
-    drawNodeBody(p, r, node.owner, false, 1, 1);
+    drawNodeBody(p, r, node.owner, !!node.starter, 1, 1);
     const dotR = r * 0.34;
     ctx.save();
     ctx.fillStyle = elevationColor(node.privilege || 5);

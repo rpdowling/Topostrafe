@@ -51,17 +51,20 @@ body.menu-page::before {
 }
 
 .topo-layout {
-  grid-template-columns: 190px minmax(980px, 1fr) 270px;
-  gap: 10px;
+  grid-template-columns: 150px minmax(0, 1fr) 220px;
+  gap: 8px;
 }
 .topo-layout .chat-panel { width: 100%; }
 .topo-layout .sidebar { width: 100%; }
-.topo-board-panel { min-height: calc(100vh - 20px); }
+.topo-board-panel { min-height: calc(100vh - 8px); padding: 8px; }
 .topo-board-panel #board {
   background: #0a0f14;
 }
+.topo-board-panel #board-scroll {
+  max-height: calc(100vh - 20px);
+}
 @media (max-width: 1450px) {
-  .topo-layout { grid-template-columns: 180px minmax(860px, 1fr) 250px; }
+  .topo-layout { grid-template-columns: 130px minmax(0, 1fr) 200px; }
 }
 .editor-layout {
   display: grid;
