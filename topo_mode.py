@@ -131,15 +131,19 @@ class TopoGameState:
         for nodes, path_ids in self._owner_component_paths(owner):
             priv = 5
             paths = [self.paths[pid] for pid in path_ids if pid in self.paths]
-            enclosed: set[tuple[int, int]] = set()
+            region_privs: list[int] = []
             for comp in self._path_region_components_for_paths(paths):
-                enclosed.update(comp)
-            if enclosed:
-                # Elevation values are inverted: 5=blue lowest, 1=red highest.
-                # The privilege gained by a connected enclosing group is the lowest
-                # elevation present in that enclosed area, i.e. the largest numeric
-                # elevation value inside it.
-                priv = max(self.elevation(cell) for cell in enclosed)
+                if not comp:
+                    continue
+                # Each enclosed region grants the lowest elevation present inside
+                # that region. With the map encoding 5=blue ... 1=red, that means
+                # the region grant is the largest numeric elevation inside it.
+                region_privs.append(max(self.elevation(cell) for cell in comp))
+            if region_privs:
+                # A connected enclosing group keeps the highest privilege granted by
+                # any region it currently encloses. Since smaller numeric values are
+                # stronger privileges (yellow=3 beats green=4), take the minimum.
+                priv = min(region_privs)
             for pos in nodes:
                 comp_privs[pos] = priv
         return comp_privs
