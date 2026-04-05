@@ -478,7 +478,7 @@ button:hover, .button-link:hover { background: var(--button-active); }
   justify-content: center;
   gap: 0;
   font-weight: 900;
-  transform: translateX(-20px);
+  transform: translateX(-40px);
 }
 .topo-mark {
   position: relative;
