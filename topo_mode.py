@@ -127,43 +127,34 @@ class TopoGameState:
             self.kill_counts[owner] = int(self.kill_counts.get(owner, 0)) + int(count)
 
     def _component_privileges(self, owner: int) -> dict[tuple[int, int], int]:
-        comp_privs: dict[tuple[int, int], int] = {}
-        for nodes, path_ids in self._owner_component_paths(owner):
-            priv = 5
-            paths = [self.paths[pid] for pid in path_ids if pid in self.paths]
-            region_privs: list[int] = []
-            for comp in self._path_region_components_for_paths(paths):
-                if not comp:
-                    continue
-                # Each enclosed region grants the lowest elevation present inside
-                # that region. With the map encoding 5=blue ... 1=red, that means
-                # the region grant is the largest numeric elevation inside it.
-                region_privs.append(max(self.elevation(cell) for cell in comp))
-            if region_privs:
-                # A connected enclosing group keeps the highest privilege granted by
-                # any region it currently encloses. Since smaller numeric values are
-                # stronger privileges (yellow=3 beats green=4), take the minimum.
-                priv = min(region_privs)
-            for pos in nodes:
-                comp_privs[pos] = priv
-        return comp_privs
+        # Topostrafe now uses node-specific elevation privilege.
+        # A node's privilege is simply the elevation of the square it occupies.
+        return {
+            pos: self.elevation(pos)
+            for pos, node in self.nodes.items()
+            if node.owner == owner
+        }
 
     def node_privilege(self, pos: tuple[int, int]) -> int:
         node = self.nodes.get(tuple(pos))
         if node is None:
             return 5
-        return self._component_privileges(node.owner).get(tuple(pos), 5)
+        return self.elevation(tuple(pos))
 
     def path_privilege(self, path: TopoPath) -> int:
+        # A path's cutting privilege comes only from the node it originates from.
         if not path.cells:
             return 5
-        return self.node_privilege(path.cells[0])
+        return self.elevation(path.cells[0])
 
     def current_privilege(self, owner: int) -> int:
-        comp_privs = self._component_privileges(owner)
-        if not comp_privs:
+        # Global placement unlock is determined by the highest elevation the
+        # player has reached with any node. With 5=blue ... 1=red, that is the
+        # minimum numeric elevation among the owner's nodes.
+        owner_nodes = [pos for pos, node in self.nodes.items() if node.owner == owner]
+        if not owner_nodes:
             return 5
-        return min(comp_privs.values())
+        return min(self.elevation(pos) for pos in owner_nodes)
 
     def _dot_color(self, owner: int) -> str:
         return ELEVATION_COLORS[self.current_privilege(owner)]

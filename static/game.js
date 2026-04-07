@@ -781,13 +781,6 @@ function drawPendingNode(m) {
   const p = cellCenter(pendingNode, m);
   const r = m.cell * 0.23;
   drawNodeBody(p, r, mySeat() ?? 0, false, 0.68, 0.95);
-  ctx.save();
-  ctx.globalAlpha = 0.7;
-  ctx.fillStyle = elevationColor(Number(latestState?.privileges?.[String(mySeat() ?? 0)] || 5));
-  ctx.beginPath();
-  ctx.arc(p.x, p.y, r * 0.34, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
 }
 
 function drawNodes(m) {
@@ -795,16 +788,6 @@ function drawNodes(m) {
     const p = cellCenter([node.x, node.y], m);
     const r = m.cell * 0.23;
     drawNodeBody(p, r, node.owner, !!node.starter, 1, 1);
-    const dotR = r * 0.34;
-    ctx.save();
-    ctx.fillStyle = elevationColor(node.privilege || 5);
-    ctx.lineWidth = node.starter ? Math.max(2, r * 0.32) : Math.max(1.5, r * 0.16);
-    ctx.strokeStyle = '#000000';
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
   }
 }
 
