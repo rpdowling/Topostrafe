@@ -571,7 +571,8 @@ function drawBoard() {
       let fill = '#4575b4';
       let alpha = 0.28;
       if (activeX >= 0 && activeY >= 0 && activeX < m.width && activeY < m.height) {
-        fill = elevationColor((boardGrid[activeY] || [])[activeX] || 5);
+        const elevation = (boardGrid[activeY] || [])[activeX] || 5;
+        fill = isTopoBoard() ? checkerboardElevationFill(elevation, activeX, activeY) : elevationColor(elevation);
         alpha = 1;
       }
       ctx.save();
@@ -579,6 +580,10 @@ function drawBoard() {
       ctx.fillStyle = fill;
       ctx.fillRect(m.ox + x * m.cell, m.oy + y * m.cell, m.cell, m.cell);
       ctx.restore();
+      if (activeX >= 0 && activeY >= 0 && activeX < m.width && activeY < m.height) {
+        const elevation = (boardGrid[activeY] || [])[activeX] || 5;
+        drawNorthElevationShade(m, activeX, activeY, elevation, boardGrid);
+      }
     }
   }
 
@@ -611,6 +616,72 @@ function drawBoard() {
 
 function elevationColor(level) {
   return ({1:'#d73027',2:'#fc8d59',3:'#fee08b',4:'#91cf60',5:'#4575b4'})[Number(level)] || '#4575b4';
+}
+
+function isTopoBoard() {
+  const panel = boardScroll?.closest('.board-panel') || board?.closest?.('.board-panel') || board?.parentElement;
+  return !!panel?.classList?.contains('topo-board-panel');
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function hexToRgb(hex) {
+  const clean = String(hex || '').replace('#', '');
+  if (clean.length !== 6) return { r: 69, g: 117, b: 180 };
+  return {
+    r: parseInt(clean.slice(0, 2), 16),
+    g: parseInt(clean.slice(2, 4), 16),
+    b: parseInt(clean.slice(4, 6), 16),
+  };
+}
+
+function mixHexColor(hex, target, amount) {
+  const rgb = hexToRgb(hex);
+  const t = clamp01(amount);
+  const mixed = {
+    r: Math.round(rgb.r + (target.r - rgb.r) * t),
+    g: Math.round(rgb.g + (target.g - rgb.g) * t),
+    b: Math.round(rgb.b + (target.b - rgb.b) * t),
+  };
+  return `rgb(${mixed.r}, ${mixed.g}, ${mixed.b})`;
+}
+
+function adjustHexColor(hex, amount) {
+  if (amount === 0) return hex;
+  return amount > 0
+    ? mixHexColor(hex, { r: 255, g: 255, b: 255 }, amount)
+    : mixHexColor(hex, { r: 0, g: 0, b: 0 }, -amount);
+}
+
+function checkerboardElevationFill(level, x, y) {
+  const base = elevationColor(level);
+  const delta = ((x + y) & 1) === 0 ? 0.045 : -0.04;
+  return adjustHexColor(base, delta);
+}
+
+function drawNorthElevationShade(m, x, y, level, boardGrid) {
+  if (!isTopoBoard() || y <= 0) return;
+  const northLevel = Number((boardGrid[y - 1] || [])[x] || level);
+  const currentLevel = Number(level || 5);
+  const diff = currentLevel - northLevel;
+  if (diff <= 0) return;
+  const shadeHeight = Math.max(2, Math.round(m.cell * (0.09 + 0.04 * diff)));
+  const shadeAlpha = Math.min(0.30, 0.07 + 0.07 * diff);
+  const left = m.activeOx + x * m.cell;
+  const top = m.activeOy + y * m.cell;
+
+  ctx.save();
+  ctx.fillStyle = `rgba(0, 0, 0, ${shadeAlpha})`;
+  ctx.fillRect(left, top, m.cell, shadeHeight);
+  ctx.strokeStyle = `rgba(0, 0, 0, ${Math.min(0.34, shadeAlpha + 0.06)})`;
+  ctx.lineWidth = Math.max(1, Math.round(m.cell * 0.035));
+  ctx.beginPath();
+  ctx.moveTo(left, top + 0.5);
+  ctx.lineTo(left + m.cell, top + 0.5);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function privilegeName(level) {
