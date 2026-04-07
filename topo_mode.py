@@ -353,6 +353,10 @@ class TopoGameState:
             return False, "You cannot end a segment on a node that already started one earlier this turn."
         if self.elevation(start) < self._min_placeable_elevation(owner) or self.elevation(end) < self._min_placeable_elevation(owner):
             return False, "That elevation is not unlocked yet."
+        origin_elev = self.elevation(start)
+        for cell in seg:
+            if self.elevation(cell) < origin_elev:
+                return False, "That path crosses terrain above the start node's elevation."
         for a, b in zip(seg, seg[1:]):
             if abs(a[0] - b[0]) + abs(a[1] - b[1]) != 1:
                 return False, "Paths must move one square orthogonally at a time."
