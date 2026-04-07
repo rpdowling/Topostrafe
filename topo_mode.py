@@ -142,10 +142,12 @@ class TopoGameState:
         return self.elevation(tuple(pos))
 
     def path_privilege(self, path: TopoPath) -> int:
-        # A path's cutting privilege comes only from the node it originates from.
+        # Stored paths do not retain origin-node privilege after they are drawn.
+        # When crossed, their effective strength comes from the elevation they
+        # currently inhabit at the crossed cell.
         if not path.cells:
             return 5
-        return self.elevation(path.cells[0])
+        return min((self.elevation(cell) for cell in path.internal_cells), default=self.elevation(path.cells[0]))
 
     def current_privilege(self, owner: int) -> int:
         # Global placement unlock is determined by the highest elevation the
@@ -284,9 +286,10 @@ class TopoGameState:
                 path = self.paths.get(pid)
                 if path is None:
                     continue
-                enemy_priv = self.path_privilege(path)
-                if not (seg_length < path.length or seg_priv < enemy_priv):
-                    return False, "That enemy path is too strong to cut from this group."
+                crossed_cells = seg_internal & path.internal_cells
+                crossed_elevation = min((self.elevation(cell) for cell in crossed_cells), default=5)
+                if not (seg_length < path.length or seg_priv < crossed_elevation):
+                    return False, "That enemy path is too strong to cut from this start elevation."
                 remove_enemy_paths.add(pid)
             path = TopoPath(self.next_path_id, owner, seg[:])
             self.next_path_id += 1
