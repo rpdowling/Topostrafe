@@ -688,6 +688,36 @@ function privilegeName(level) {
   return ({1:'Red',2:'Orange',3:'Yellow',4:'Green',5:'Blue'})[Number(level)] || 'Blue';
 }
 
+function drawVerticalPathElevationShade(m, cells, fillW) {
+  if (!isTopoBoard() || !latestState?.board?.grid) return;
+  const boardGrid = latestState.board.grid;
+  ctx.save();
+  ctx.lineCap = 'butt';
+  ctx.lineJoin = 'round';
+  for (let i = 1; i < cells.length; i++) {
+    const a = cells[i - 1];
+    const b = cells[i];
+    if (!a || !b || a[0] !== b[0] || Math.abs(a[1] - b[1]) !== 1) continue;
+    const north = a[1] < b[1] ? a : b;
+    const south = a[1] < b[1] ? b : a;
+    const northLevel = Number((boardGrid[north[1]] || [])[north[0]] || 5);
+    const southLevel = Number((boardGrid[south[1]] || [])[south[0]] || 5);
+    const diff = southLevel - northLevel;
+    if (diff <= 0) continue;
+
+    const southCenter = cellCenter(south, m);
+    const lowerTop = m.activeOy + south[1] * m.cell;
+    const shadeLen = Math.min(m.cell * 0.48, m.cell * 0.10 * diff);
+    ctx.lineWidth = Math.max(1.4, fillW * 0.92);
+    ctx.strokeStyle = `rgba(0, 0, 0, ${Math.min(0.24, 0.08 + 0.04 * diff)})`;
+    ctx.beginPath();
+    ctx.moveTo(southCenter.x, lowerTop);
+    ctx.lineTo(southCenter.x, lowerTop + shadeLen);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawPaths(m, paths) {
   for (const path of paths) {
     const cells = path.cells || [];
@@ -724,6 +754,7 @@ function drawPaths(m, paths) {
     ctx.lineWidth = fillW;
     ctx.strokeStyle = color;
     ctx.stroke();
+    drawVerticalPathElevationShade(m, cells, fillW);
 
     ctx.lineWidth = Math.max(1.2, m.cell * 0.045);
     ctx.strokeStyle = path.owner === 0 ? 'rgba(255,180,255,0.28)' : 'rgba(255,255,255,0.22)';
