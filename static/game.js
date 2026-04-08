@@ -707,7 +707,7 @@ function drawVerticalPathElevationShade(m, cells, fillW) {
 
     const southCenter = cellCenter(south, m);
     const lowerTop = m.activeOy + south[1] * m.cell;
-    const shadeLen = Math.min(m.cell * 0.48, m.cell * 0.15 * diff);
+    const shadeLen = m.cell * 0.5;
     ctx.lineWidth = Math.max(1.4, fillW * 0.92);
     ctx.strokeStyle = `rgba(0, 0, 0, ${Math.min(0.24, 0.08 + 0.04 * diff)})`;
     ctx.beginPath();
