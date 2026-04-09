@@ -22,36 +22,7 @@ function validNeighbors4(x, y, w, h) {
   return out;
 }
 
-function forceLowestEdges(data) {
-  for (let x = 0; x < data.width; x++) {
-    data.grid[0][x] = 5;
-    data.grid[data.height - 1][x] = 5;
-  }
-  for (let y = 0; y < data.height; y++) {
-    data.grid[y][0] = 5;
-    data.grid[y][data.width - 1] = 5;
-  }
-}
-
-function forceInnerBandGreenOrHigher(data) {
-  if (data.width < 3 || data.height < 3) return;
-  for (let x = 1; x < data.width - 1; x++) {
-    data.grid[1][x] = Math.min(data.grid[1][x], 4);
-    data.grid[data.height - 2][x] = Math.min(data.grid[data.height - 2][x], 4);
-  }
-  for (let y = 1; y < data.height - 1; y++) {
-    data.grid[y][1] = Math.min(data.grid[y][1], 4);
-    data.grid[y][data.width - 2] = Math.min(data.grid[y][data.width - 2], 4);
-  }
-}
-
-function normalizeBoundaryBands(data) {
-  forceLowestEdges(data);
-  forceInnerBandGreenOrHigher(data);
-}
-
 function syncJson() {
-  normalizeBoundaryBands(mapData);
   el('editor_json').value = JSON.stringify(mapData);
 }
 
@@ -156,14 +127,13 @@ function tryPaint(evt) {
   const cur = mapData.grid[y][x];
   const next = clamp(cur + delta, 1, 5);
   if (next === cur) return;
-  if (x === 0 || y === 0 || x === mapData.width - 1 || y === mapData.height - 1) return;
+ 
   const neighbors = validNeighbors4(x, y, mapData.width, mapData.height).map(([nx, ny]) => mapData.grid[ny][nx]);
   if (!el('ignore_adjacency').checked && neighbors.some((n) => Math.abs(next - n) > 1)) {
     setStatus('Edit blocked: adjacent cells must differ by at most 1.');
     return;
   }
   mapData.grid[y][x] = next;
-  normalizeBoundaryBands(mapData);
   syncJson();
   draw();
   lastPainted = [x, y];
@@ -175,7 +145,6 @@ function loadFromJsonText() {
     const parsed = JSON.parse(el('editor_json').value);
     if (!parsed || !parsed.width || !parsed.height || !Array.isArray(parsed.grid)) throw new Error('Invalid map JSON.');
     mapData = deepCopyMap(parsed);
-    normalizeBoundaryBands(mapData);
     el('editor_width').value = mapData.width;
     el('editor_height').value = mapData.height;
     syncJson();
@@ -214,7 +183,7 @@ function buildForm() {
     opt.textContent = mapTypeLabels[name] || name;
     sel.appendChild(opt);
   });
-  el('editor_map_type').value = defaults.settings.map_type || 'River';
+  el('editor_map_type').value = defaults.settings.map_type || 'Creek';
   el('editor_width').value = defaults.settings.map_width || 30;
   el('editor_height').value = defaults.settings.map_height || 30;
 }
@@ -224,7 +193,6 @@ function restoreEditorMap() {
   if (!stored) return false;
   try {
     mapData = deepCopyMap(JSON.parse(stored));
-    normalizeBoundaryBands(mapData);
     el('editor_width').value = mapData.width;
     el('editor_height').value = mapData.height;
     syncJson();

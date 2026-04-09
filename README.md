@@ -32,5 +32,5 @@ Open `http://127.0.0.1:8000`.
 
 ## Preset Maps
 
-- `River` is bundled as the default preset map.
+- `Creek` is bundled as the default preset map.
 - The original rules text is shown on the home page.
