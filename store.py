@@ -11,7 +11,7 @@ from typing import Any
 import engine_core as eng
 import um_mode as um
 import topo_mode as topo
-from preset_maps import ALTAR_MAP, MOSAIC_MAP, PRISON_MAP, RIVER_MAP
+from preset_maps import ALTAR_MAP, MOSAIC_MAP, PRISON_MAP, RIVER_MAP, UPLOADED_MAP
 
 
 ELEVATION_COLORS = {
@@ -23,8 +23,9 @@ ELEVATION_COLORS = {
 }
 PLAYER_COLORS = {0: "#ff00ff", 1: "#ffffff"}
 PLAYER_OUTLINES = {0: "#2b0030", 1: "#000000"}
-MAP_TYPES = ["River", "Prison", "Bridges", "Three Mountains", "Noise", "Ridges", "Plains", "Mountains", "Altar", "Custom"]
+MAP_TYPES = ["Creek", "River", "Prison", "Bridges", "Three Mountains", "Noise", "Ridges", "Plains", "Mountains", "Altar", "Custom"]
 MAP_TYPE_LABELS = {
+    "Creek": "Creek",
     "River": "River",
     "Prison": "Prison",
     "Bridges": "Bridges",
@@ -114,7 +115,7 @@ class GameStore:
 
     def defaults(self) -> dict[str, Any]:
         d = eng.GameSettings()
-        d.map_type = "Three Mountains"
+        d.map_type = "Creek"
         d.map_width = 22
         d.map_height = 22
         um_defaults = um.UmSettings(board_width=6, board_height=6, require_move_confirmation=False, infinite_board=True, time_limit_enabled=True, time_bank_seconds=300, game_end_mode="death", starting_nodes=0)
@@ -130,7 +131,7 @@ class GameStore:
                 "max_corners": um_defaults.max_corners,
                 "board_color": um_defaults.board_color,
                 "require_move_confirmation": um_defaults.require_move_confirmation,
-                "size_preset": "small",
+                "size_preset": "medium",
                 "infinite_board": um_defaults.infinite_board,
                 "time_limit_enabled": um_defaults.time_limit_enabled,
                 "time_bank_seconds": um_defaults.time_bank_seconds,
@@ -250,6 +251,7 @@ class GameStore:
 
     def _settings_from_payload(self, payload: dict[str, Any]) -> eng.GameSettings:
         base = eng.GameSettings()
+        base.map_type = "Creek"
         preset_name = str(payload.get("size_preset", "")).strip().lower()
         data = {}
         for field in base.__dict__.keys():
@@ -263,7 +265,7 @@ class GameStore:
         if data["map_type"] not in MAP_TYPES:
             data["map_type"] = base.map_type
         if not data["map_type"]:
-            data["map_type"] = "River"
+            data["map_type"] = "Creek"
         if preset_name in SIZE_PRESETS:
             data.update(SIZE_PRESETS[preset_name])
         data["map_width"] = max(5, min(80, int(data["map_width"])))
@@ -305,6 +307,8 @@ class GameStore:
         )
 
     def _map_from_payload(self, settings: eng.GameSettings, payload: dict[str, Any]) -> eng.MapData:
+        if settings.map_type == "Creek":
+            return eng.MapData(int(UPLOADED_MAP["width"]), int(UPLOADED_MAP["height"]), [[int(c) for c in row] for row in UPLOADED_MAP["grid"]])
         if settings.map_type == "River":
             return eng.MapData(int(RIVER_MAP["width"]), int(RIVER_MAP["height"]), [[int(c) for c in row] for row in RIVER_MAP["grid"]])
         if settings.map_type == "Prison":

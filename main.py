@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 
 from store import GameStore
 import engine_core as eng
-from preset_maps import RULES_TEXT, ALTAR_MAP, MOSAIC_MAP, PRISON_MAP, RIVER_MAP
+from preset_maps import RULES_TEXT, ALTAR_MAP, MOSAIC_MAP, PRISON_MAP, RIVER_MAP, UPLOADED_MAP
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -81,7 +81,9 @@ async def api_generate_map(payload: dict[str, Any]):
     width = max(5, min(80, int(payload.get("width", 30))))
     height = max(5, min(80, int(payload.get("height", 30))))
     map_type = str(payload.get("map_type", "Noise") or "Noise")
-    if map_type == "River":
+    if map_type == "Creek":
+        map_data = eng.MapData(UPLOADED_MAP["width"], UPLOADED_MAP["height"], [row[:] for row in UPLOADED_MAP["grid"]])
+    elif map_type == "River":
         map_data = eng.MapData(RIVER_MAP["width"], RIVER_MAP["height"], [row[:] for row in RIVER_MAP["grid"]])
     elif map_type == "Prison":
         map_data = eng.MapData(PRISON_MAP["width"], PRISON_MAP["height"], [row[:] for row in PRISON_MAP["grid"]])
