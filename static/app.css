@@ -1083,20 +1083,6 @@ body.info-modal-open {
   min-width: 186px;
   align-self: center;
 }
-.topotak-info-button {
-  min-width: 186px;
-  align-self: center;
-  width: auto;
-  padding: 11px 22px;
-  border-radius: 12px;
-  background: linear-gradient(180deg, #b780ef 0%, #7f3ac8 100%);
-  border-color: #d7b5ff;
-  color: #f8f1ff;
-  font-weight: 700;
-}
-.topotak-info-button:hover {
-  background: linear-gradient(180deg, #c690f5 0%, #8d4bd4 100%);
-}
 .um-layout .mode-buttons {
   grid-template-columns: repeat(2, 1fr);
 }

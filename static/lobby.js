@@ -4,6 +4,19 @@ const settingKeys = ['map_type','map_width','map_height','time_limit_enabled','t
 const topotakSettingKeys = ['topotak_map_type','topotak_map_width','topotak_map_height','topotak_time_limit_enabled','topotak_time_bank_seconds','topotak_require_move_confirmation'];
 
 const mapTypeLabels = defaults.map_type_labels || {};
+const topotakMapTypes = ['River', 'Prison', 'Bridges', 'Three Mountains', 'Noise', 'Ridges', 'Plains', 'Mountains', 'Altar', 'Custom'];
+const topotakMapLabels = {
+  'River': 'River',
+  'Prison': 'Prison',
+  'Bridges': 'Bridges',
+  'Three Mountains': 'Three Mountains (randomized)',
+  'Noise': 'Noise (randomized)',
+  'Ridges': 'Ridges (randomized)',
+  'Plains': 'Plains',
+  'Mountains': 'Mountains (randomized)',
+  'Altar': 'Altar',
+  'Custom': 'Custom',
+};
 const umDefaults = defaults.um_defaults || { board_width: 6, board_height: 6, max_corners: 1, board_color: "yellow", require_move_confirmation: false, infinite_board: true, size_preset: "small", time_limit_enabled: true, time_bank_seconds: 300, game_end_mode: "death", starting_nodes: 0 };
 const umBoardColors = defaults.um_board_colors || { yellow: "#e8cf52" };
 const umSizePresets = defaults.um_size_presets || { small: { board_width: 6, board_height: 6 }, medium: { board_width: 10, board_height: 10 }, large: { board_width: 20, board_height: 20 } };
@@ -67,19 +80,20 @@ function buildForm() {
 
   const topotakMapType = el('topotak_map_type');
   if (topotakMapType) {
-    defaults.map_types.forEach((name) => {
+    topotakMapTypes.forEach((name) => {
       const opt = document.createElement('option');
       opt.value = name;
-      opt.textContent = displayMapType(name);
+      opt.textContent = topotakMapLabels[name] || name;
       topotakMapType.appendChild(opt);
     });
-    topotakMapType.value = settings.map_type;
+    topotakMapType.value = 'River';
   }
   for (const key of topotakSettingKeys) {
     const node = el(key);
     if (!node) continue;
     const settingsKey = key.replace(/^topotak_/, '');
-    const value = settings[settingsKey];
+    const fallback = settingsKey === 'map_type' ? 'River' : settings[settingsKey];
+    const value = fallback;
     if (node.type === 'checkbox') node.checked = !!value;
     else node.value = value;
   }
@@ -439,10 +453,6 @@ if (el('um-bot-button')) el('um-bot-button').addEventListener('click', (evt) => 
 if (el('topotak-form')) el('topotak-form').addEventListener('submit', createTopotakGame);
 if (el('topotak-play-button')) el('topotak-play-button').addEventListener('click', (evt) => { evt.preventDefault(); submitTopotakNormalGame(); });
 if (el('topotak-bot-button')) el('topotak-bot-button').addEventListener('click', (evt) => { evt.preventDefault(); submitTopotakBotGame(); });
-if (el('topotak-info-button')) el('topotak-info-button').addEventListener('click', (evt) => {
-  evt.preventDefault();
-  el('topotak-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-});
 el('join-private-form').addEventListener('submit', joinPrivate);
 refreshGames();
 setInterval(refreshGames, 3000);

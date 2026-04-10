@@ -107,6 +107,8 @@ async def game_page(request: Request, game_id: str):
     mode = getattr(game, "game_mode", "topostrafe")
     if mode == "um":
         template_name = "um_game.html"
+    elif mode == "topotak":
+        template_name = "topotak_game.html"
     else:
         template_name = "game.html"
     mode_title = "UM" if mode == "um" else ("Topotak" if mode == "topotak" else "Topostrafe")

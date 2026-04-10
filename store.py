@@ -366,7 +366,34 @@ class GameStore:
                     game.log.append("Um game created vs bot.")
                 else:
                     game.log.append("Um game created. Waiting for opponent.")
-            elif game_mode in {"topostrafe", "topotak"}:
+            elif game_mode == "topotak":
+                settings_payload = dict(payload.get("settings", {}))
+                if "size_preset" in payload and "size_preset" not in settings_payload:
+                    settings_payload["size_preset"] = payload.get("size_preset")
+                settings = self._settings_from_payload(settings_payload)
+                map_data = self._map_from_payload(settings, payload)
+                vs_bot = bool(payload.get("vs_bot", False))
+                state = eng.GameState(settings, map_data.copy())
+                game = GameSession(
+                    game_id=game_id,
+                    settings=settings,
+                    map_data=map_data.copy(),
+                    state=state,
+                    is_private=is_private,
+                    join_code=join_code,
+                    vs_bot=vs_bot,
+                    bot=eng.HeuristicBot(1) if vs_bot else None,
+                    game_mode="topotak",
+                )
+                if vs_bot:
+                    game.seat_keys[1] = "BOT"
+                    game.status = "active"
+                    game.abandon_delete_at = None
+                    game.turn_started_at = time.monotonic()
+                    game.log.append("Topotak game created vs bot.")
+                else:
+                    game.log.append("Topotak game created. Waiting for opponent.")
+            elif game_mode == "topostrafe":
                 settings_payload = dict(payload.get("settings", {}))
                 if "size_preset" in payload and "size_preset" not in settings_payload:
                     settings_payload["size_preset"] = payload.get("size_preset")
@@ -552,6 +579,50 @@ class GameStore:
                     "my_premove": (seat is not None and game.pending_premoves.get(seat) is not None),
                     "my_premove_action": (deepcopy(game.pending_premoves.get(seat)) if seat is not None else None),
                 }
+            if game.game_mode == "topotak":
+                nodes = [
+                    {"x": x, "y": y, "owner": node.owner, "starter": node.starter, "fort": bool(getattr(node, "fort", False)), "sapper": bool(getattr(node, "sapper", False)), "sap_dir": list(getattr(node, "sap_dir", []) or [])}
+                    for (x, y), node in sorted(state.nodes.items())
+                ]
+                roads = [
+                    {"road_id": road.road_id, "owner": road.owner, "path": [[x, y] for (x, y) in road.path], "sapper": bool(getattr(road, "sapper", False))}
+                    for road in sorted(state.roads.values(), key=lambda r: r.road_id)
+                ]
+                return {
+                    "game_id": game.game_id,
+                    "game_mode": "topotak",
+                    "status": game.status,
+                    "is_private": game.is_private,
+                    "join_code": game.join_code if seat == 0 or seat == 1 else None,
+                    "vs_bot": game.vs_bot,
+                    "my_seat": seat,
+                    "my_name": game.owner_name(seat) if seat is not None else "Spectator",
+                    "current_owner": state.current_owner,
+                    "current_owner_name": game.owner_name(state.current_owner),
+                    "winner": state.winner,
+                    "winner_name": game.owner_name(state.winner) if state.winner is not None else None,
+                    "win_reason": state.win_reason,
+                    "remaining_path": state.remaining_path,
+                    "rally_origin": (list(state.rally_origin) if getattr(state, "rally_origin", None) is not None else None),
+                    "starter_placed": list(state.starter_placed),
+                    "time_remaining": {
+                        "0": self._effective_time_remaining(game, 0),
+                        "1": self._effective_time_remaining(game, 1),
+                    },
+                    "settings": game.settings.__dict__.copy(),
+                    "map": {
+                        "width": state.map.width,
+                        "height": state.map.height,
+                        "grid": [row[:] for row in state.map.grid],
+                    },
+                    "nodes": nodes,
+                    "roads": roads,
+                    "retake_locks": [{"x": x, "y": y, "blocked_owner": blocked} for (x, y), blocked in state.retake_locks.items()],
+                    "log": game.log[-16:],
+                    "chat": game.chat[-100:],
+                    "my_premove": (seat is not None and game.pending_premoves.get(seat) is not None),
+                    "my_premove_action": (deepcopy(game.pending_premoves.get(seat)) if seat is not None else None),
+                }
             nodes = [
                 {"x": x, "y": y, "owner": node.owner, "starter": node.starter, "privilege": int(state.node_privilege((x, y)))}
                 for (x, y), node in sorted(state.nodes.items())
@@ -638,6 +709,26 @@ class GameStore:
         if not isinstance(action, dict):
             raise ValueError("Invalid action.")
         t = str(action.get("type", "")).strip()
+        if game_mode == "topotak":
+            if t not in {"starter", "routes", "fortify", "demolish", "entrench", "end_turn", "resign"}:
+                raise ValueError("Unknown action.")
+            if t == "starter":
+                return {"type": "starter", "x": int(action["x"]), "y": int(action["y"])}
+            if t == "routes":
+                routes = []
+                for route in action.get("routes", []):
+                    routes.append([(int(x), int(y)) for x, y in route])
+                return {"type": "routes", "routes": routes}
+            if t == "fortify":
+                return {"type": "fortify", "x": int(action["x"]), "y": int(action["y"])}
+            if t == "demolish":
+                return {"type": "demolish", "x": int(action["x"]), "y": int(action["y"])}
+            if t == "entrench":
+                route = []
+                for cell in action.get("route", []):
+                    route.append((int(cell[0]), int(cell[1])))
+                return {"type": "entrench", "route": route}
+            return {"type": t}
         if game_mode == "um":
             if t not in {"starter", "um_node", "um_paths", "resign"}:
                 raise ValueError("Unknown action.")
@@ -684,6 +775,43 @@ class GameStore:
         self._consume_active_turn_time(game)
         if game.state.winner is not None:
             return game.state.win_reason
+
+        if game.game_mode == "topotak":
+            auto_end_turn = False
+            if t == "starter":
+                ok, msg = game.state.commit_starter(int(action["x"]), int(action["y"]))
+                auto_end_turn = ok
+            elif t == "routes":
+                routes = action.get("routes", [])
+                ok, msg = game.state.commit_routes(routes)
+                auto_end_turn = ok and getattr(game.state, "rally_origin", None) is None
+            elif t == "fortify":
+                ok, msg = game.state.commit_fortify((int(action["x"]), int(action["y"])))
+                auto_end_turn = ok
+            elif t == "demolish":
+                ok, msg = game.state.commit_demolish((int(action["x"]), int(action["y"])))
+                auto_end_turn = ok
+            elif t == "entrench":
+                ok, msg = game.state.commit_entrench(action.get("route", []))
+                auto_end_turn = ok
+            elif t == "end_turn":
+                ok, msg = game.state.end_turn()
+                if ok:
+                    self._start_next_turn(game)
+            else:
+                raise ValueError("Unknown action.")
+            if not ok:
+                raise ValueError(msg)
+            if auto_end_turn and game.state.winner is None:
+                ok2, msg2 = game.state.end_turn()
+                if ok2:
+                    self._start_next_turn(game)
+                    msg = f"{msg} {msg2}".strip()
+            if game.state.winner is not None:
+                game.status = "finished"
+            elif t != "end_turn":
+                game.turn_started_at = time.monotonic() if game.settings.time_limit_enabled else game.turn_started_at
+            return msg
 
         if game.game_mode == "um":
             auto_end_turn = False
