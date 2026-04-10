@@ -95,6 +95,12 @@ class TopoGameState:
         x, y = pos
         return x == 0 or y == 0 or x == self.width - 1 or y == self.height - 1
 
+    def _is_center_band_x(self, x: int) -> bool:
+        # Allow starter placement only in the middle 50% of board columns.
+        start = self.width // 4
+        end = self.width - start
+        return start <= x < end
+
     def _rebuild_path_lookup(self):
         self.path_lookup = defaultdict(set)
         for path in self.paths.values():
@@ -174,22 +180,13 @@ class TopoGameState:
             return False, "Out of bounds."
         if pos in self.nodes:
             return False, "Cell occupied."
-        if not self._is_edge_pos(pos):
-            return False, "Castle must be placed on the edge."
         if self.elevation(pos) != 5:
             return False, "Castle must start on blue."
-        mid = self.width / 2.0
-        if self.current_owner == 0 and not (x < mid):
-            return False, "Player 1 castle must be on the left side."
-        if self.current_owner == 1 and not (x >= mid):
-            return False, "Player 2 castle must be on the right side."
+        if not self._is_center_band_x(pos[0]):
+            return False, "Castle must be on blue within the center 50% of board columns."
         self.nodes[pos] = TopoNode(owner=self.current_owner, starter=True)
         self.starter_placed[self.current_owner] = True
-        self.starter_edge_placed[self.current_owner] = self._is_edge_pos(pos)
-        if all(self.starter_placed) and any(self.starter_edge_placed):
-            new_w, new_h, _, _ = self._expand_board()
-            self.starter_edge_placed = [False, False]
-            return True, f"Castle placed. Board expanded to {new_w}x{new_h}."
+        self.starter_edge_placed[self.current_owner] = False
         return True, "Castle placed."
 
     def commit_place_node(self, x: int, y: int):

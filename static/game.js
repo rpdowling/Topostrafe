@@ -521,7 +521,7 @@ function renderDraftLine() {
     return;
   }
   if (!latestState.starter_placed?.[mySeat() ?? 0]) {
-    node.textContent = 'Place your castle on a blue edge square on your side of the board.';
+    node.textContent = 'Place your castle on a blue square within the center 50% of board columns.';
     return;
   }
   if (pendingNode) {
