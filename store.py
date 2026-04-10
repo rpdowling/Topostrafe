@@ -11,7 +11,7 @@ from typing import Any
 import engine_core as eng
 import um_mode as um
 import topo_mode as topo
-from preset_maps import ALTAR_MAP, MOSAIC_MAP, PRISON_MAP, RIVER_MAP, UPLOADED_MAP
+from preset_maps import ALTAR_MAP, MOSAIC_MAP, PRISON_MAP, RIVER_MAP, CREEK_MAP
 
 
 ELEVATION_COLORS = {
@@ -308,7 +308,7 @@ class GameStore:
 
     def _map_from_payload(self, settings: eng.GameSettings, payload: dict[str, Any]) -> eng.MapData:
         if settings.map_type == "Creek":
-            return eng.MapData(int(UPLOADED_MAP["width"]), int(UPLOADED_MAP["height"]), [[int(c) for c in row] for row in UPLOADED_MAP["grid"]])
+            return eng.MapData(int(CREEK_MAP["width"]), int(CREEK_MAP["height"]), [[int(c) for c in row] for row in CREEK_MAP["grid"]])
         if settings.map_type == "River":
             return eng.MapData(int(RIVER_MAP["width"]), int(RIVER_MAP["height"]), [[int(c) for c in row] for row in RIVER_MAP["grid"]])
         if settings.map_type == "Prison":
