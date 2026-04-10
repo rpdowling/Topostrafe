@@ -31,6 +31,7 @@ class GameSettings:
     low_point_restrict: bool = True
     north_shading: bool = True
     require_move_confirmation: bool = False
+    momentum_rule: bool = True
 
     bot_castle_survival: int = 65
     bot_castle_kill_threat: int = 220
@@ -60,6 +61,7 @@ class GameSettings:
             f"Low Point Restrict: {'On' if self.low_point_restrict else 'Off'}",
             f"North Shading: {'On' if self.north_shading else 'Off'}",
             f"Require move confirmation: {'On' if self.require_move_confirmation else 'Off'}",
+            f"Momentum: {'On' if self.momentum_rule else 'Off'}",
             "Attack rule: must attack downhill",
             "unless target group is cut off",
             "from its castle",

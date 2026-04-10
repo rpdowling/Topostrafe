@@ -61,6 +61,19 @@ class TopoGameState:
         self.turn_number = 0
         self.redraw_cooldowns: dict[int, dict[tuple[tuple[int, int], ...], int]] = {0: {}, 1: {}}
 
+    def _momentum_enabled(self) -> bool:
+        return bool(getattr(self.settings, "momentum_rule", True))
+
+    def _momentum_bonus_for_segment(self, segment_index: int) -> int:
+        if not self._momentum_enabled():
+            return 0
+        return max(0, int(segment_index))
+
+    def _segment_attack_elevation(self, start: tuple[int, int], segment_index: int) -> int:
+        start_elev = self.elevation(start)
+        bonus = self._momentum_bonus_for_segment(segment_index)
+        return max(1, start_elev - bonus)
+
     def owner_name(self, owner: int) -> str:
         return PLAYER_NAMES.get(owner, f"Player {owner + 1}")
 
@@ -255,13 +268,13 @@ class TopoGameState:
         to_add: list[TopoPath] = []
         my_priv = 5
 
-        for seg in norm_segments:
-            ok, msg = self._validate_segment(seg, owner, prev_end, new_internal_cells, used_start_nodes)
+        for seg_index, seg in enumerate(norm_segments):
+            ok, msg = self._validate_segment(seg, owner, prev_end, new_internal_cells, used_start_nodes, seg_index)
             if not ok:
                 return False, msg
             seg_internal = set(seg[1:-1])
             seg_length = len(seg) - 1
-            seg_priv = self.node_privilege(seg[0])
+            seg_priv = self._segment_attack_elevation(seg[0], seg_index)
             crossed_enemy: set[int] = set()
             for cell in seg_internal:
                 node = self.nodes.get(cell)
@@ -342,7 +355,7 @@ class TopoGameState:
             msg = f"{msg} {self.win_reason}".strip()
         return True, msg
 
-    def _validate_segment(self, seg, owner, prev_end, new_internal_cells, used_start_nodes):
+    def _validate_segment(self, seg, owner, prev_end, new_internal_cells, used_start_nodes, segment_index=0):
         if len(seg) < 2:
             return False, "Each path segment must connect two friendly nodes."
         if len(set(seg)) != len(seg):
@@ -368,10 +381,10 @@ class TopoGameState:
             return False, "You cannot end a segment on a node that already started one earlier this turn."
         if self.elevation(start) < self._min_placeable_elevation(owner) or self.elevation(end) < self._min_placeable_elevation(owner):
             return False, "That elevation is not unlocked yet."
-        origin_elev = self.elevation(start)
+        origin_elev = self._segment_attack_elevation(start, segment_index)
         for cell in seg:
             if self.elevation(cell) < origin_elev:
-                return False, "That path crosses terrain above the start node's elevation."
+                return False, "That path crosses terrain above this chain's current elevation advantage."
         for a, b in zip(seg, seg[1:]):
             if abs(a[0] - b[0]) + abs(a[1] - b[1]) != 1:
                 return False, "Paths must move one square orthogonally at a time."
