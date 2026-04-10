@@ -438,12 +438,35 @@ function hookTopotakFileLoader() {
   });
 }
 
+function hookHeroSectionSync() {
+  const sectionIds = ['topostrafe-section', 'um-section', 'topotak-section'];
+  const sections = sectionIds
+    .map((id) => el(id))
+    .filter(Boolean);
+  if (!sections.length) return;
+  const openOnly = (targetId) => {
+    sections.forEach((section) => {
+      section.open = section.id === targetId;
+    });
+  };
+  document.querySelectorAll('[data-target-section]').forEach((card) => {
+    card.addEventListener('click', () => {
+      const targetId = card.getAttribute('data-target-section');
+      if (!targetId) return;
+      openOnly(targetId);
+      const section = el(targetId);
+      if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+}
+
 buildForm();
 restoreEditorMap();
 hookFileLoader();
 hookSizePreset();
 hookTopotakFileLoader();
 hookTopotakSizePreset();
+hookHeroSectionSync();
 el('play-button').addEventListener('click', submitNormalGame);
 el('bot-button').addEventListener('click', submitBotGame);
 el('create-form').addEventListener('submit', createGame);

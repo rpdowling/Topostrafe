@@ -7,15 +7,24 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@700;800&family=Roboto:wght@500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/app.css?v=52" />
+  <link rel="stylesheet" href="/static/app.css?v=53" />
 </head>
 <body class="menu-page">
   <div class="page menu-three-col">
     <section class="panel settings-side">
-      <details open class="rules-box">
-        <summary>Rules</summary>
-        <pre class="rules-text">{{ rules_text }}</pre>
-      </details>
+      <details open class="game-settings-section" id="topostrafe-section">
+        <summary>Topostrafe Rules &amp; Settings</summary>
+        <details open class="rules-box">
+          <summary>Topostrafe Rules</summary>
+          <ul class="rules-list">
+            <li><strong>Win condition:</strong> destroy the enemy castle before yours is destroyed.</li>
+            <li><strong>Move points:</strong> each turn, spend movement points to move and attack from your selected node.</li>
+            <li><strong>Height matters:</strong> attacking from higher terrain is stronger; attacking uphill is weaker.</li>
+            <li><strong>Keep routes connected:</strong> isolated nodes are vulnerable and harder to reinforce.</li>
+            <li><strong>Fortify key terrain:</strong> hold ridges, bridges, and chokepoints to control the map.</li>
+            <li><strong>Watch the clock:</strong> when time bank is enabled, your side loses if your bank reaches zero.</li>
+          </ul>
+        </details>
 
       <form id="create-form" class="stack gap-12 top-12">
         <div class="grid two">
@@ -74,7 +83,10 @@
           <input id="custom_map_file" type="file" accept="application/json,.json" />
         </label>
       </form>
+      </details>
 
+      <details class="game-settings-section" id="um-section">
+        <summary>Um Rules &amp; Settings</summary>
       <form id="um-form" class="stack gap-12 top-12 um-settings-section">
         <div class="um-settings-header">
           <h2>Um Settings</h2>
@@ -136,7 +148,10 @@
           <input id="um_join_code" type="text" maxlength="16" placeholder="Optional. Leave blank to auto-generate." />
         </label>
       </form>
+      </details>
 
+      <details class="game-settings-section" id="topotak-section">
+        <summary>Topotak Rules &amp; Settings</summary>
       <form id="topotak-form" class="stack gap-12 top-12 topotak-settings-section">
         <div class="topotak-settings-header">
           <h2>Topotak Settings</h2>
@@ -202,13 +217,14 @@
           <input id="topotak_custom_map_file" type="file" accept="application/json,.json" />
         </label>
       </form>
+      </details>
     </section>
 
     <section class="hero-column">
-      <div class="hero-card menu-hero-card">
+      <div class="hero-card menu-hero-card" data-target-section="topostrafe-section">
         <div class="hero-bg" aria-hidden="true"></div>
         <div class="hero-content">
-          <h1 class="site-title">Topostrafe</h1>
+          <h1 class="site-title topostrafe-title"><span>Topo</span><span class="topostrafe-strafe">strafe</span></h1>
           <p class="hero-subtitle">Take the high ground!</p>
 
           <div class="actions menu-actions hero-actions">
@@ -222,7 +238,7 @@
         </div>
       </div>
 
-      <div class="hero-card menu-hero-card um-hero-card">
+      <div class="hero-card menu-hero-card um-hero-card" data-target-section="um-section">
         <div class="hero-bg um-hero-bg" aria-hidden="true"></div>
         <div class="hero-content um-hero-content">
           <h2 class="info-hero-title um-logo-title">UM</h2>
@@ -234,7 +250,7 @@
         </div>
       </div>
 
-      <div class="hero-card menu-hero-card topotak-hero-card">
+      <div class="hero-card menu-hero-card topotak-hero-card" data-target-section="topotak-section">
         <div class="hero-bg topotak-hero-bg" aria-hidden="true"></div>
         <div class="hero-content topotak-hero-content">
           <h2 class="info-hero-title topotak-logo-title">Topotak</h2>
@@ -261,6 +277,6 @@
   <script>
     window.TOPOS_DEFAULTS = {{ defaults_json | safe }};
   </script>
-  <script src="/static/lobby.js?v=17"></script>
+  <script src="/static/lobby.js?v=18"></script>
 </body>
 </html>
