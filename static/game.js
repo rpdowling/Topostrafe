@@ -697,11 +697,30 @@ function privilegeName(level) {
   return ({1:'Red',2:'Orange',3:'Yellow',4:'Green',5:'Blue'})[Number(level)] || 'Blue';
 }
 
+function momentumEnabled() {
+  return !!latestState?.settings?.momentum_rule;
+}
+
+function elevationAtCell(cell) {
+  if (!latestState || !Array.isArray(cell) || cell.length < 2) return 5;
+  const x = Number(cell[0]);
+  const y = Number(cell[1]);
+  const row = latestState.board?.grid?.[y];
+  return Number(row?.[x] ?? 5);
+}
+
+function draftSegmentAdvantageLevel(segment, segmentIndex) {
+  if (!segment || !segment.length) return 5;
+  const startElevation = elevationAtCell(segment[0]);
+  if (!momentumEnabled()) return startElevation;
+  return Math.max(1, startElevation - Math.max(0, Number(segmentIndex) || 0));
+}
+
 function drawPaths(m, paths) {
   for (const path of paths) {
     const cells = path.cells || [];
     if (cells.length < 2) continue;
-    const color = PLAYER_COLORS[path.owner] || '#ffffff';
+    const color = path.color || PLAYER_COLORS[path.owner] || '#ffffff';
     const outlineW = Math.max(6.5, m.cell * 0.28);
     const fillW = Math.max(3.2, m.cell * 0.145);
     ctx.save();
@@ -751,7 +770,8 @@ function drawPaths(m, paths) {
 function drawDraftPaths(m) {
   const pseudo = [];
   for (let idx = 0; idx < draftSegments.length; idx++) {
-    pseudo.push({ owner: mySeat() ?? 0, cells: draftSegments[idx], path_id: -1000 - idx });
+    const level = draftSegmentAdvantageLevel(draftSegments[idx], idx);
+    pseudo.push({ owner: mySeat() ?? 0, cells: draftSegments[idx], path_id: -1000 - idx, color: elevationColor(level) });
   }
   if (currentSegment && currentSegment.length > 0) {
     let previewCells = currentSegment;
@@ -761,7 +781,8 @@ function drawDraftPaths(m) {
       previewCells = [...currentSegment, hoverCell];
     }
     if (previewCells.length > 1) {
-      pseudo.push({ owner: seat ?? 0, cells: previewCells, path_id: -2000 });
+      const level = draftSegmentAdvantageLevel(previewCells, draftSegments.length);
+      pseudo.push({ owner: seat ?? 0, cells: previewCells, path_id: -2000, color: elevationColor(level) });
     }
   }
   if (!pseudo.length) return;
