@@ -410,7 +410,7 @@ class GameStore:
                     join_code=join_code,
                     vs_bot=vs_bot,
                     bot=um.UmAggressiveBot(1) if vs_bot else None,
-                    game_mode="topostrafe",
+                    game_mode=game_mode,
                 )
                 if vs_bot:
                     game.seat_keys[1] = "BOT"
