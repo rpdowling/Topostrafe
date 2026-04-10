@@ -385,13 +385,22 @@ button:hover, .button-link:hover { background: var(--button-active); }
 }
 
 .turn-stat.active-turn {
-  border-color: rgba(118,208,255,0.82);
-  box-shadow: 0 0 0 2px rgba(118,208,255,0.22), inset 0 1px 0 rgba(255,255,255,0.05);
-  background: linear-gradient(180deg, rgba(64,96,127,0.38) 0%, rgba(32,43,58,1) 100%);
+  border-color: rgba(123, 229, 146, 0.92);
+  box-shadow: 0 0 0 2px rgba(123, 229, 146, 0.24), inset 0 1px 0 rgba(255,255,255,0.06);
+  background: linear-gradient(180deg, rgba(55, 148, 79, 0.55) 0%, rgba(23, 66, 34, 1) 100%);
 }
 .turn-stat.active-turn span,
 .turn-stat.active-turn strong {
-  color: #eef8ff;
+  color: #f3fff7;
+}
+.turn-stat.inactive-turn {
+  border-color: rgba(236, 116, 116, 0.9);
+  box-shadow: 0 0 0 2px rgba(236, 116, 116, 0.2), inset 0 1px 0 rgba(255,255,255,0.05);
+  background: linear-gradient(180deg, rgba(168, 61, 61, 0.52) 0%, rgba(70, 24, 24, 1) 100%);
+}
+.turn-stat.inactive-turn span,
+.turn-stat.inactive-turn strong {
+  color: #fff2f2;
 }
 .route-pill {
   position: fixed;
