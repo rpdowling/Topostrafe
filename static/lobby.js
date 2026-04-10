@@ -1,6 +1,7 @@
 const defaults = window.TOPOS_DEFAULTS;
 const settings = defaults.settings;
 const settingKeys = ['map_type','map_width','map_height','time_limit_enabled','time_bank_seconds','require_move_confirmation'];
+const topotakSettingKeys = ['topotak_map_type','topotak_map_width','topotak_map_height','topotak_time_limit_enabled','topotak_time_bank_seconds','topotak_require_move_confirmation'];
 
 const mapTypeLabels = defaults.map_type_labels || {};
 const umDefaults = defaults.um_defaults || { board_width: 6, board_height: 6, max_corners: 1, board_color: "yellow", require_move_confirmation: false, infinite_board: true, size_preset: "small", time_limit_enabled: true, time_bank_seconds: 300, game_end_mode: "death", starting_nodes: 0 };
@@ -63,6 +64,25 @@ function buildForm() {
   if (el('um_time_bank_seconds')) el('um_time_bank_seconds').value = String(umDefaults.time_bank_seconds ?? 300);
   if (el('um_game_end_mode')) el('um_game_end_mode').value = umDefaults.game_end_mode || 'death';
   if (el('um_starting_nodes')) el('um_starting_nodes').value = String(umDefaults.starting_nodes ?? 0);
+
+  const topotakMapType = el('topotak_map_type');
+  if (topotakMapType) {
+    defaults.map_types.forEach((name) => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = displayMapType(name);
+      topotakMapType.appendChild(opt);
+    });
+    topotakMapType.value = settings.map_type;
+  }
+  for (const key of topotakSettingKeys) {
+    const node = el(key);
+    if (!node) continue;
+    const settingsKey = key.replace(/^topotak_/, '');
+    const value = settings[settingsKey];
+    if (node.type === 'checkbox') node.checked = !!value;
+    else node.value = value;
+  }
 }
 
 
@@ -117,6 +137,50 @@ function hookSizePreset() {
   }
 }
 
+function detectTopotakPreset() {
+  const width = Number(el('topotak_map_width')?.value);
+  const height = Number(el('topotak_map_height')?.value);
+  for (const [name, cfg] of Object.entries(SIZE_PRESETS)) {
+    if (width === cfg.map_width && height === cfg.map_height) return name;
+  }
+  return 'custom';
+}
+
+function applyTopotakPreset(name) {
+  const cfg = SIZE_PRESETS[name];
+  const custom = name === 'custom';
+  if (cfg) {
+    el('topotak_map_width').value = cfg.map_width;
+    el('topotak_map_height').value = cfg.map_height;
+  }
+  for (const id of ['topotak_map_width', 'topotak_map_height']) {
+    if (el(id)) el(id).disabled = !custom;
+  }
+  for (const id of ['topotak_map_width_wrap', 'topotak_map_height_wrap']) {
+    const node = el(id);
+    if (node) node.style.display = custom ? '' : 'none';
+  }
+  el('topotak_size_preset').value = custom ? 'custom' : name;
+}
+
+function hookTopotakSizePreset() {
+  const preset = el('topotak_size_preset');
+  if (!preset) return;
+  preset.value = detectTopotakPreset();
+  applyTopotakPreset(preset.value);
+  preset.addEventListener('change', () => applyTopotakPreset(preset.value));
+  for (const id of ['topotak_map_width', 'topotak_map_height']) {
+    if (!el(id)) continue;
+    el(id).addEventListener('input', () => {
+      const next = detectTopotakPreset();
+      if (preset.value !== 'custom') {
+        preset.value = next;
+        if (next !== 'custom') applyTopotakPreset(next);
+      }
+    });
+  }
+}
+
 
 function collectPayload() {
   const payload = {
@@ -144,6 +208,7 @@ function collectPayload() {
 
 
 let umVsBot = false;
+let topotakVsBot = false;
 
 function collectUmPayload() {
   return {
@@ -179,6 +244,45 @@ async function createUmGame(evt) {
   }
 }
 
+function collectTopotakPayload() {
+  const payload = {
+    settings: {},
+    is_private: el('topotak_is_private').checked,
+    vs_bot: topotakVsBot,
+    join_code: el('topotak_join_code').value.trim(),
+    custom_map_json: el('topotak_custom_map_json').value.trim(),
+    size_preset: el('topotak_size_preset').value,
+    game_mode: 'topotak',
+  };
+  for (const key of topotakSettingKeys) {
+    const node = el(key);
+    if (!node) continue;
+    const settingKey = key.replace(/^topotak_/, '');
+    payload.settings[settingKey] = node.type === 'checkbox' ? node.checked : node.value;
+  }
+  const preset = el('topotak_size_preset').value;
+  if (preset !== 'custom' && SIZE_PRESETS[preset]) {
+    const cfg = SIZE_PRESETS[preset];
+    payload.settings.map_width = cfg.map_width;
+    payload.settings.map_height = cfg.map_height;
+  }
+  return payload;
+}
+
+async function createTopotakGame(evt) {
+  evt.preventDefault();
+  setStatus('Creating…');
+  try {
+    const created = await fetchJson('/api/create', {
+      method: 'POST',
+      body: JSON.stringify(collectTopotakPayload()),
+    });
+    window.location.href = created.url;
+  } catch (err) {
+    setStatus(err.message, true);
+  }
+}
+
 function submitBotGame() {
   el('vs_bot').checked = true;
   setStatus('');
@@ -199,6 +303,18 @@ function submitUmBotGame() {
   umVsBot = true;
   setStatus('');
   el('um-form').requestSubmit();
+}
+
+function submitTopotakNormalGame() {
+  topotakVsBot = false;
+  setStatus('');
+  el('topotak-form').requestSubmit();
+}
+
+function submitTopotakBotGame() {
+  topotakVsBot = true;
+  setStatus('');
+  el('topotak-form').requestSubmit();
 }
 
 async function createGame(evt) {
@@ -236,11 +352,13 @@ async function refreshGames() {
       const left = document.createElement('div');
       if (game.game_mode === 'um') {
         left.innerHTML = `<strong>${game.game_id}</strong><small>Um · ${game.size}</small><small>${String(game.board_color || '').replace(/^./, c => c.toUpperCase())} · ${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
+      } else if (game.game_mode === 'topotak') {
+        left.innerHTML = `<strong>${game.game_id}</strong><small>Topotak · ${displayMapType(game.map_type)} · ${game.size}</small><small>${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
       } else {
         left.innerHTML = `<strong>${game.game_id}</strong><small>${displayMapType(game.map_type)} · ${game.size}</small><small>${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
       }
       const btn = document.createElement('button');
-      btn.className = `join-button${game.game_mode === 'um' ? ' um-join-button' : ''}`;
+      btn.className = `join-button${game.game_mode === 'um' ? ' um-join-button' : ''}${game.game_mode === 'topotak' ? ' topotak-join-button' : ''}`;
       btn.textContent = 'Join';
       btn.onclick = async () => {
         try {
@@ -296,18 +414,35 @@ function hookFileLoader() {
   });
 }
 
+function hookTopotakFileLoader() {
+  if (!el('topotak_custom_map_file')) return;
+  el('topotak_custom_map_file').addEventListener('change', async (evt) => {
+    const file = evt.target.files?.[0];
+    if (!file) return;
+    el('topotak_custom_map_json').value = await file.text();
+    el('topotak_map_type').value = 'Custom';
+  });
+}
+
 buildForm();
 restoreEditorMap();
 hookFileLoader();
 hookSizePreset();
+hookTopotakFileLoader();
+hookTopotakSizePreset();
 el('play-button').addEventListener('click', submitNormalGame);
 el('bot-button').addEventListener('click', submitBotGame);
 el('create-form').addEventListener('submit', createGame);
 if (el('um-form')) el('um-form').addEventListener('submit', createUmGame);
 if (el('um-play-button')) el('um-play-button').addEventListener('click', (evt) => { evt.preventDefault(); submitUmNormalGame(); });
 if (el('um-bot-button')) el('um-bot-button').addEventListener('click', (evt) => { evt.preventDefault(); submitUmBotGame(); });
+if (el('topotak-form')) el('topotak-form').addEventListener('submit', createTopotakGame);
+if (el('topotak-play-button')) el('topotak-play-button').addEventListener('click', (evt) => { evt.preventDefault(); submitTopotakNormalGame(); });
+if (el('topotak-bot-button')) el('topotak-bot-button').addEventListener('click', (evt) => { evt.preventDefault(); submitTopotakBotGame(); });
+if (el('topotak-info-button')) el('topotak-info-button').addEventListener('click', (evt) => {
+  evt.preventDefault();
+  el('topotak-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
 el('join-private-form').addEventListener('submit', joinPrivate);
 refreshGames();
 setInterval(refreshGames, 3000);
-
-

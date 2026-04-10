@@ -21,7 +21,7 @@
         <button type="submit">Send</button>
       </form>
       <div class="elevation-legend top-12 um-note-card">
-        <h2>Topostrafe</h2>
+        <h2>{{ mode_title }}</h2>
         <div class="muted">Um-style loops and path duels on terrain. Encircle lower ground to unlock higher elevations.</div>
       </div>
       <div class="elevation-legend top-12">
@@ -39,7 +39,7 @@
     <section class="panel board-panel um-board-panel topo-board-panel">
       <div class="toolbar">
         <div>
-          <strong id="game-title">Topostrafe {{ game_id }}</strong>
+          <strong id="game-title">{{ mode_title }} {{ game_id }}</strong>
           <div class="muted" id="share-line"></div>
         </div>
         <div class="toolbar-right">

@@ -104,8 +104,13 @@ async def game_page(request: Request, game_id: str):
     game = store.get_game(game_id)
     if game is None:
         raise HTTPException(status_code=404, detail="Game not found")
-    template_name = "um_game.html" if getattr(game, "game_mode", "topostrafe") == "um" else "game.html"
-    return templates.TemplateResponse(request, template_name, {"game_id": game_id, "title": f"Topostrafe {game_id}"})
+    mode = getattr(game, "game_mode", "topostrafe")
+    if mode == "um":
+        template_name = "um_game.html"
+    else:
+        template_name = "game.html"
+    mode_title = "UM" if mode == "um" else ("Topotak" if mode == "topotak" else "Topostrafe")
+    return templates.TemplateResponse(request, template_name, {"game_id": game_id, "title": f"{mode_title} {game_id}", "mode_title": mode_title})
 
 
 @app.get("/api/public-games")

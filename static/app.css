@@ -705,6 +705,14 @@ button:hover, .button-link:hover { background: var(--button-active); }
 .join-button.um-join-button:hover {
   background: linear-gradient(180deg, #f6e07e 0%, #d4b43f 100%);
 }
+.join-button.topotak-join-button {
+  background: linear-gradient(180deg, #ca8bff 0%, #8f43dc 100%);
+  border-color: #ddb5ff;
+  color: #fbf4ff;
+}
+.join-button.topotak-join-button:hover {
+  background: linear-gradient(180deg, #d59cff 0%, #9b54e3 100%);
+}
 .game-row {
   display: flex;
   justify-content: space-between;
@@ -1017,6 +1025,77 @@ body.info-modal-open {
 .um-bot-button {
   min-width: 160px;
   align-self: center;
+}
+.topotak-settings-section {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+.topotak-settings-header h2 {
+  margin: 0 0 4px;
+}
+.topotak-rules-box {
+  margin: 8px 0 14px;
+}
+.topotak-hero-card {
+  width: min(100%, 640px);
+  margin: 0 auto;
+  border-color: rgba(171, 116, 240, 0.6);
+  background: linear-gradient(180deg, rgba(59, 27, 96, 0.96) 0%, rgba(36, 16, 60, 0.98) 100%);
+}
+.topotak-logo-title {
+  font-size: clamp(2.2rem, 4.1vw, 2.95rem);
+  font-family: "Rajdhani", "Roboto", "Avenir Next", sans-serif;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.topotak-hero-bg {
+  background:
+    linear-gradient(135deg, rgba(208,153,255,0.24) 0%, rgba(157,102,255,0.2) 44%, rgba(81,43,133,0.15) 100%),
+    linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px),
+    repeating-linear-gradient(0deg, transparent 0 19px, rgba(255,255,255,0.045) 19px 20px, transparent 20px 40px),
+    repeating-linear-gradient(90deg, transparent 0 24px, rgba(255,255,255,0.035) 24px 25px, transparent 25px 50px);
+  background-size: auto, 30px 30px, 30px 30px, auto, auto;
+  opacity: 0.92;
+}
+.topotak-play-button {
+  width: auto;
+  min-width: 186px;
+  padding: 11px 22px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #c98cff 0%, #8f43dc 100%);
+  border-color: #ddb5ff;
+  color: #fbf4ff;
+  font-weight: 800;
+  box-shadow: 0 10px 20px rgba(0,0,0,0.22);
+}
+.topotak-play-button:hover {
+  background: linear-gradient(180deg, #d59cff 0%, #9b54e3 100%);
+}
+.topotak-hero-actions-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.topotak-bot-button {
+  min-width: 186px;
+  align-self: center;
+}
+.topotak-info-button {
+  min-width: 186px;
+  align-self: center;
+  width: auto;
+  padding: 11px 22px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #b780ef 0%, #7f3ac8 100%);
+  border-color: #d7b5ff;
+  color: #f8f1ff;
+  font-weight: 700;
+}
+.topotak-info-button:hover {
+  background: linear-gradient(180deg, #c690f5 0%, #8d4bd4 100%);
 }
 .um-layout .mode-buttons {
   grid-template-columns: repeat(2, 1fr);

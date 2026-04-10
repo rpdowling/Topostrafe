@@ -236,7 +236,7 @@ class GameStore:
                     rows.append(
                         {
                             "game_id": game.game_id,
-                            "game_mode": "topostrafe",
+                            "game_mode": game.game_mode,
                             "map_type": game.settings.map_type,
                             "size": f"{game.map_data.width}x{game.map_data.height}",
                             "path_count": game.settings.path_count,
@@ -366,7 +366,7 @@ class GameStore:
                     game.log.append("Um game created vs bot.")
                 else:
                     game.log.append("Um game created. Waiting for opponent.")
-            else:
+            elif game_mode in {"topostrafe", "topotak"}:
                 settings_payload = dict(payload.get("settings", {}))
                 if "size_preset" in payload and "size_preset" not in settings_payload:
                     settings_payload["size_preset"] = payload.get("size_preset")
@@ -383,7 +383,7 @@ class GameStore:
                     join_code=join_code,
                     vs_bot=vs_bot,
                     bot=um.UmAggressiveBot(1) if vs_bot else None,
-                    game_mode="topostrafe",
+                    game_mode=game_mode,
                 )
                 if vs_bot:
                     game.seat_keys[1] = "BOT"
@@ -393,6 +393,8 @@ class GameStore:
                     game.log.append("Game created vs bot.")
                 else:
                     game.log.append("Game created. Waiting for opponent.")
+            else:
+                raise ValueError("Unknown game mode.")
             game.seat_keys[0] = player_key
             self.games[game_id] = game
             return {
@@ -560,7 +562,7 @@ class GameStore:
             ]
             return {
                 "game_id": game.game_id,
-                "game_mode": "topostrafe",
+                "game_mode": game.game_mode,
                 "status": game.status,
                 "is_private": game.is_private,
                 "join_code": game.join_code if seat == 0 or seat == 1 else None,
