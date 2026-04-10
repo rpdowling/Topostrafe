@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=52" />
+</head>
+<body>
+  <div class="page game-layout">
+    <section class="panel chat-panel">
+      <div class="chat-header">
+        <div>
+          <h2>Chat</h2>
+          <div class="muted">Players only</div>
+        </div>
+      </div>
+      <div id="chat-box" class="chat-box"></div>
+      <form id="chat-form" class="inline-form top-8">
+        <input id="chat-input" type="text" maxlength="500" placeholder="Type a message" />
+        <button type="submit">Send</button>
+      </form>
+      <div class="elevation-legend top-12">
+        <h2>Elevation</h2>
+        <div class="legend-list">
+          <div class="legend-item"><span class="legend-swatch legend-highest"></span><span>Highest</span></div>
+          <div class="legend-item"><span class="legend-swatch legend-high"></span><span>High</span></div>
+          <div class="legend-item"><span class="legend-swatch legend-mid"></span><span>Mid</span></div>
+          <div class="legend-item"><span class="legend-swatch legend-low"></span><span>Low</span></div>
+          <div class="legend-item"><span class="legend-swatch legend-lowest"></span><span>Lowest</span></div>
+        </div>
+      </div>
+      <div class="elevation-legend top-12">
+        <h2>Traversal Cost</h2>
+        <div class="legend-list">
+          <div class="legend-item"><span class="legend-swatch legend-highest"></span><span>3</span></div>
+          <div class="legend-item"><span class="legend-swatch legend-high"></span><span>2</span></div>
+          <div class="legend-item"><span class="legend-swatch legend-mid"></span><span>2</span></div>
+          <div class="legend-item"><span class="legend-swatch legend-low"></span><span>1</span></div>
+          <div class="legend-item"><span class="legend-swatch legend-lowest"></span><span>2</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel board-panel">
+      <div class="toolbar">
+        <div>
+          <strong id="game-title">Topotak {{ game_id }}</strong>
+          <div class="muted" id="share-line"></div>
+        </div>
+        <div class="toolbar-right">
+          <span id="status-line" class="muted">Connecting…</span>
+          <a class="button-link quit-link" href="/">Quit</a>
+        </div>
+      </div>
+      <canvas id="board" width="1100" height="900"></canvas>
+    </section>
+
+    <section class="panel sidebar">
+      <div class="stack gap-12">
+        <div>
+          <h2>Turn</h2>
+          <div id="turn-line"></div>
+          <div id="winner-line" class="warn"></div>
+        </div>
+
+        <div class="grid two stat-grid">
+          <div class="stat turn-stat" id="stat-player0"><span>Player 1</span><strong id="clock0">00:00</strong></div>
+          <div class="stat turn-stat" id="stat-player1"><span>Player 2</span><strong id="clock1">00:00</strong></div>
+          <div class="stat"><span>Remaining Path</span><strong id="remaining-path">0</strong></div>
+          <div class="stat"><span>Your Seat</span><strong id="seat-line">Spectator</strong></div>
+        </div>
+
+        <div>
+          <h2>Actions</h2>
+          <div class="mode-buttons">
+            <button id="mode-routes" class="mode-icon mode-routes-btn" type="button" title="Routes" aria-label="Routes"><svg viewBox="0 0 64 32" aria-hidden="true"><path d="M8 16 H40" class="icon-stroke icon-dashed"/><circle cx="51" cy="16" r="7" class="icon-outline"/></svg></button>
+            <button id="mode-entrench" class="mode-icon mode-sap-btn" type="button" title="Sap" aria-label="Sap"><svg viewBox="0 0 64 32" aria-hidden="true"><path d="M8 14 H24 V22 H40 V14 H56" class="icon-stroke"/></svg></button>
+            <button id="mode-fortify" class="mode-icon mode-fortify-btn" type="button" title="Fortify" aria-label="Fortify"><svg viewBox="0 0 64 32" aria-hidden="true"><path d="M8 18 H24 V10 H40 V18 H56" class="icon-stroke"/></svg></button>
+            <button id="mode-demolish" class="mode-icon mode-demolish-btn" type="button" title="Demolish Path" aria-label="Demolish Path"><svg viewBox="0 0 64 32" aria-hidden="true"><path d="M18 8 L46 24" class="icon-stroke"/><path d="M46 8 L18 24" class="icon-stroke"/></svg></button>
+          </div>
+          <div class="stack gap-8 top-8">
+            <button id="finish-route" type="button">Finish Route</button>
+            <button id="commit-routes" type="button">Commit Routes</button>
+            <button id="clear-draft" type="button">Clear Draft</button>
+            <button id="end-turn" type="button">End Turn</button>
+            <button id="resign" type="button">Resign</button>
+          </div>
+        </div>
+
+        <div>
+          <h2>Draft</h2>
+          <div id="draft-line" class="muted">No draft.</div>
+        </div>
+
+        <div>
+          <h2>Log</h2>
+          <div id="log" class="log-box"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+
+  <button id="sound-toggle" type="button" class="sound-toggle floating-sound-toggle">Sound: On</button>
+  <div id="route-pill" class="route-pill hidden"></div>
+
+  <script>
+    window.TOPOS_GAME_ID = "{{ game_id }}";
+  </script>
+  <script src="/static/topotak_game.js?v=1"></script>
+</body>
+</html>
