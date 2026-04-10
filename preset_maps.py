@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-RULES_TEXT = '''Place your castle on a blue edge square on your side.
+RULES_TEXT = '''Place your castle on blue within the center 50% of board columns.
 
 Click an unlocked empty square to place a node, or click a friendly node to draw a one-corner path chain to another friendly node.
 
