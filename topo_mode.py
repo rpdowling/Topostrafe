@@ -58,6 +58,8 @@ class TopoGameState:
         self.starter_edge_placed = [False, False]
         self.kill_counts = {0: 0, 1: 0}
         self.starting_nodes_placed = {0: 0, 1: 0}
+        self.turn_number = 0
+        self.redraw_cooldowns: dict[int, dict[tuple[tuple[int, int], ...], int]] = {0: {}, 1: {}}
 
     def owner_name(self, owner: int) -> str:
         return PLAYER_NAMES.get(owner, f"Player {owner + 1}")
@@ -246,6 +248,7 @@ class TopoGameState:
 
         new_internal_cells: set[tuple[int, int]] = set()
         remove_enemy_paths: set[int] = set()
+        cut_enemy_path_signatures: dict[int, set[tuple[tuple[int, int], ...]]] = {0: set(), 1: set()}
         remove_enemy_nodes: set[tuple[int, int]] = set()
         prev_end: tuple[int, int] | None = None
         used_start_nodes: set[tuple[int, int]] = set()
@@ -288,6 +291,7 @@ class TopoGameState:
                 if not (seg_length < path.length or seg_priv < crossed_elevation):
                     return False, "That enemy path is too strong to cut from this start elevation."
                 remove_enemy_paths.add(pid)
+                cut_enemy_path_signatures[path.owner].add(self._path_signature(path.cells))
             path = TopoPath(self.next_path_id, owner, seg[:])
             self.next_path_id += 1
             to_add.append(path)
@@ -297,6 +301,13 @@ class TopoGameState:
 
         for pid in sorted(remove_enemy_paths):
             self._remove_path(pid)
+        blocked_until_turn = self.turn_number + 1
+        for blocked_owner, signatures in cut_enemy_path_signatures.items():
+            if not signatures:
+                continue
+            cooldowns = self.redraw_cooldowns[blocked_owner]
+            for signature in signatures:
+                cooldowns[signature] = max(cooldowns.get(signature, -1), blocked_until_turn)
         for path in to_add:
             self.paths[path.path_id] = path
             for cell in path.internal_cells:
@@ -349,6 +360,10 @@ class TopoGameState:
             return False, "Path must start on a friendly node."
         if end_node is None or end_node.owner != owner:
             return False, "Path must end on a friendly node."
+        signature = self._path_signature(seg)
+        blocked_until = self.redraw_cooldowns.get(owner, {}).get(signature)
+        if blocked_until is not None and self.turn_number <= blocked_until:
+            return False, "That exact path was just cut; wait one turn before redrawing it."
         if end in used_start_nodes:
             return False, "You cannot end a segment on a node that already started one earlier this turn."
         if self.elevation(start) < self._min_placeable_elevation(owner) or self.elevation(end) < self._min_placeable_elevation(owner):
@@ -390,6 +405,12 @@ class TopoGameState:
         if a[1] != b[1]:
             return 'v'
         return ''
+
+    @staticmethod
+    def _path_signature(cells):
+        forward = tuple(cells)
+        reverse = tuple(reversed(cells))
+        return forward if forward <= reverse else reverse
 
     def _path_axis_at_cell(self, path, cell):
         try:
@@ -649,4 +670,5 @@ class TopoGameState:
         if self.winner is not None:
             return False, self.win_reason or "Game over."
         self.current_owner = 1 - self.current_owner
+        self.turn_number += 1
         return True, f"{self.owner_name(self.current_owner)} to move."
