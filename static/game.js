@@ -445,8 +445,17 @@ function renderMeta() {
   else el('share-line').textContent = latestState.status === 'open' ? `Share this URL: ${window.location.href}` : '';
   const stat0 = el('stat-player0');
   const stat1 = el('stat-player1');
-  if (stat0) stat0.classList.toggle('active-turn', latestState.current_owner === 0 && latestState.winner === null);
-  if (stat1) stat1.classList.toggle('active-turn', latestState.current_owner === 1 && latestState.winner === null);
+  const isLiveTurn = latestState.winner === null;
+  if (stat0) {
+    const isActive = isLiveTurn && latestState.current_owner === 0;
+    stat0.classList.toggle('active-turn', isActive);
+    stat0.classList.toggle('inactive-turn', isLiveTurn && !isActive);
+  }
+  if (stat1) {
+    const isActive = isLiveTurn && latestState.current_owner === 1;
+    stat1.classList.toggle('active-turn', isActive);
+    stat1.classList.toggle('inactive-turn', isLiveTurn && !isActive);
+  }
   if (latestState.my_premove && !isMyTurn() && latestState.winner === null) {
     setStatus('Premove queued.');
   }
