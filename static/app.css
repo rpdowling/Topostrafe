@@ -981,7 +981,7 @@ body.info-modal-open {
 }
 
 .um-hero-card .info-hero-title {
-  font-size: clamp(1.72rem, 2.95vw, 2.16rem);
+  font-size: clamp(2.45rem, 4.5vw, 3.2rem);
 }
 .um-hero-bg {
   background:
