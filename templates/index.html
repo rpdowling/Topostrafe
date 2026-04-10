@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@700;800&family=Roboto:wght@500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/app.css?v=51" />
+  <link rel="stylesheet" href="/static/app.css?v=52" />
 </head>
 <body class="menu-page">
   <div class="page menu-three-col">
@@ -136,6 +136,72 @@
           <input id="um_join_code" type="text" maxlength="16" placeholder="Optional. Leave blank to auto-generate." />
         </label>
       </form>
+
+      <form id="topotak-form" class="stack gap-12 top-12 topotak-settings-section">
+        <div class="topotak-settings-header">
+          <h2>Topotak Settings</h2>
+        </div>
+        <details open class="rules-box topotak-rules-box">
+          <summary>Topotak Rules</summary>
+          <pre class="rules-text">{{ rules_text }}</pre>
+        </details>
+
+        <div class="grid two">
+          <label>
+            <span>Map</span>
+            <select id="topotak_map_type"></select>
+            <small class="muted">Creek is the default preset map.</small>
+          </label>
+          <label>
+            <span>Map Size Preset</span>
+            <select id="topotak_size_preset">
+              <option value="small">Small</option>
+              <option value="medium">Medium</option>
+              <option value="large">Large</option>
+              <option value="huge">Huge</option>
+              <option value="ginormous">Ginormous</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+          <label class="custom-size-field" id="topotak_map_width_wrap">
+            <span>Map Width</span>
+            <input id="topotak_map_width" type="number" min="5" max="80" />
+          </label>
+          <label class="custom-size-field" id="topotak_map_height_wrap">
+            <span>Map Height</span>
+            <input id="topotak_map_height" type="number" min="5" max="80" />
+          </label>
+          <label class="check">
+            <input id="topotak_time_limit_enabled" type="checkbox" />
+            <span>Use Time Bank</span>
+          </label>
+          <label>
+            <span>Time Bank / Side (sec)</span>
+            <input id="topotak_time_bank_seconds" type="number" min="10" max="86400" />
+          </label>
+          <label class="check">
+            <input id="topotak_is_private" type="checkbox" />
+            <span>Private Game</span>
+          </label>
+          <label class="check">
+            <input id="topotak_require_move_confirmation" type="checkbox" />
+            <span>Require Move Confirmation</span>
+          </label>
+          <input id="topotak_vs_bot" type="checkbox" hidden />
+        </div>
+        <label>
+          <span>Private Join Code</span>
+          <input id="topotak_join_code" type="text" maxlength="16" placeholder="Optional. Leave blank to auto-generate." />
+        </label>
+        <label>
+          <span>Custom Map JSON</span>
+          <textarea id="topotak_custom_map_json" rows="8" placeholder='{"width":30,"height":30,"grid":[[5,...], ...]}'></textarea>
+        </label>
+        <label>
+          <span>Load Custom Map File</span>
+          <input id="topotak_custom_map_file" type="file" accept="application/json,.json" />
+        </label>
+      </form>
     </section>
 
     <section class="hero-column">
@@ -167,6 +233,18 @@
           </div>
         </div>
       </div>
+
+      <div class="hero-card menu-hero-card topotak-hero-card">
+        <div class="hero-bg topotak-hero-bg" aria-hidden="true"></div>
+        <div class="hero-content topotak-hero-content">
+          <h2 class="info-hero-title topotak-logo-title">Topotak</h2>
+          <p class="hero-subtitle info-hero-subtitle">Classic terrain duels return.</p>
+          <div class="actions info-hero-actions topotak-hero-actions-stack">
+            <button id="topotak-play-button" class="topotak-play-button" type="submit" form="topotak-form">Play Topotak</button>
+            <button id="topotak-bot-button" class="menu-secondary menu-bot-button topotak-bot-button" type="button" form="topotak-form">Play vs Bot (In Dev.)</button>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section class="panel public-side">
@@ -183,6 +261,6 @@
   <script>
     window.TOPOS_DEFAULTS = {{ defaults_json | safe }};
   </script>
-  <script src="/static/lobby.js?v=16"></script>
+  <script src="/static/lobby.js?v=17"></script>
 </body>
 </html>
