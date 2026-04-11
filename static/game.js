@@ -716,6 +716,34 @@ function draftSegmentAdvantageLevel(segment, segmentIndex) {
   return Math.max(1, startElevation - Math.max(0, Number(segmentIndex) || 0));
 }
 
+function brightenHexColor(hex, amount = 0.16) {
+  const raw = String(hex || '').trim();
+  const match = raw.match(/^#([0-9a-f]{6})$/i);
+  if (!match) return raw || '#ffffff';
+  const n = parseInt(match[1], 16);
+  const blend = (v) => Math.max(0, Math.min(255, Math.round(v + (255 - v) * amount)));
+  const r = blend((n >> 16) & 0xff);
+  const g = blend((n >> 8) & 0xff);
+  const b = blend(n & 0xff);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+}
+
+function draftPreviewColor(level) {
+  return brightenHexColor(elevationColor(level), 0.18);
+}
+
+function currentDraftAdvantageLevel() {
+  if (currentSegment && currentSegment.length) {
+    return draftSegmentAdvantageLevel(currentSegment, draftSegments.length);
+  }
+  if (draftSegments.length) {
+    const last = draftSegments[draftSegments.length - 1];
+    const tail = last?.[last.length - 1];
+    if (tail) return draftSegmentAdvantageLevel([tail], draftSegments.length);
+  }
+  return 5;
+}
+
 function drawPaths(m, paths) {
   for (const path of paths) {
     const cells = path.cells || [];
@@ -769,9 +797,10 @@ function drawPaths(m, paths) {
 
 function drawDraftPaths(m) {
   const pseudo = [];
+  const previewLevel = currentDraftAdvantageLevel();
+  const previewColor = draftPreviewColor(previewLevel);
   for (let idx = 0; idx < draftSegments.length; idx++) {
-    const level = draftSegmentAdvantageLevel(draftSegments[idx], idx);
-    pseudo.push({ owner: mySeat() ?? 0, cells: draftSegments[idx], path_id: -1000 - idx, color: elevationColor(level) });
+    pseudo.push({ owner: mySeat() ?? 0, cells: draftSegments[idx], path_id: -1000 - idx, color: previewColor });
   }
   if (currentSegment && currentSegment.length > 0) {
     let previewCells = currentSegment;
@@ -781,8 +810,7 @@ function drawDraftPaths(m) {
       previewCells = [...currentSegment, hoverCell];
     }
     if (previewCells.length > 1) {
-      const level = draftSegmentAdvantageLevel(previewCells, draftSegments.length);
-      pseudo.push({ owner: seat ?? 0, cells: previewCells, path_id: -2000, color: elevationColor(level) });
+      pseudo.push({ owner: seat ?? 0, cells: previewCells, path_id: -2000, color: previewColor });
     }
   }
   if (!pseudo.length) return;
