@@ -807,7 +807,7 @@ function drawDraftPaths(m) {
   const pseudo = [];
   for (let idx = 0; idx < draftSegments.length; idx++) {
     const segment = draftSegments[idx];
-    const segmentLevel = draftSegmentAdvantageLevel(segment, idx);
+    const segmentLevel = draftSegmentAdvantageLevel(segment, idx + 1);
     pseudo.push({
       owner: mySeat() ?? 0,
       cells: segment,
@@ -916,7 +916,8 @@ function drawSelectionGlows(m) {
     drawNodeGlow(pendingNode, 'rgba(255, 220, 110, 0.70)', 0.95, 1.02);
   }
   if (currentSegment && currentSegment.length) {
-    drawNodeGlow(currentSegment[0], 'rgba(255,255,255,0.26)', 0.9, 1.00);
+    const currentLevelColor = draftPreviewColor(currentDraftAdvantageLevel());
+    drawNodeGlow(currentSegment[0], currentLevelColor, 0.9, 1.00);
     const end = currentSegment[currentSegment.length - 1];
     if (!sameCell(end, currentSegment[0]) || currentSegment.length > 1) {
       drawNodeGlow(end, 'rgba(255, 215, 120, 0.72)', 1, 1.08);
