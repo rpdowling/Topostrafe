@@ -797,10 +797,15 @@ function drawPaths(m, paths) {
 
 function drawDraftPaths(m) {
   const pseudo = [];
-  const previewLevel = currentDraftAdvantageLevel();
-  const previewColor = draftPreviewColor(previewLevel);
   for (let idx = 0; idx < draftSegments.length; idx++) {
-    pseudo.push({ owner: mySeat() ?? 0, cells: draftSegments[idx], path_id: -1000 - idx, color: previewColor });
+    const segment = draftSegments[idx];
+    const segmentLevel = draftSegmentAdvantageLevel(segment, idx);
+    pseudo.push({
+      owner: mySeat() ?? 0,
+      cells: segment,
+      path_id: -1000 - idx,
+      color: draftPreviewColor(segmentLevel),
+    });
   }
   if (currentSegment && currentSegment.length > 0) {
     let previewCells = currentSegment;
@@ -810,7 +815,13 @@ function drawDraftPaths(m) {
       previewCells = [...currentSegment, hoverCell];
     }
     if (previewCells.length > 1) {
-      pseudo.push({ owner: seat ?? 0, cells: previewCells, path_id: -2000, color: previewColor });
+      const currentSegmentLevel = draftSegmentAdvantageLevel(previewCells, draftSegments.length);
+      pseudo.push({
+        owner: seat ?? 0,
+        cells: previewCells,
+        path_id: -2000,
+        color: draftPreviewColor(currentSegmentLevel),
+      });
     }
   }
   if (!pseudo.length) return;
