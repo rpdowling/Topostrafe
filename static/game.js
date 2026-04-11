@@ -742,7 +742,7 @@ function draftPreviewColor(level) {
 
 function currentDraftAdvantageLevel() {
   if (currentSegment && currentSegment.length) {
-    return draftSegmentAdvantageLevel(currentSegment, draftSegments.length + 1);
+    return draftSegmentAdvantageLevel(currentSegment, draftSegments.length);
   }
   if (draftSegments.length) {
     const last = draftSegments[draftSegments.length - 1];
@@ -807,7 +807,7 @@ function drawDraftPaths(m) {
   const pseudo = [];
   for (let idx = 0; idx < draftSegments.length; idx++) {
     const segment = draftSegments[idx];
-    const segmentLevel = draftSegmentAdvantageLevel(segment, idx + 1);
+    const segmentLevel = draftSegmentAdvantageLevel(segment, idx);
     pseudo.push({
       owner: mySeat() ?? 0,
       cells: segment,
@@ -823,7 +823,7 @@ function drawDraftPaths(m) {
       previewCells = [...currentSegment, hoverCell];
     }
     if (previewCells.length > 1) {
-      const currentSegmentLevel = draftSegmentAdvantageLevel(previewCells, draftSegments.length + 1);
+      const currentSegmentLevel = draftSegmentAdvantageLevel(previewCells, draftSegments.length);
       pseudo.push({
         owner: seat ?? 0,
         cells: previewCells,
