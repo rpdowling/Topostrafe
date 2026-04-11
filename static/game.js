@@ -729,7 +729,15 @@ function brightenHexColor(hex, amount = 0.16) {
 }
 
 function draftPreviewColor(level) {
-  return brightenHexColor(elevationColor(level), 0.18);
+  const lvl = Number(level);
+  const momentumPalette = {
+    1: '#ff5a4a',
+    2: '#ffad43',
+    3: '#ffe07a',
+    4: '#9cde84',
+    5: '#6f9cde',
+  };
+  return momentumPalette[lvl] || brightenHexColor(elevationColor(lvl), 0.12);
 }
 
 function currentDraftAdvantageLevel() {
