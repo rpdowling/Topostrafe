@@ -195,10 +195,10 @@ class TopoGameState:
             return False, "Out of bounds."
         if pos in self.nodes:
             return False, "Cell occupied."
-        if self.elevation(pos) != 5:
-            return False, "Castle must start on blue."
+        if self.elevation(pos) != 4:
+            return False, "Castle must start on green."
         if not self._is_center_band_x(pos[0]):
-            return False, "Castle must be on blue within the center 50% of board columns."
+            return False, "Castle must be on green within the center 50% of board columns."
         self.nodes[pos] = TopoNode(owner=self.current_owner, starter=True)
         self.starter_placed[self.current_owner] = True
         self.starter_edge_placed[self.current_owner] = False
