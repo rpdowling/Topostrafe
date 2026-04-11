@@ -652,6 +652,7 @@ class GameStore:
                 },
                 "settings": {
                     "map_type": game.settings.map_type,
+                    "momentum_rule": bool(getattr(game.settings, "momentum_rule", True)),
                     "time_limit_enabled": bool(game.settings.time_limit_enabled),
                     "time_bank_seconds": int(game.settings.time_bank_seconds),
                     "require_move_confirmation": bool(getattr(game.settings, 'require_move_confirmation', False)),
