@@ -18,6 +18,8 @@ let latestStateReceivedAt = 0;
 
 const PLAYER_COLORS = { 0: '#ff00ff', 1: '#f2f0e8' };
 const PLAYER_OUTLINES = { 0: '#1a001c', 1: '#000000' };
+const PREVIEW_PLAYER_COLORS = { 0: '#ff38ff', 1: '#ffffff' };
+const PREVIEW_PLAYER_OUTLINES = { 0: '#240026', 1: '#3a3a3a' };
 
 function el(id) { return document.getElementById(id); }
 function keyOf(cell) { return `${cell[0]},${cell[1]}`; }
@@ -635,11 +637,14 @@ function drawBoard() {
   drawFadeEffects(m);
 }
 
-function drawPaths(m, paths) {
+function drawPaths(m, paths, options = {}) {
+  const fillColors = options.fillColors || PLAYER_COLORS;
+  const outlineColors = options.outlineColors || PLAYER_OUTLINES;
+  const shineAlpha = options.shineAlpha ?? null;
   for (const path of paths) {
     const cells = path.cells || [];
     if (cells.length < 2) continue;
-    const color = PLAYER_COLORS[path.owner] || '#ffffff';
+    const color = fillColors[path.owner] || '#ffffff';
     const outlineW = Math.max(6.5, m.cell * 0.28);
     const fillW = Math.max(3.2, m.cell * 0.145);
     ctx.save();
@@ -658,7 +663,7 @@ function drawPaths(m, paths) {
     ctx.stroke();
 
     ctx.lineWidth = outlineW;
-    ctx.strokeStyle = PLAYER_OUTLINES[path.owner] || '#000000';
+    ctx.strokeStyle = outlineColors[path.owner] || '#000000';
     ctx.beginPath();
     const first = cellCenter(cells[0], m);
     ctx.moveTo(first.x, first.y);
@@ -673,7 +678,9 @@ function drawPaths(m, paths) {
     ctx.stroke();
 
     ctx.lineWidth = Math.max(1.2, m.cell * 0.045);
-    ctx.strokeStyle = path.owner === 0 ? 'rgba(255,180,255,0.28)' : 'rgba(255,255,255,0.22)';
+    const defaultShine = path.owner === 0 ? 'rgba(255,180,255,0.28)' : 'rgba(255,255,255,0.22)';
+    const previewShine = path.owner === 0 ? 'rgba(255,190,255,0.54)' : 'rgba(255,255,255,0.48)';
+    ctx.strokeStyle = shineAlpha === null ? defaultShine : previewShine;
     ctx.beginPath();
     ctx.moveTo(first.x, first.y - Math.max(0.6, m.cell * 0.018));
     for (const cell of cells.slice(1)) {
@@ -704,8 +711,12 @@ function drawDraftPaths(m) {
   }
   if (!pseudo.length) return;
   ctx.save();
-  ctx.globalAlpha = 0.6;
-  drawPaths(m, pseudo);
+  ctx.globalAlpha = 0.9;
+  drawPaths(m, pseudo, {
+    fillColors: PREVIEW_PLAYER_COLORS,
+    outlineColors: PREVIEW_PLAYER_OUTLINES,
+    shineAlpha: 1,
+  });
   ctx.restore();
 }
 
@@ -732,9 +743,13 @@ function drawPremovePreview(m) {
   const paths = premovePreviewPaths();
   if (paths.length) {
     ctx.save();
-    ctx.globalAlpha = 0.34;
+    ctx.globalAlpha = 0.7;
     ctx.setLineDash([Math.max(6, m.cell * 0.25), Math.max(4, m.cell * 0.18)]);
-    drawPaths(m, paths);
+    drawPaths(m, paths, {
+      fillColors: PREVIEW_PLAYER_COLORS,
+      outlineColors: PREVIEW_PLAYER_OUTLINES,
+      shineAlpha: 1,
+    });
     ctx.restore();
   }
   const nodeCell = premovePreviewNode();
