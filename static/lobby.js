@@ -20,6 +20,7 @@ const topotakMapLabels = {
 const umDefaults = defaults.um_defaults || { board_width: 6, board_height: 6, max_corners: 1, board_color: "yellow", require_move_confirmation: false, infinite_board: true, size_preset: "small", time_limit_enabled: true, time_bank_seconds: 300, game_end_mode: "death", starting_nodes: 0 };
 const umBoardColors = defaults.um_board_colors || { yellow: "#e8cf52" };
 const umSizePresets = defaults.um_size_presets || { small: { board_width: 6, board_height: 6 }, medium: { board_width: 10, board_height: 10 }, large: { board_width: 20, board_height: 20 } };
+const topowarDefaults = defaults.topowar_defaults || { map_width: 30, map_height: 30, tick_rate: 20, match_time_seconds: 600, dig_seconds_per_tile: 5, mg_build_seconds: 30 };
 
 function displayMapType(name) {
   return mapTypeLabels[name] || name;
@@ -97,6 +98,12 @@ function buildForm() {
     if (node.type === 'checkbox') node.checked = !!value;
     else node.value = value;
   }
+  if (el('tw_map_width')) el('tw_map_width').value = String(topowarDefaults.map_width ?? 30);
+  if (el('tw_map_height')) el('tw_map_height').value = String(topowarDefaults.map_height ?? 30);
+  if (el('tw_tick_rate')) el('tw_tick_rate').value = String(topowarDefaults.tick_rate ?? 20);
+  if (el('tw_match_minutes')) el('tw_match_minutes').value = String(((topowarDefaults.match_time_seconds ?? 600) / 60));
+  if (el('tw_dig_seconds')) el('tw_dig_seconds').value = String(topowarDefaults.dig_seconds_per_tile ?? 5);
+  if (el('tw_mg_build_seconds')) el('tw_mg_build_seconds').value = String(topowarDefaults.mg_build_seconds ?? 30);
 }
 
 
@@ -297,6 +304,36 @@ async function createTopotakGame(evt) {
   }
 }
 
+function collectTopowarPayload() {
+  return {
+    game_mode: 'topowar',
+    is_private: !!el('tw_is_private')?.checked,
+    join_code: el('tw_join_code')?.value.trim() || '',
+    topowar_settings: {
+      map_width: Number(el('tw_map_width')?.value || 30),
+      map_height: Number(el('tw_map_height')?.value || 30),
+      tick_rate: Number(el('tw_tick_rate')?.value || 20),
+      match_minutes: Number(el('tw_match_minutes')?.value || 10),
+      dig_seconds_per_tile: Number(el('tw_dig_seconds')?.value || 5),
+      mg_build_seconds: Number(el('tw_mg_build_seconds')?.value || 30),
+    },
+  };
+}
+
+async function createTopowarGame(evt) {
+  evt.preventDefault();
+  setStatus('Creating…');
+  try {
+    const created = await fetchJson('/api/create', {
+      method: 'POST',
+      body: JSON.stringify(collectTopowarPayload()),
+    });
+    window.location.href = created.url;
+  } catch (err) {
+    setStatus(err.message, true);
+  }
+}
+
 function submitBotGame() {
   el('vs_bot').checked = true;
   setStatus('');
@@ -368,6 +405,8 @@ async function refreshGames() {
         left.innerHTML = `<strong>${game.game_id}</strong><small>Um · ${game.size}</small><small>${String(game.board_color || '').replace(/^./, c => c.toUpperCase())} · ${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
       } else if (game.game_mode === 'topotak') {
         left.innerHTML = `<strong>${game.game_id}</strong><small>Topotak · ${displayMapType(game.map_type)} · ${game.size}</small><small>${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
+      } else if (game.game_mode === 'topowar') {
+        left.innerHTML = `<strong>${game.game_id}</strong><small>Topowar · ${game.size}</small><small>${formatTime(game.time_bank_seconds || 600)} limit</small>`;
       } else {
         left.innerHTML = `<strong>${game.game_id}</strong><small>${displayMapType(game.map_type)} · ${game.size}</small><small>${game.time_limit_enabled ? formatTime(game.time_bank_seconds) + ' bank' : 'No clock'}</small>`;
       }
@@ -439,7 +478,7 @@ function hookTopotakFileLoader() {
 }
 
 function hookHeroSectionSync() {
-  const sectionIds = ['topostrafe-section', 'um-section', 'topotak-section'];
+  const sectionIds = ['topostrafe-section', 'um-section', 'topotak-section', 'topowar-section'];
   const sections = sectionIds
     .map((id) => el(id))
     .filter(Boolean);
@@ -476,6 +515,8 @@ if (el('um-bot-button')) el('um-bot-button').addEventListener('click', (evt) => 
 if (el('topotak-form')) el('topotak-form').addEventListener('submit', createTopotakGame);
 if (el('topotak-play-button')) el('topotak-play-button').addEventListener('click', (evt) => { evt.preventDefault(); submitTopotakNormalGame(); });
 if (el('topotak-bot-button')) el('topotak-bot-button').addEventListener('click', (evt) => { evt.preventDefault(); submitTopotakBotGame(); });
+if (el('topowar-form')) el('topowar-form').addEventListener('submit', createTopowarGame);
+if (el('topowar-play-button')) el('topowar-play-button').addEventListener('click', (evt) => { evt.preventDefault(); el('topowar-form').requestSubmit(); });
 el('join-private-form').addEventListener('submit', joinPrivate);
 refreshGames();
 setInterval(refreshGames, 3000);

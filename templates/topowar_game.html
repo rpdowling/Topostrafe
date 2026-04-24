@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=54" />
+</head>
+<body>
+  <div class="page game-layout um-layout topo-layout">
+    <section class="panel board-panel um-board-panel topo-board-panel">
+      <div class="toolbar">
+        <div><strong id="game-title">Topowar {{ game_id }}</strong><div class="muted" id="share-line"></div></div>
+        <div class="toolbar-right"><span id="status-line" class="muted">Connecting…</span><a class="button-link quit-link" href="/">Quit</a></div>
+      </div>
+      <div id="board-scroll" class="board-scroll um-board-scroll"><canvas id="board" width="1200" height="900"></canvas></div>
+    </section>
+    <section class="panel sidebar">
+      <div class="stack gap-12">
+        <div><h2>Mode</h2><div id="mode-line" class="muted">Select</div></div>
+        <div class="grid two stat-grid">
+          <div class="stat"><span>You</span><strong id="seat-line">Spectator</strong></div>
+          <div class="stat"><span>Time Left</span><strong id="clock-line">10:00</strong></div>
+          <div class="stat"><span>Red Kills</span><strong id="kills0">0</strong></div>
+          <div class="stat"><span>Blue Kills</span><strong id="kills1">0</strong></div>
+        </div>
+        <div>
+          <h2>Commands</h2>
+          <div class="stack gap-8 top-8">
+            <button id="mode-select">Select</button>
+            <button id="mode-dig">Dig</button>
+            <button id="mode-plan">Plan Dig</button>
+            <button id="mode-build">Build MG</button>
+            <button id="mode-operate">Operate MG</button>
+            <button id="mode-attack">Attack</button>
+            <button id="mode-sentry">Sentry</button>
+            <button id="cancel-task">Cancel Task</button>
+            <button id="resign">Resign</button>
+          </div>
+        </div>
+        <div><h2>Log</h2><div id="log" class="log-box"></div></div>
+      </div>
+    </section>
+  </div>
+  <script>window.TOPOS_GAME_ID = "{{ game_id }}";</script>
+  <script src="/static/topowar_game.js?v=1"></script>
+</body>
+</html>
