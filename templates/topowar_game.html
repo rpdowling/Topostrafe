@@ -4,10 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=54" />
+  <link rel="stylesheet" href="/static/app.css?v=55" />
 </head>
 <body>
-  <div class="page game-layout um-layout topo-layout">
+  <div class="page game-layout topowar-layout topo-layout">
     <section class="panel board-panel um-board-panel topo-board-panel">
       <div class="toolbar">
         <div><strong id="game-title">Topowar {{ game_id }}</strong><div class="muted" id="share-line"></div></div>
@@ -26,7 +26,7 @@
         </div>
         <div>
           <h2>Commands</h2>
-          <div class="stack gap-8 top-8">
+          <div class="mode-buttons topowar-command-grid top-8">
             <button id="mode-select">Select</button>
             <button id="mode-dig">Dig</button>
             <button id="mode-plan">Plan Dig</button>

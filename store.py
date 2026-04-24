@@ -664,7 +664,8 @@ class GameStore:
                     "my_premove_action": (deepcopy(game.pending_premoves.get(seat)) if seat is not None else None),
                 }
             if game.game_mode == "topowar":
-                game.state.advance_to_time(time.monotonic())
+                if game.status == "active":
+                    game.state.advance_to_time(time.monotonic())
                 ts = game.state.serialize()
                 winner = ts.get("winner")
                 winner_name = None
@@ -840,6 +841,8 @@ class GameStore:
     def _execute_turn_action(self, game: GameSession, seat: int, action: dict[str, Any]) -> str:
         t = action.get("type")
         if game.game_mode == "topowar":
+            if game.status != "active":
+                raise ValueError("Game is not active yet.")
             if t == "resign":
                 game.status = "finished"
                 game.state.winner = 1 - seat
