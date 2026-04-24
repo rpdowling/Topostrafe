@@ -1130,6 +1130,54 @@ body.info-modal-open {
   min-width: 186px;
   align-self: center;
 }
+.topowar-hero-card {
+  width: min(100%, 640px);
+  margin: 0 auto;
+  border-color: rgba(255, 110, 110, 0.62);
+  background: linear-gradient(180deg, rgba(101, 26, 34, 0.95) 0%, rgba(52, 13, 19, 0.99) 100%);
+}
+.topowar-logo-title {
+  font-size: clamp(2.2rem, 4.1vw, 2.95rem);
+  font-family: "Rajdhani", "Roboto", "Avenir Next", sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.topowar-hero-bg {
+  background:
+    radial-gradient(circle at 18% 16%, rgba(255, 130, 103, 0.24) 0%, rgba(255, 130, 103, 0.02) 48%),
+    radial-gradient(circle at 83% 20%, rgba(255, 189, 115, 0.2) 0%, rgba(255, 189, 115, 0.02) 44%),
+    repeating-linear-gradient(90deg, rgba(0,0,0,0.16) 0 1px, transparent 1px 26px),
+    repeating-linear-gradient(0deg, rgba(255,255,255,0.05) 0 1px, transparent 1px 22px),
+    linear-gradient(130deg, rgba(255, 148, 120, 0.18) 0%, rgba(122, 41, 50, 0.22) 55%, rgba(48, 11, 18, 0.24) 100%);
+  background-size: auto, auto, auto, auto, auto;
+  opacity: 0.93;
+}
+.topowar-play-button {
+  width: auto;
+  min-width: 186px;
+  padding: 11px 22px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ff8585 0%, #cf404c 100%);
+  border-color: #ffb7ba;
+  color: #fff6f7;
+  font-weight: 800;
+  box-shadow: 0 10px 20px rgba(0,0,0,0.22);
+}
+.topowar-play-button:hover {
+  background: linear-gradient(180deg, #ff9b9b 0%, #db4f5b 100%);
+}
+.topowar-layout .mode-buttons.topowar-command-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.topowar-layout .mode-buttons.topowar-command-grid button {
+  padding: 8px 10px;
+  min-height: 40px;
+}
+@media (max-width: 1480px) {
+  .topowar-layout .mode-buttons.topowar-command-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .um-layout .mode-buttons {
   grid-template-columns: repeat(2, 1fr);
 }
