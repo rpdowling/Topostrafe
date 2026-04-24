@@ -1169,13 +1169,25 @@ body.info-modal-open {
 .topowar-layout .mode-buttons.topowar-command-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
+.topowar-layout {
+  grid-template-columns: minmax(760px, 1fr) minmax(340px, 38vw);
+  gap: 12px;
+}
 .topowar-layout .mode-buttons.topowar-command-grid button {
   padding: 8px 10px;
   min-height: 40px;
 }
 @media (max-width: 1480px) {
+  .topowar-layout {
+    grid-template-columns: minmax(640px, 1fr) minmax(320px, 42vw);
+  }
   .topowar-layout .mode-buttons.topowar-command-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 1200px) {
+  .topowar-layout {
+    grid-template-columns: 1fr;
   }
 }
 .um-layout .mode-buttons {
