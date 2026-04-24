@@ -216,6 +216,30 @@
         </label>
       </form>
       </details>
+
+      <details class="game-settings-section" id="topowar-section">
+        <summary>Topowar Rules &amp; Settings</summary>
+      <form id="topowar-form" class="stack gap-12 top-12">
+        <details open class="rules-box">
+          <summary>Topowar Rules</summary>
+          <ul class="rules-list">
+            <li><strong>Real-time:</strong> 2-player trench warfare with fixed simulation ticks.</li>
+            <li><strong>Units:</strong> one-hit soldiers, trench digging, and MG emplacements.</li>
+            <li><strong>Combat:</strong> elevation-aware rifle and machine-gun combat with projectile travel.</li>
+          </ul>
+        </details>
+        <div class="grid two">
+          <label><span>Map Width</span><input id="tw_map_width" type="number" min="12" max="80" value="30" /></label>
+          <label><span>Map Height</span><input id="tw_map_height" type="number" min="12" max="80" value="30" /></label>
+          <label><span>Tick Rate</span><input id="tw_tick_rate" type="number" min="5" max="60" value="20" /></label>
+          <label><span>Match Minutes</span><input id="tw_match_minutes" type="number" min="1" max="60" value="10" /></label>
+          <label><span>Dig Seconds / Tile</span><input id="tw_dig_seconds" type="number" min="1" max="30" step="0.5" value="5" /></label>
+          <label><span>MG Build Seconds</span><input id="tw_mg_build_seconds" type="number" min="5" max="120" step="1" value="30" /></label>
+          <label class="check"><input id="tw_is_private" type="checkbox" /><span>Private Game</span></label>
+        </div>
+        <label><span>Private Join Code</span><input id="tw_join_code" type="text" maxlength="16" placeholder="Optional. Leave blank to auto-generate." /></label>
+      </form>
+      </details>
     </section>
 
     <section class="hero-column">
@@ -259,6 +283,17 @@
           </div>
         </div>
       </div>
+
+      <div class="hero-card menu-hero-card topotak-hero-card" data-target-section="topowar-section">
+        <div class="hero-bg topotak-hero-bg" aria-hidden="true"></div>
+        <div class="hero-content topotak-hero-content">
+          <h2 class="info-hero-title topotak-logo-title">Topowar</h2>
+          <p class="hero-subtitle info-hero-subtitle">Real-time trench warfare.</p>
+          <div class="actions info-hero-actions topotak-hero-actions-stack">
+            <button id="topowar-play-button" class="topotak-play-button" type="submit" form="topowar-form">Play Topowar</button>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section class="panel public-side">
@@ -275,6 +310,6 @@
   <script>
     window.TOPOS_DEFAULTS = {{ defaults_json | safe }};
   </script>
-  <script src="/static/lobby.js?v=19"></script>
+  <script src="/static/lobby.js?v=20"></script>
 </body>
 </html>

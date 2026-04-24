@@ -11,6 +11,7 @@ from typing import Any
 import engine_core as eng
 import um_mode as um
 import topo_mode as topo
+import topowar_mode as tw
 from preset_maps import ALTAR_MAP, MOSAIC_MAP, PRISON_MAP, RIVER_MAP, CREEK_MAP
 
 
@@ -85,9 +86,10 @@ class GameSession:
 
     def __post_init__(self):
         if not self.time_remaining:
+            default_seconds = float(getattr(self.settings, "time_bank_seconds", getattr(self.settings, "match_time_seconds", 0)))
             self.time_remaining = {
-                0: float(self.settings.time_bank_seconds),
-                1: float(self.settings.time_bank_seconds),
+                0: default_seconds,
+                1: default_seconds,
             }
 
     def seat_for_key(self, player_key: str | None) -> int | None:
@@ -140,7 +142,20 @@ class GameStore:
             },
             "um_board_colors": um.BOARD_COLORS,
             "um_size_presets": {name: {"board_width": size[0], "board_height": size[1]} for name, size in um.SIZE_PRESETS.items()},
+            "topowar_defaults": tw.RulesConfig().__dict__.copy(),
         }
+
+    def _topowar_settings_from_payload(self, payload: dict[str, Any]) -> tw.RulesConfig:
+        raw = dict(payload.get("topowar_settings", {}))
+        return tw.RulesConfig(
+            map_width=max(12, min(80, int(raw.get("map_width", 30)))),
+            map_height=max(12, min(80, int(raw.get("map_height", 30)))),
+            default_elevation=max(1, min(5, int(raw.get("default_elevation", 4)))),
+            tick_rate=max(5, min(60, int(raw.get("tick_rate", 20)))),
+            dig_seconds_per_tile=max(1.0, min(30.0, float(raw.get("dig_seconds_per_tile", 5.0)))),
+            mg_build_seconds=max(5.0, min(120.0, float(raw.get("mg_build_seconds", 30.0)))),
+            match_time_seconds=max(60, min(3600, int(float(raw.get("match_minutes", 10)) * 60))),
+        )
 
     def _prune_expired_open_games_locked(self):
         now = time.time()
@@ -233,16 +248,18 @@ class GameStore:
                         }
                     )
                 else:
+                    map_type = getattr(game.settings, "map_type", "Topowar")
+                    size = f"{game.map_data.width}x{game.map_data.height}" if game.map_data is not None else f"{getattr(game.settings, 'map_width', 0)}x{getattr(game.settings, 'map_height', 0)}"
                     rows.append(
                         {
                             "game_id": game.game_id,
                             "game_mode": game.game_mode,
-                            "map_type": game.settings.map_type,
-                            "size": f"{game.map_data.width}x{game.map_data.height}",
-                            "path_count": game.settings.path_count,
-                            "max_link_distance": game.settings.max_link_distance,
-                            "time_limit_enabled": game.settings.time_limit_enabled,
-                            "time_bank_seconds": game.settings.time_bank_seconds,
+                            "map_type": map_type,
+                            "size": size,
+                            "path_count": int(getattr(game.settings, "path_count", 0)),
+                            "max_link_distance": int(getattr(game.settings, "max_link_distance", 0)),
+                            "time_limit_enabled": bool(getattr(game.settings, "time_limit_enabled", True)),
+                            "time_bank_seconds": int(getattr(game.settings, "time_bank_seconds", getattr(game.settings, "match_time_seconds", 0))),
                             "created_at": game.created_at,
                         }
                     )
@@ -420,6 +437,23 @@ class GameStore:
                     game.log.append("Game created vs bot.")
                 else:
                     game.log.append("Game created. Waiting for opponent.")
+            elif game_mode == "topowar":
+                settings = self._topowar_settings_from_payload(payload)
+                map_data = None
+                vs_bot = False
+                state = tw.TopowarGameState(settings, seed=int(game_id, 16))
+                game = GameSession(
+                    game_id=game_id,
+                    settings=settings,
+                    map_data=map_data,
+                    state=state,
+                    is_private=is_private,
+                    join_code=join_code,
+                    vs_bot=vs_bot,
+                    bot=None,
+                    game_mode=game_mode,
+                )
+                game.log.append("Topowar game created. Waiting for opponent.")
             else:
                 raise ValueError("Unknown game mode.")
             game.seat_keys[0] = player_key
@@ -473,6 +507,8 @@ class GameStore:
             return game
 
     def _effective_time_remaining(self, game: GameSession, owner: int) -> float:
+        if not hasattr(game.settings, "time_limit_enabled") or not hasattr(game.state, "current_owner"):
+            return 0.0
         remaining = float(game.time_remaining.get(owner, 0.0))
         if (
             game.settings.time_limit_enabled
@@ -485,6 +521,8 @@ class GameStore:
         return max(0.0, remaining)
 
     def _consume_active_turn_time(self, game: GameSession) -> bool:
+        if not hasattr(game.settings, "time_limit_enabled") or not hasattr(game.state, "current_owner"):
+            return True
         if not game.settings.time_limit_enabled or game.turn_started_at is None or game.state.winner is not None:
             return True
         owner = game.state.current_owner
@@ -499,6 +537,8 @@ class GameStore:
         return True
 
     def _check_timeout_passively(self, game: GameSession):
+        if not hasattr(game.settings, "time_limit_enabled") or not hasattr(game.state, "current_owner"):
+            return
         if not game.settings.time_limit_enabled or game.turn_started_at is None or game.state.winner is not None or game.status != "active":
             return
         owner = game.state.current_owner
@@ -622,6 +662,28 @@ class GameStore:
                     "chat": game.chat[-100:],
                     "my_premove": (seat is not None and game.pending_premoves.get(seat) is not None),
                     "my_premove_action": (deepcopy(game.pending_premoves.get(seat)) if seat is not None else None),
+                }
+            if game.game_mode == "topowar":
+                game.state.advance_to_time(time.monotonic())
+                ts = game.state.serialize()
+                winner = ts.get("winner")
+                winner_name = None
+                if winner in (0, 1):
+                    winner_name = game.owner_name(winner)
+                return {
+                    "game_id": game.game_id,
+                    "game_mode": "topowar",
+                    "status": ("finished" if winner is not None else game.status),
+                    "is_private": game.is_private,
+                    "join_code": game.join_code if seat == 0 or seat == 1 else None,
+                    "my_seat": seat,
+                    "my_name": game.owner_name(seat) if seat is not None else "Spectator",
+                    "winner": winner if winner in (0, 1) else None,
+                    "winner_name": winner_name,
+                    "win_reason": ts.get("win_reason"),
+                    "topowar": ts,
+                    "log": game.log[-16:],
+                    "chat": game.chat[-100:],
                 }
             nodes = [
                 {"x": x, "y": y, "owner": node.owner, "starter": node.starter, "privilege": int(state.node_privilege((x, y)))}
@@ -749,6 +811,16 @@ class GameStore:
                     segments.append([(int(x), int(y)) for x, y in seg])
                 return {"type": "um_paths", "segments": segments}
             return {"type": "resign"}
+        if game_mode == "topowar":
+            if t == "resign":
+                return {"type": "resign"}
+            if t in {"tw_order_mode", "tw_assign_dig", "tw_assign_build_mg", "tw_toggle_operate_mg", "tw_force_fire", "tw_cancel_task"}:
+                out = {"type": t}
+                for key in ("mode", "unit_ids", "unit_id", "plan", "tile", "mg_id"):
+                    if key in action:
+                        out[key] = action[key]
+                return out
+            raise ValueError("Unknown action.")
         if t not in {"starter", "um_node", "um_paths", "resign"}:
             raise ValueError("Unknown action.")
         if t == "starter":
@@ -767,6 +839,14 @@ class GameStore:
 
     def _execute_turn_action(self, game: GameSession, seat: int, action: dict[str, Any]) -> str:
         t = action.get("type")
+        if game.game_mode == "topowar":
+            if t == "resign":
+                game.status = "finished"
+                game.state.winner = 1 - seat
+                game.state.win_reason = f"{game.owner_name(seat)} resigned."
+                return game.state.win_reason
+            game.state.advance_to_time(time.monotonic())
+            return game.state.command(seat, action)
         if t == "resign":
             game.state.players[seat].resigned = True
             game.state.check_winner()
@@ -937,10 +1017,10 @@ class GameStore:
                 game.pending_premoves[seat] = queued
                 return "Premove queued."
 
-            if seat != game.state.current_owner and t != "resign":
+            if game.game_mode != "topowar" and seat != game.state.current_owner and t != "resign":
                 raise ValueError("It is not your turn.")
             msg = self._execute_turn_action(game, seat, self._normalize_action_payload(action, game.game_mode))
-            extra_notes = self._apply_due_premoves(game)
+            extra_notes = [] if game.game_mode == "topowar" else self._apply_due_premoves(game)
             if extra_notes:
                 msg = f"{msg} {' '.join(extra_notes)}".strip()
             game.log.append(msg)

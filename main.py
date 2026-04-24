@@ -109,9 +109,11 @@ async def game_page(request: Request, game_id: str):
         template_name = "um_game.html"
     elif mode == "topotak":
         template_name = "topotak_game.html"
+    elif mode == "topowar":
+        template_name = "topowar_game.html"
     else:
         template_name = "game.html"
-    mode_title = "UM" if mode == "um" else ("Topotak" if mode == "topotak" else "Topostrafe")
+    mode_title = "UM" if mode == "um" else ("Topotak" if mode == "topotak" else ("Topowar" if mode == "topowar" else "Topostrafe"))
     return templates.TemplateResponse(request, template_name, {"game_id": game_id, "title": f"{mode_title} {game_id}", "mode_title": mode_title})
 
 
