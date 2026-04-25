@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from collections import deque
 from typing import Any
+import itertools
 import math
 import random
 
@@ -200,6 +201,12 @@ class TopowarGameState:
         # Fall back to any adjacent in-bounds tile if no trench is adjacent.
         return trench_adj if trench_adj else [t for t in neighbours if self.map.in_bounds(t)]
 
+    def _build_positions_for_mg(self, mg_tile: tuple[int, int]) -> list[tuple[int, int]]:
+        """Adjacent trench tiles where builders can stand to construct an MG."""
+        mx, my = mg_tile
+        neighbours = [(mx+1, my), (mx-1, my), (mx, my+1), (mx, my-1)]
+        return [t for t in neighbours if self.map.in_bounds(t) and t in self.map.trenches]
+
     def _nearest_enemy(self, owner: int, from_tile: tuple[int, int]) -> tuple[str, int] | None:
         best = None
         for sid, s in self.soldiers.items():
@@ -285,13 +292,50 @@ class TopowarGameState:
             self.next_structure_id += 1
             mg = MachineGun(mid, owner, tile, build_required=self.rules.mg_build_seconds)
             self.mgs[mid] = mg
-            occ = set(self._occupied_tiles().keys())
+            build_positions = self._build_positions_for_mg(tile)
+            if len(build_positions) < 2:
+                del self.mgs[mid]
+                raise ValueError("MG must have at least two adjacent trench tiles for builders.")
+
+            chosen_ids: list[int] = []
             for sid in action.get("unit_ids", []):
-                s = self.soldiers.get(int(sid))
-                if s and s.owner == owner:
-                    s.current_task = {"type": "build_mg", "mg_id": mid}
-                    if s.tile != tile:
-                        s.path = self.path.find_path(s.tile, tile, trench_only=True, blocked=occ - {s.tile})
+                sid = int(sid)
+                if sid in chosen_ids:
+                    continue
+                s = self.soldiers.get(sid)
+                if s and s.owner == owner and s.hp > 0:
+                    chosen_ids.append(sid)
+            if len(chosen_ids) != 2:
+                del self.mgs[mid]
+                raise ValueError("Select exactly two friendly soldiers to build the MG.")
+
+            occ = set(self._occupied_tiles().keys()) | self._mg_tile_set()
+            best_assignment: list[tuple[int, tuple[int, int], list[tuple[int, int]]]] | None = None
+            for spots in itertools.permutations(build_positions, 2):
+                candidate: list[tuple[int, tuple[int, int], list[tuple[int, int]]]] = []
+                total_len = 0
+                valid = True
+                for sid, spot in zip(chosen_ids, spots):
+                    soldier = self.soldiers[sid]
+                    path = self.path.find_path(soldier.tile, spot, trench_only=True, blocked=occ - {soldier.tile})
+                    if not path:
+                        valid = False
+                        break
+                    total_len += len(path)
+                    candidate.append((sid, spot, path))
+                if not valid:
+                    continue
+                if best_assignment is None or total_len < sum(len(p) for _, _, p in best_assignment):
+                    best_assignment = candidate
+
+            if best_assignment is None:
+                del self.mgs[mid]
+                raise ValueError("Selected soldiers cannot reach adjacent trench build positions.")
+
+            for sid, build_tile, path in best_assignment:
+                s = self.soldiers[sid]
+                s.current_task = {"type": "build_mg", "mg_id": mid, "build_tile": list(build_tile)}
+                s.path = path
             return "MG construction started."
         if t == "tw_toggle_operate_mg":
             mg = self.mgs.get(int(action.get("mg_id", -1)))
@@ -471,8 +515,9 @@ class TopowarGameState:
                 if not mg or mg.hp <= 0 or mg.built:
                     s.current_task = None
                     continue
-                if math.dist(s.tile, mg.tile) > 1.5:
-                    s.path = self.path.find_path(s.tile, mg.tile, trench_only=True, blocked=blocked_keys - {s.tile}, stop_adjacent=True)
+                build_tile = tuple(task.get("build_tile", s.tile))
+                if s.tile != build_tile:
+                    s.path = self.path.find_path(s.tile, build_tile, trench_only=True, blocked=blocked_keys - {s.tile})
                 adj = [u for u in self.soldiers.values() if u.hp > 0 and u.owner == mg.owner and 0 < math.dist(u.tile, mg.tile) <= 1.5]
                 if len(adj) >= 2:
                     mg.build_progress += dt
