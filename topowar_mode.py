@@ -196,7 +196,12 @@ class TopowarGameState:
     def _crew_positions_for_mg(self, mg: "MachineGun") -> list[tuple[int, int]]:
         """Adjacent trench tiles a crew member can stand at to operate this MG."""
         mx, my = mg.tile
-        neighbours = [(mx+1, my), (mx-1, my), (mx, my+1), (mx, my-1)]
+        neighbours = [
+            (mx + dx, my + dy)
+            for dx in (-1, 0, 1)
+            for dy in (-1, 0, 1)
+            if not (dx == 0 and dy == 0)
+        ]
         trench_adj = [t for t in neighbours if t in self.map.trenches and self.map.in_bounds(t)]
         # Fall back to any adjacent in-bounds tile if no trench is adjacent.
         return trench_adj if trench_adj else [t for t in neighbours if self.map.in_bounds(t)]
@@ -204,7 +209,12 @@ class TopowarGameState:
     def _build_positions_for_mg(self, mg_tile: tuple[int, int]) -> list[tuple[int, int]]:
         """Adjacent trench tiles where builders can stand to construct an MG."""
         mx, my = mg_tile
-        neighbours = [(mx+1, my), (mx-1, my), (mx, my+1), (mx, my-1)]
+        neighbours = [
+            (mx + dx, my + dy)
+            for dx in (-1, 0, 1)
+            for dy in (-1, 0, 1)
+            if not (dx == 0 and dy == 0)
+        ]
         return [t for t in neighbours if self.map.in_bounds(t) and t in self.map.trenches]
 
     def _nearest_enemy(self, owner: int, from_tile: tuple[int, int]) -> tuple[str, int] | None:
@@ -215,12 +225,6 @@ class TopowarGameState:
             d = math.dist(from_tile, s.tile)
             if best is None or d < best[0]:
                 best = (d, "soldier", sid)
-        for mid, mg in self.mgs.items():
-            if mg.owner == owner or mg.hp <= 0:
-                continue
-            d = math.dist(from_tile, mg.tile)
-            if best is None or d < best[0]:
-                best = (d, "mg", mid)
         if best is None:
             return None
         return best[1], best[2]
@@ -285,7 +289,12 @@ class TopowarGameState:
                 raise ValueError("Invalid MG tile.")
             # MG must be placed on or adjacent to a friendly trench tile
             friendly = set(self._friendly_trench_tiles(owner))
-            tile_and_adj = [tile] + [(tile[0] + dx, tile[1] + dy) for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))]
+            tile_and_adj = [tile] + [
+                (tile[0] + dx, tile[1] + dy)
+                for dx in (-1, 0, 1)
+                for dy in (-1, 0, 1)
+                if not (dx == 0 and dy == 0)
+            ]
             if not any(n in friendly for n in tile_and_adj):
                 raise ValueError("MG must be placed on or adjacent to a friendly trench tile.")
             mid = self.next_structure_id
@@ -359,6 +368,22 @@ class TopowarGameState:
             target = action.get("tile")
             mg.force_target = tuple(map(int, target)) if target else None
             return "Force target set." if mg.force_target else "Force target cleared."
+        if t == "tw_move_unit":
+            sid = int(action.get("unit_id", -1))
+            s = self.soldiers.get(sid)
+            if not s or s.owner != owner or s.hp <= 0:
+                raise ValueError("Invalid soldier.")
+            target = tuple(map(int, action.get("tile", [])))
+            if len(target) != 2 or not self.map.in_bounds(target):
+                raise ValueError("Invalid move target.")
+            if s.mode != "defend":
+                raise ValueError("Only defending soldiers can be redirected from select mode.")
+            if target not in self.map.trenches:
+                raise ValueError("Move target must be a trench tile.")
+            occ = set(self._occupied_tiles().keys()) | self._mg_tile_set()
+            s.current_task = None
+            s.path = self.path.find_path(s.tile, target, trench_only=False, blocked=occ - {s.tile})
+            return "Unit rerouted."
         if t == "tw_cancel_task":
             s = self.soldiers.get(int(action.get("unit_id", -1)))
             if not s or s.owner != owner:
@@ -600,6 +625,8 @@ class TopowarGameState:
             if not hit:
                 for mg in self.mgs.values():
                     if mg.hp <= 0 or mg.owner == p.owner:
+                        continue
+                    if p.source != "mg":
                         continue
                     if math.dist((p.x, p.y), mg.tile) <= 0.45:
                         mg.hp -= 1
