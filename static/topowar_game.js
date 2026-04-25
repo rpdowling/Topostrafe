@@ -10,6 +10,7 @@ let mode = 'select';
 let selectedUnits = new Set();
 let selectedMg = null;
 let plan = [];
+let pendingBuildTile = null;
 
 const CELL = 24;
 const OX = 20;
@@ -96,10 +97,19 @@ function updateModeButtons() {
 }
 
 function setMode(m) {
-  if (mode === m) { mode = 'select'; plan = []; }
-  else { mode = m; if (m !== 'plan') plan = []; }
+  if (mode === m) {
+    mode = 'select';
+    plan = [];
+    pendingBuildTile = null;
+  } else {
+    mode = m;
+    if (m !== 'plan') plan = [];
+    if (m !== 'build') pendingBuildTile = null;
+    if (m === 'build') selectedUnits = new Set();
+  }
   updateModeButtons();
   updateModeLabel();
+  if (mode === 'build') refreshBuildStatus();
 }
 
 function updateModeLabel() {
@@ -111,6 +121,15 @@ function updateModeLabel() {
   if (e) e.textContent = labels[mode] || 'Select';
 }
 
+function refreshBuildStatus() {
+  if (mode !== 'build') return;
+  if (!pendingBuildTile) {
+    setStatus('Build MG: click an MG tile next to trench, then pick 2 soldiers.');
+    return;
+  }
+  setStatus(`Build MG @ (${pendingBuildTile[0]},${pendingBuildTile[1]}): select ${Math.max(0, 2 - selectedUnits.size)} more soldier(s).`);
+}
+
 // === KEYBOARD SHORTCUTS ===
 
 document.addEventListener('keydown', (evt) => {
@@ -119,6 +138,7 @@ document.addEventListener('keydown', (evt) => {
 
   if (evt.key === 'Escape') {
     plan = [];
+    pendingBuildTile = null;
     selectedUnits = new Set();
     selectedMg = null;
     setMode('select');
@@ -202,11 +222,28 @@ board.addEventListener('click', (evt) => {
     }
 
   } else if (mode === 'build') {
-    const helpers = (tw().soldiers || [])
-      .filter(s => s.owner === mySeat())
-      .sort((a, b) => Math.hypot(a.tile[0]-tile[0],a.tile[1]-tile[1]) - Math.hypot(b.tile[0]-tile[0],b.tile[1]-tile[1]))
-      .slice(0, 2).map(s => s.unit_id);
-    send({ type: 'tw_assign_build_mg', unit_ids: helpers, tile });
+    if (myS.length) {
+      const uid = myS[0].unit_id;
+      if (selectedUnits.has(uid)) selectedUnits.delete(uid);
+      else {
+        if (selectedUnits.size >= 2) selectedUnits = new Set();
+        selectedUnits.add(uid);
+      }
+      refreshBuildStatus();
+      if (pendingBuildTile && selectedUnits.size === 2) {
+        send({ type: 'tw_assign_build_mg', unit_ids: [...selectedUnits], tile: pendingBuildTile });
+        pendingBuildTile = null;
+        selectedUnits = new Set();
+      }
+    } else {
+      pendingBuildTile = tile;
+      refreshBuildStatus();
+      if (selectedUnits.size === 2) {
+        send({ type: 'tw_assign_build_mg', unit_ids: [...selectedUnits], tile: pendingBuildTile });
+        pendingBuildTile = null;
+        selectedUnits = new Set();
+      }
+    }
 
   } else if (mode === 'operate') {
     if (myMg) {
@@ -300,6 +337,16 @@ function draw() {
     for (const t of plan) ctx.fillRect(OX + t[0] * CELL, OY + t[1] * CELL, CELL - 1, CELL - 1);
     ctx.strokeStyle = '#f4c84e';
     ctx.strokeRect(OX + plan[0][0] * CELL + 1, OY + plan[0][1] * CELL + 1, CELL - 3, CELL - 3);
+  }
+
+  if (mode === 'build' && pendingBuildTile) {
+    const [bx, by] = pendingBuildTile;
+    ctx.strokeStyle = '#f4c84e';
+    ctx.setLineDash([5, 3]);
+    ctx.lineWidth = 2;
+    ctx.strokeRect(OX + bx * CELL + 1, OY + by * CELL + 1, CELL - 2, CELL - 2);
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1;
   }
 
   // Range circles
@@ -585,7 +632,3 @@ setInterval(() => send({ type: 'ping' }), 200);
 setInterval(render, 100);
 updateModeButtons();
 updateModeLabel();
-
-
-
-
