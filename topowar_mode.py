@@ -530,7 +530,7 @@ class TopowarGameState:
                     break
             if not hit:
                 for mg in self.mgs.values():
-                    if mg.hp <= 0:
+                    if mg.hp <= 0 or mg.owner == p.owner:
                         continue
                     if math.dist((p.x, p.y), mg.tile) <= 0.45:
                         mg.hp -= 1
