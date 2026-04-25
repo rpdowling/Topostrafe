@@ -1,3 +1,4 @@
+// === GLOBALS ===
 const gameId = window.TOPOS_GAME_ID;
 const playerKey = new URLSearchParams(window.location.search).get('player') || '';
 const board = document.getElementById('board');
@@ -6,7 +7,6 @@ const ctx = board.getContext('2d');
 let ws = null;
 let state = null;
 let mode = 'select';
-// selectedUnits: set of unit_ids belonging to the local player
 let selectedUnits = new Set();
 let selectedMg = null;
 let plan = [];
@@ -14,6 +14,8 @@ let plan = [];
 const CELL = 24;
 const OX = 20;
 const OY = 20;
+const RIFLE_RANGE = 5;
+const MG_RANGE = 20;
 
 function el(id) { return document.getElementById(id); }
 function wsUrl() {
@@ -22,8 +24,10 @@ function wsUrl() {
 }
 function send(payload) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload)); }
 function setStatus(msg, bad = false) {
-  el('status-line').textContent = msg || '';
-  el('status-line').style.color = bad ? '#ff9a9a' : '';
+  const e = el('status-line');
+  if (!e) return;
+  e.textContent = msg || '';
+  e.style.color = bad ? '#ff9a9a' : '';
 }
 
 function connect() {
@@ -32,7 +36,7 @@ function connect() {
   ws.onmessage = (evt) => {
     const payload = JSON.parse(evt.data);
     if (payload.type === 'state') {
-      if (payload.message && state) state.log = [...(state.log || []), payload.message].slice(-16);
+      if (payload.message && state) state.log = [...(state.log || []), payload.message].slice(-20);
       state = payload.state;
       render();
     } else if (payload.type === 'error') {
@@ -42,10 +46,9 @@ function connect() {
   ws.onclose = () => { setStatus('Disconnected. Reconnecting…', true); setTimeout(connect, 1200); };
 }
 
-function mySeat() { return state?.my_seat; }
+function mySeat() { return state?.my_seat ?? null; }
 function tw() { return state?.topowar || null; }
 
-// Convert canvas pixel to grid tile
 function tileFromEvent(evt) {
   if (!tw()) return null;
   const rect = board.getBoundingClientRect();
@@ -60,9 +63,7 @@ function tileFromEvent(evt) {
 function soldiersAt(tile) {
   return (tw()?.soldiers || []).filter(s => s.tile[0] === tile[0] && s.tile[1] === tile[1]);
 }
-function mySoldiersAt(tile) {
-  return soldiersAt(tile).filter(s => s.owner === mySeat());
-}
+function mySoldiersAt(tile) { return soldiersAt(tile).filter(s => s.owner === mySeat()); }
 function mgAt(tile) {
   return (tw()?.machine_guns || []).find(m => m.tile[0] === tile[0] && m.tile[1] === tile[1]) || null;
 }
@@ -71,29 +72,31 @@ function myMgAt(tile) {
   return (mg && mg.owner === mySeat()) ? mg : null;
 }
 function firstSelected() {
-  // Return first selected unit_id still alive
   for (const uid of selectedUnits) {
-    const s = (tw()?.soldiers || []).find(s => s.unit_id === uid);
-    if (s) return uid;
+    if ((tw()?.soldiers || []).find(s => s.unit_id === uid)) return uid;
   }
   return null;
 }
+function getSelectedSoldier() {
+  const uid = firstSelected();
+  return uid ? ((tw()?.soldiers || []).find(s => s.unit_id === uid) || null) : null;
+}
+function getSelectedMg() {
+  return selectedMg ? ((tw()?.machine_guns || []).find(m => m.structure_id === selectedMg) || null) : null;
+}
 
-// Set which mode button is visually active
+// === MODE MANAGEMENT ===
+
 function updateModeButtons() {
-  const modeMap = {
-    'select': 'mode-select', 'dig': 'mode-dig', 'plan': 'mode-plan',
-    'build': 'mode-build', 'operate': 'mode-operate',
-    'attack': 'mode-attack', 'sentry': 'mode-sentry',
-  };
-  for (const [m, id] of Object.entries(modeMap)) {
-    const btn = el(id);
+  const modes = ['select','attack','sentry','defend','dig','plan','build','operate'];
+  for (const m of modes) {
+    const btn = el('mode-' + m);
     if (btn) btn.classList.toggle('active', mode === m);
   }
 }
 
 function setMode(m) {
-  if (mode === m) { mode = 'select'; plan = []; } // toggle off
+  if (mode === m) { mode = 'select'; plan = []; }
   else { mode = m; if (m !== 'plan') plan = []; }
   updateModeButtons();
   updateModeLabel();
@@ -101,16 +104,47 @@ function setMode(m) {
 
 function updateModeLabel() {
   const labels = {
-    select: 'Select unit or MG',
-    dig: 'Select soldier, then click tile to dig',
-    plan: 'Draw dig plan, then click soldier to assign',
-    build: 'Click tile to place MG (must be adj. to trench)',
-    operate: 'Click MG to assign operators, then click tile to force-fire',
-    attack: 'Click soldier(s) to order Attack',
-    sentry: 'Click soldier(s) to order Sentry',
+    select: 'Select', attack: 'Attack', sentry: 'Sentry', defend: 'Defend',
+    dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew MG',
   };
-  el('mode-line').textContent = labels[mode] || 'Select';
+  const e = el('mode-line');
+  if (e) e.textContent = labels[mode] || 'Select';
 }
+
+// === KEYBOARD SHORTCUTS ===
+
+document.addEventListener('keydown', (evt) => {
+  if (evt.target.tagName === 'INPUT' || evt.target.tagName === 'TEXTAREA') return;
+  const key = evt.key.toUpperCase();
+
+  if (evt.key === 'Escape') {
+    plan = [];
+    selectedUnits = new Set();
+    selectedMg = null;
+    setMode('select');
+    render();
+    return;
+  }
+
+  const shortcutMap = { '1':'select','2':'attack','3':'sentry','4':'defend','D':'dig','P':'plan','B':'build','O':'operate' };
+  if (shortcutMap[key]) {
+    evt.preventDefault();
+    if (['2','3','4'].includes(key) && mode === shortcutMap[key] && selectedUnits.size) {
+      send({ type: 'tw_order_mode', unit_ids: [...selectedUnits], mode });
+    }
+    setMode(shortcutMap[key]);
+    render();
+    return;
+  }
+
+  if (key === 'C') {
+    evt.preventDefault();
+    for (const uid of selectedUnits) send({ type: 'tw_cancel_task', unit_id: uid });
+    render();
+  }
+});
+
+// === CLICK HANDLER ===
 
 board.addEventListener('click', (evt) => {
   if (!tw() || mySeat() === null) return;
@@ -123,7 +157,6 @@ board.addEventListener('click', (evt) => {
 
   if (mode === 'select') {
     if (myS.length) {
-      // Toggle individual selection; Ctrl/Shift adds to selection
       const uid = myS[0].unit_id;
       if (evt.ctrlKey || evt.shiftKey) {
         if (selectedUnits.has(uid)) selectedUnits.delete(uid);
@@ -140,66 +173,50 @@ board.addEventListener('click', (evt) => {
       selectedMg = null;
     }
 
-  } else if (mode === 'attack' || mode === 'sentry') {
+  } else if (mode === 'attack' || mode === 'sentry' || mode === 'defend') {
     if (myS.length) {
       const uid = myS[0].unit_id;
       if (evt.ctrlKey || evt.shiftKey) selectedUnits.add(uid);
       else selectedUnits = new Set([uid]);
     }
-    if (selectedUnits.size) {
-      send({ type: 'tw_order_mode', unit_ids: [...selectedUnits], mode });
-    }
+    if (selectedUnits.size) send({ type: 'tw_order_mode', unit_ids: [...selectedUnits], mode });
 
   } else if (mode === 'dig') {
     if (myS.length) {
-      // Click soldier = select it
       selectedUnits = new Set([myS[0].unit_id]);
     } else {
       const uid = firstSelected();
-      if (uid !== null) {
-        send({ type: 'tw_assign_dig', unit_id: uid, plan: [tile] });
-      }
+      if (uid !== null) send({ type: 'tw_assign_dig', unit_id: uid, plan: [tile] });
     }
 
   } else if (mode === 'plan') {
     if (myS.length) {
-      // Click soldier = assign current plan
       const uid = myS[0].unit_id;
       selectedUnits = new Set([uid]);
-      if (plan.length) {
-        send({ type: 'tw_assign_dig', unit_id: uid, plan: [...plan] });
-        plan = [];
-      }
+      if (plan.length) { send({ type: 'tw_assign_dig', unit_id: uid, plan: [...plan] }); plan = []; }
     } else {
-      // Extend the plan (only adjacent tiles)
       const last = plan[plan.length - 1];
-      if (!last || (Math.abs(last[0] - tile[0]) + Math.abs(last[1] - tile[1]) === 1)) {
-        // Avoid duplicate consecutive tiles
+      if (!last || Math.abs(last[0]-tile[0]) + Math.abs(last[1]-tile[1]) === 1) {
         if (!last || last[0] !== tile[0] || last[1] !== tile[1]) plan.push(tile);
       }
     }
 
   } else if (mode === 'build') {
-    // Pick 2 nearest idle soldiers as helpers
     const helpers = (tw().soldiers || [])
       .filter(s => s.owner === mySeat())
-      .sort((a, b) => Math.hypot(a.tile[0]-tile[0], a.tile[1]-tile[1]) - Math.hypot(b.tile[0]-tile[0], b.tile[1]-tile[1]))
-      .slice(0, 2)
-      .map(s => s.unit_id);
+      .sort((a, b) => Math.hypot(a.tile[0]-tile[0],a.tile[1]-tile[1]) - Math.hypot(b.tile[0]-tile[0],b.tile[1]-tile[1]))
+      .slice(0, 2).map(s => s.unit_id);
     send({ type: 'tw_assign_build_mg', unit_ids: helpers, tile });
 
   } else if (mode === 'operate') {
     if (myMg) {
       selectedMg = myMg.structure_id;
-      // Assign 2 nearest soldiers as operators
       const ops = (tw().soldiers || [])
         .filter(s => s.owner === mySeat())
-        .sort((a, b) => Math.hypot(a.tile[0]-myMg.tile[0], a.tile[1]-myMg.tile[1]) - Math.hypot(b.tile[0]-myMg.tile[0], b.tile[1]-myMg.tile[1]))
-        .slice(0, 2)
-        .map(s => s.unit_id);
+        .sort((a, b) => Math.hypot(a.tile[0]-myMg.tile[0],a.tile[1]-myMg.tile[1]) - Math.hypot(b.tile[0]-myMg.tile[0],b.tile[1]-myMg.tile[1]))
+        .slice(0, 2).map(s => s.unit_id);
       send({ type: 'tw_toggle_operate_mg', mg_id: selectedMg, unit_ids: ops });
     } else if (selectedMg !== null) {
-      // Force-fire at tile
       send({ type: 'tw_force_fire', mg_id: selectedMg, tile });
     }
   }
@@ -207,7 +224,6 @@ board.addEventListener('click', (evt) => {
   render();
 });
 
-// Right-click on MG clears force target
 board.addEventListener('contextmenu', (evt) => {
   evt.preventDefault();
   if (!tw() || mySeat() === null || state.status !== 'active') return;
@@ -217,21 +233,22 @@ board.addEventListener('contextmenu', (evt) => {
   if (myMg) send({ type: 'tw_force_fire', mg_id: myMg.structure_id, tile: null });
 });
 
-// Escape: cancel plan / deselect
-document.addEventListener('keydown', (evt) => {
-  if (evt.key === 'Escape') {
-    plan = [];
-    selectedUnits = new Set();
-    selectedMg = null;
-    setMode('select');
-    render();
-  }
-});
+// === DRAW ===
 
-// ── RENDERING ──────────────────────────────────────────────────────────────
+function cpx(gx) { return OX + gx * CELL + CELL / 2; }
+function cpy(gy) { return OY + gy * CELL + CELL / 2; }
 
-function px(gx) { return OX + gx * CELL + CELL / 2; }
-function py(gy) { return OY + gy * CELL + CELL / 2; }
+function drawRangeCircle(cx, cy, radius, color) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.globalAlpha = 0.55;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
 
 function draw() {
   const data = tw();
@@ -240,7 +257,6 @@ function draw() {
   board.width  = OX * 2 + data.map.width  * CELL;
   board.height = OY * 2 + data.map.height * CELL;
 
-  // Background
   ctx.fillStyle = '#1a1e28';
   ctx.fillRect(0, 0, board.width, board.height);
 
@@ -256,7 +272,6 @@ function draw() {
   for (const t of data.map.trenches) {
     ctx.fillStyle = '#2e2a24';
     ctx.fillRect(OX + t[0] * CELL, OY + t[1] * CELL, CELL - 1, CELL - 1);
-    // Trench cross-hatch
     ctx.strokeStyle = 'rgba(100,80,50,0.35)';
     ctx.lineWidth = 0.5;
     ctx.beginPath();
@@ -275,35 +290,34 @@ function draw() {
     ctx.setLineDash([4, 3]);
     ctx.beginPath();
     plan.forEach((t, i) => {
-      if (i === 0) ctx.moveTo(px(t[0]), py(t[1]));
-      else ctx.lineTo(px(t[0]), py(t[1]));
+      if (i === 0) ctx.moveTo(cpx(t[0]), cpy(t[1]));
+      else ctx.lineTo(cpx(t[0]), cpy(t[1]));
     });
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.lineWidth = 1;
-    // Mark each plan tile
     ctx.fillStyle = 'rgba(244,200,78,0.18)';
     for (const t of plan) ctx.fillRect(OX + t[0] * CELL, OY + t[1] * CELL, CELL - 1, CELL - 1);
-    // Mark first tile
     ctx.strokeStyle = '#f4c84e';
     ctx.strokeRect(OX + plan[0][0] * CELL + 1, OY + plan[0][1] * CELL + 1, CELL - 3, CELL - 3);
   }
 
+  // Range circles
+  const selSoldier = getSelectedSoldier();
+  if (selSoldier) drawRangeCircle(cpx(selSoldier.x), cpy(selSoldier.y), RIFLE_RANGE * CELL, 'rgba(255,180,50,0.8)');
+  const selMg = getSelectedMg();
+  if (selMg) drawRangeCircle(cpx(selMg.tile[0]), cpy(selMg.tile[1]), MG_RANGE * CELL, 'rgba(255,220,80,0.7)');
+
   // Machine guns
   for (const mg of data.machine_guns || []) {
     const [mx, my] = mg.tile;
-    const tlx = OX + mx * CELL;
-    const tly = OY + my * CELL;
+    const tlx = OX + mx * CELL, tly = OY + my * CELL;
 
-    // Base
     ctx.fillStyle = mg.owner === 0 ? '#8b1515' : '#1a3fa0';
     ctx.fillRect(tlx + 3, tly + 3, CELL - 6, CELL - 6);
-
-    // Gun barrel indicator
     ctx.fillStyle = '#aaa';
     ctx.fillRect(tlx + CELL / 2 - 2, tly + 1, 4, 6);
 
-    // Selection ring
     if (mg.structure_id === selectedMg) {
       ctx.strokeStyle = '#7aff9e';
       ctx.lineWidth = 2;
@@ -311,52 +325,57 @@ function draw() {
       ctx.lineWidth = 1;
     }
 
-    // Force-fire target indicator
     if (mg.force_target) {
       const [fx, fy] = mg.force_target;
       ctx.strokeStyle = '#ff6767';
       ctx.lineWidth = 2;
       ctx.strokeRect(OX + fx * CELL + 2, OY + fy * CELL + 2, CELL - 4, CELL - 4);
-      // Line from MG to target
       ctx.strokeStyle = 'rgba(255,100,100,0.4)';
       ctx.setLineDash([3, 3]);
       ctx.beginPath();
-      ctx.moveTo(px(mx), py(my));
-      ctx.lineTo(px(fx), py(fy));
+      ctx.moveTo(cpx(mx), cpy(my));
+      ctx.lineTo(cpx(fx), cpy(fy));
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.lineWidth = 1;
     }
 
-    // HP bar
     const hpFrac = mg.hp / (mg.hp_max || 20);
     ctx.fillStyle = '#111';
     ctx.fillRect(tlx + 2, tly - 5, CELL - 4, 3);
     ctx.fillStyle = hpFrac > 0.5 ? '#65e06f' : (hpFrac > 0.25 ? '#f4c84e' : '#e04040');
     ctx.fillRect(tlx + 2, tly - 5, (CELL - 4) * hpFrac, 3);
 
-    // Build-progress bar (below tile)
     if (!mg.built) {
       const bpFrac = mg.build_progress / (mg.build_required || 30);
       ctx.fillStyle = '#222';
       ctx.fillRect(tlx + 2, tly + CELL + 1, CELL - 4, 3);
       ctx.fillStyle = '#f4c84e';
       ctx.fillRect(tlx + 2, tly + CELL + 1, (CELL - 4) * bpFrac, 3);
-    }
-
-    // "BUILT" / "Under construction" label
-    if (!mg.built) {
       ctx.fillStyle = 'rgba(244,200,78,0.85)';
       ctx.font = '8px system-ui';
       ctx.fillText('BUILD', tlx + 2, tly + CELL - 2);
+    }
+
+    if (mg.built && mg.operator_ids && mg.operator_ids.length) {
+      ctx.fillStyle = '#7aff9e';
+      ctx.font = 'bold 9px system-ui';
+      ctx.fillText(`\xd7${mg.operator_ids.length}`, tlx + CELL - 12, tly + CELL - 2);
     }
   }
 
   // Soldiers
   for (const s of data.soldiers || []) {
-    // Center of the soldier's continuous position
     const scx = OX + s.x * CELL + CELL / 2;
     const scy = OY + s.y * CELL + CELL / 2;
+
+    // Firing flash halo
+    if (s.rifle_cooldown > 2.5) {
+      ctx.fillStyle = 'rgba(255,255,180,0.4)';
+      ctx.beginPath();
+      ctx.arc(scx, scy, 10, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     // Body
     ctx.fillStyle = s.owner === 0 ? '#e83030' : '#3d6cdf';
@@ -365,15 +384,9 @@ function draw() {
     ctx.fill();
 
     // Mode ring
-    if (s.mode === 'attack') {
-      ctx.strokeStyle = '#ffb020';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(scx, scy, 8, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.lineWidth = 1;
-    } else if (s.mode === 'sentry') {
-      ctx.strokeStyle = '#60dfff';
+    const modeRingColor = { attack: '#ffb020', sentry: '#60dfff', defend: '#50d080' };
+    if (modeRingColor[s.mode]) {
+      ctx.strokeStyle = modeRingColor[s.mode];
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.arc(scx, scy, 8, 0, Math.PI * 2);
@@ -381,19 +394,21 @@ function draw() {
       ctx.lineWidth = 1;
     }
 
-    // Selection box (drawn on the tile the soldier currently occupies)
+    // Selection box
     if (selectedUnits.has(s.unit_id)) {
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#ffd45a';
+      ctx.lineWidth = 2;
       ctx.strokeRect(OX + s.tile[0] * CELL + 1, OY + s.tile[1] * CELL + 1, CELL - 2, CELL - 2);
       ctx.lineWidth = 1;
     }
 
-    // Blocked "..." indicator
+    // Blocked indicator
     if (s.blocked) {
-      ctx.fillStyle = '#fff';
+      ctx.fillStyle = 'rgba(255,80,80,0.9)';
       ctx.font = 'bold 9px system-ui';
-      ctx.fillText('...', OX + s.tile[0] * CELL + 3, OY + s.tile[1] * CELL - 1);
+      ctx.textAlign = 'center';
+      ctx.fillText('!', scx, scy - 9);
+      ctx.textAlign = 'left';
     }
 
     // Dig progress bar on target tile
@@ -408,21 +423,15 @@ function draw() {
 
     // Task label
     if (s.task) {
-      const taskLabels = { dig: 'DIG', build_mg: 'BUILD', operate_mg: 'CREW' };
+      const taskLabels = { dig: 'DIG', build_mg: 'BLD', operate_mg: 'CREW' };
       const lbl = taskLabels[s.task.type];
       if (lbl) {
-        ctx.fillStyle = 'rgba(255,220,80,0.9)';
+        ctx.fillStyle = 'rgba(255,220,80,0.95)';
         ctx.font = '7px system-ui';
-        ctx.fillText(lbl, scx - 7, scy - 8);
+        ctx.textAlign = 'center';
+        ctx.fillText(lbl, scx, scy - 9);
+        ctx.textAlign = 'left';
       }
-    }
-
-    // Rifle-firing flash
-    if (s.rifle_cooldown > 2.5) {
-      ctx.fillStyle = 'rgba(255,255,180,0.55)';
-      ctx.beginPath();
-      ctx.arc(scx, scy, 9, 0, Math.PI * 2);
-      ctx.fill();
     }
   }
 
@@ -437,8 +446,8 @@ function draw() {
   }
 
   // Game-over overlay
-  if (state && (state.winner !== null && state.winner !== undefined)) {
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  if (state && state.winner !== null && state.winner !== undefined) {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(0, 0, board.width, board.height);
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 28px system-ui';
@@ -454,78 +463,129 @@ function draw() {
   }
 }
 
+// === SELECTION PANEL ===
+
+function updateSelectionPanel() {
+  const panel = el('selection-panel');
+  if (!panel) return;
+
+  const soldier = getSelectedSoldier();
+  const mg = getSelectedMg();
+
+  if (!soldier && !mg) {
+    if (selectedUnits.size > 1) {
+      const alive = [...selectedUnits].filter(uid => (tw()?.soldiers || []).some(s => s.unit_id === uid));
+      panel.innerHTML = `<div class="sel-row"><strong>${alive.length}</strong>&nbsp;soldiers selected</div>`;
+      return;
+    }
+    panel.innerHTML = '<div class="muted">Nothing selected.</div>';
+    return;
+  }
+
+  if (soldier) {
+    const modeLabel = { select: '—', attack: 'Attack', sentry: 'Sentry', defend: 'Defend' };
+    const taskLabel = { dig: 'Digging', build_mg: 'Building MG', operate_mg: 'Crewing MG' };
+    const side = soldier.owner === 0 ? 'Red' : 'Blue';
+    const hp = Math.round((soldier.hp / (soldier.hp_max || 5)) * 100);
+    const tsk = soldier.task ? (taskLabel[soldier.task.type] || soldier.task.type) : '—';
+    const blockedTag = soldier.blocked ? '<span class="sel-blocked">BLOCKED</span>' : '';
+    panel.innerHTML = `
+      <div class="sel-grid">
+        <span class="sel-label">Side</span><span class="sel-val">${side}</span>
+        <span class="sel-label">HP</span><span class="sel-val">${hp}%</span>
+        <span class="sel-label">Mode</span><span class="sel-val">${modeLabel[soldier.mode] || soldier.mode}</span>
+        <span class="sel-label">Task</span><span class="sel-val">${tsk}</span>
+      </div>${blockedTag}`;
+    return;
+  }
+
+  if (mg) {
+    const side = mg.owner === 0 ? 'Red' : 'Blue';
+    const hp = Math.round((mg.hp / (mg.hp_max || 20)) * 100);
+    const ops = mg.operator_ids ? mg.operator_ids.length : 0;
+    const ffTag = mg.force_target ? '<span class="sel-blocked">Force-fire active</span>' : '';
+    panel.innerHTML = `
+      <div class="sel-grid">
+        <span class="sel-label">Side</span><span class="sel-val">${side}</span>
+        <span class="sel-label">HP</span><span class="sel-val">${hp}%</span>
+        <span class="sel-label">Built</span><span class="sel-val">${mg.built ? 'Yes' : 'No'}</span>
+        <span class="sel-label">Crew</span><span class="sel-val">${ops}/2</span>
+      </div>${ffTag}`;
+  }
+}
+
+// === RENDER ===
+
 function render() {
   if (!state) return;
   draw();
+  updateSelectionPanel();
 
-  // Status line
   if (state.status === 'open') {
     setStatus('Waiting for opponent…');
   } else if (state.winner !== null && state.winner !== undefined) {
-    const msg = state.winner_name ? `${state.winner_name} wins — ${state.win_reason || ''}` : (state.win_reason || 'Game over.');
+    const msg = state.winner_name
+      ? `${state.winner_name} wins — ${state.win_reason || ''}`
+      : (state.win_reason || 'Game over.');
     setStatus(msg);
   } else {
-    setStatus('Game active.');
+    setStatus('Active.');
   }
 
-  // Share / join link
   const shareEl = el('share-line');
-  if (shareEl) {
-    if (state.join_code) shareEl.textContent = `Join code: ${state.join_code}`;
-    else shareEl.textContent = `ID: ${state.game_id}`;
+  if (shareEl) shareEl.textContent = state.join_code ? `Join code: ${state.join_code}` : `ID: ${state.game_id}`;
+
+  const seatEl = el('seat-line');
+  const chipEl = el('seat-chip');
+  const seat = mySeat();
+  if (seatEl) seatEl.textContent = seat === null ? 'Spectator' : (seat === 0 ? 'Red' : 'Blue');
+  if (chipEl) {
+    chipEl.classList.toggle('seat-red', seat === 0);
+    chipEl.classList.toggle('seat-blue', seat === 1);
   }
 
-  // Seat label
-  const seatEl = el('seat-line');
-  if (seatEl) seatEl.textContent = mySeat() === null ? 'Spectator' : (mySeat() === 0 ? 'Red' : 'Blue');
-
-  // Clock
-  const remaining = Math.max(0, Math.floor((tw()?.time_remaining) || 0));
+  const remaining = Math.max(0, Math.floor(tw()?.time_remaining || 0));
   const clockEl = el('clock-line');
   if (clockEl) clockEl.textContent = `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}`;
 
-  // Kill counts
   const k = tw()?.kill_counts || {};
   const k0 = el('kills0'), k1 = el('kills1');
   if (k0) k0.textContent = String(k['0'] || 0);
   if (k1) k1.textContent = String(k['1'] || 0);
 
-  // Log
   const logEl = el('log');
-  if (logEl) logEl.innerHTML = (state.log || []).slice(-16).map(m => `<div class="log-entry">${m}</div>`).join('');
+  if (logEl) logEl.innerHTML = (state.log || []).slice(-20).map(m => `<div class="log-entry">${m}</div>`).join('');
 
   updateModeButtons();
   updateModeLabel();
 }
 
-// ── BUTTON WIRING ──────────────────────────────────────────────────────────
+// === BUTTON WIRING ===
 
 [
-  ['mode-select', 'select'],
-  ['mode-dig', 'dig'],
-  ['mode-plan', 'plan'],
-  ['mode-build', 'build'],
-  ['mode-operate', 'operate'],
-  ['mode-attack', 'attack'],
-  ['mode-sentry', 'sentry'],
+  ['mode-select','select'], ['mode-attack','attack'], ['mode-sentry','sentry'], ['mode-defend','defend'],
+  ['mode-dig','dig'], ['mode-plan','plan'], ['mode-build','build'], ['mode-operate','operate'],
 ].forEach(([id, m]) => {
   const btn = el(id);
   if (btn) btn.addEventListener('click', (evt) => { evt.stopPropagation(); setMode(m); render(); });
 });
 
 el('cancel-task').addEventListener('click', () => {
-  const uid = firstSelected();
-  if (uid !== null) send({ type: 'tw_cancel_task', unit_id: uid });
+  for (const uid of selectedUnits) send({ type: 'tw_cancel_task', unit_id: uid });
 });
 
 el('resign').addEventListener('click', () => {
   if (confirm('Resign this game?')) send({ type: 'resign' });
 });
 
-// ── INIT ───────────────────────────────────────────────────────────────────
+// === INIT ===
 
 connect();
 setInterval(() => send({ type: 'ping' }), 200);
 setInterval(render, 100);
 updateModeButtons();
 updateModeLabel();
+
+
+
+
