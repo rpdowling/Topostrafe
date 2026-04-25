@@ -184,6 +184,18 @@ class TopowarGameState:
     def _occupied_tiles(self) -> dict[tuple[int, int], int]:
         return {s.tile: sid for sid, s in self.soldiers.items() if s.hp > 0}
 
+    def _mg_tile_set(self) -> set[tuple[int, int]]:
+        """Tiles physically occupied by machine guns (treated as solid)."""
+        return {mg.tile for mg in self.mgs.values() if mg.hp > 0}
+
+    def _crew_positions_for_mg(self, mg: "MachineGun") -> list[tuple[int, int]]:
+        """Adjacent trench tiles a crew member can stand at to operate this MG."""
+        mx, my = mg.tile
+        neighbours = [(mx+1, my), (mx-1, my), (mx, my+1), (mx, my-1)]
+        trench_adj = [t for t in neighbours if t in self.map.trenches and self.map.in_bounds(t)]
+        # Fall back to any adjacent in-bounds tile if no trench is adjacent.
+        return trench_adj if trench_adj else [t for t in neighbours if self.map.in_bounds(t)]
+
     def _nearest_enemy(self, owner: int, from_tile: tuple[int, int]) -> tuple[str, int] | None:
         best = None
         for sid, s in self.soldiers.items():
@@ -282,13 +294,15 @@ class TopowarGameState:
             if not mg or mg.owner != owner or not mg.built:
                 raise ValueError("MG not operable.")
             mg.operators = {int(x) for x in action.get("unit_ids", [])}
-            occ = set(self._occupied_tiles().keys())
+            occ = set(self._occupied_tiles().keys()) | self._mg_tile_set()
+            crew_spots = self._crew_positions_for_mg(mg)
             for uid in mg.operators:
                 s = self.soldiers.get(uid)
                 if s and s.owner == owner and s.hp > 0:
                     s.current_task = {"type": "operate_mg", "mg_id": mg.structure_id}
-                    if s.tile == mg.tile or math.dist(s.tile, mg.tile) > 1.5:
-                        s.path = self.path.find_path(s.tile, mg.tile, trench_only=False, blocked=occ - {s.tile}, stop_adjacent=True)
+                    if crew_spots and s.tile not in crew_spots:
+                        goal = min(crew_spots, key=lambda t: math.dist(s.tile, t))
+                        s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=occ - {s.tile})
             return "MG operators updated."
         if t == "tw_force_fire":
             mg = self.mgs.get(int(action.get("mg_id", -1)))
@@ -330,7 +344,8 @@ class TopowarGameState:
             s.move_cooldown = 0.0
             return
         occ = self._occupied_tiles()
-        if target in occ and occ[target] != s.unit_id:
+        mg_tiles = self._mg_tile_set()
+        if target in mg_tiles or (target in occ and occ[target] != s.unit_id):
             s.blocked = True
             s.blocked_for += dt
             s.move_cooldown = 0.0
@@ -395,7 +410,7 @@ class TopowarGameState:
 
     def _update_tasks(self, dt: float):
         occ = self._occupied_tiles()
-        blocked_keys = set(occ.keys())
+        blocked_keys = set(occ.keys()) | self._mg_tile_set()
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
@@ -453,8 +468,8 @@ class TopowarGameState:
                     s.current_task = None
                     continue
                 if math.dist(s.tile, mg.tile) > 1.5:
-                    s.path = self.path.find_path(s.tile, mg.tile, trench_only=True, blocked=blocked_keys - {s.tile})
-                adj = [u for u in self.soldiers.values() if u.hp > 0 and u.owner == mg.owner and math.dist(u.tile, mg.tile) <= 1.5]
+                    s.path = self.path.find_path(s.tile, mg.tile, trench_only=True, blocked=blocked_keys - {s.tile}, stop_adjacent=True)
+                adj = [u for u in self.soldiers.values() if u.hp > 0 and u.owner == mg.owner and 0 < math.dist(u.tile, mg.tile) <= 1.5]
                 if len(adj) >= 2:
                     mg.build_progress += dt
                     if mg.build_progress >= mg.build_required:
@@ -464,8 +479,10 @@ class TopowarGameState:
                 if not mg or mg.hp <= 0 or not mg.built:
                     s.current_task = None
                     continue
-                if s.tile == mg.tile or math.dist(s.tile, mg.tile) > 1.5:
-                    s.path = self.path.find_path(s.tile, mg.tile, trench_only=False, blocked=blocked_keys - {s.tile}, stop_adjacent=True)
+                crew_spots = self._crew_positions_for_mg(mg)
+                if crew_spots and s.tile not in crew_spots:
+                    goal = min(crew_spots, key=lambda t: math.dist(s.tile, t))
+                    s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
 
     def _update_mgs(self, dt: float):
         for mg in self.mgs.values():
@@ -473,8 +490,8 @@ class TopowarGameState:
                 continue
             mg.cooldown = max(0.0, mg.cooldown - dt)
             mg.burst_shot_cooldown = max(0.0, mg.burst_shot_cooldown - dt)
-            # Auto-detect any 2 friendly soldiers within 1.5 tiles as operators
-            live_ops = [sv for sv in self.soldiers.values() if sv.hp > 0 and sv.owner == mg.owner and math.dist(sv.tile, mg.tile) <= 1.5]
+            # Crew must be adjacent (not on the MG tile itself).
+            live_ops = [sv for sv in self.soldiers.values() if sv.hp > 0 and sv.owner == mg.owner and 0 < math.dist(sv.tile, mg.tile) <= 1.5]
             if len(live_ops) < 2:
                 continue
             target = mg.force_target
