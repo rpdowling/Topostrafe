@@ -189,8 +189,15 @@ board.addEventListener('click', (evt) => {
       selectedMg = myMg.structure_id;
       selectedUnits = new Set();
     } else {
-      selectedUnits = new Set();
-      selectedMg = null;
+      const uid = firstSelected();
+      const selected = uid ? (tw().soldiers || []).find(s => s.unit_id === uid && s.owner === mySeat()) : null;
+      const trenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
+      if (selected && selected.mode === 'defend' && trenchSet.has(`${tile[0]},${tile[1]}`)) {
+        send({ type: 'tw_move_unit', unit_id: selected.unit_id, tile });
+      } else {
+        selectedUnits = new Set();
+        selectedMg = null;
+      }
     }
 
   } else if (mode === 'attack' || mode === 'sentry' || mode === 'defend') {
@@ -249,6 +256,16 @@ board.addEventListener('click', (evt) => {
         .sort((a, b) => Math.hypot(a.tile[0]-myMg.tile[0],a.tile[1]-myMg.tile[1]) - Math.hypot(b.tile[0]-myMg.tile[0],b.tile[1]-myMg.tile[1]))
         .slice(0, 2).map(s => s.unit_id);
       send({ type: 'tw_toggle_operate_mg', mg_id: selectedMg, unit_ids: ops });
+    } else if (selectedMg !== null && myS.length) {
+      const mg = getSelectedMg();
+      if (mg) {
+        const ops = new Set((mg.operators || []).map(x => Number(x)));
+        const uid = myS[0].unit_id;
+        if (ops.size < 2 || ops.has(uid)) {
+          ops.add(uid);
+          send({ type: 'tw_toggle_operate_mg', mg_id: selectedMg, unit_ids: [...ops].slice(0, 2) });
+        }
+      }
     } else if (selectedMg !== null) {
       send({ type: 'tw_force_fire', mg_id: selectedMg, tile });
     }

@@ -225,12 +225,6 @@ class TopowarGameState:
             d = math.dist(from_tile, s.tile)
             if best is None or d < best[0]:
                 best = (d, "soldier", sid)
-        for mid, mg in self.mgs.items():
-            if mg.owner == owner or mg.hp <= 0:
-                continue
-            d = math.dist(from_tile, mg.tile)
-            if best is None or d < best[0]:
-                best = (d, "mg", mid)
         if best is None:
             return None
         return best[1], best[2]
@@ -374,6 +368,22 @@ class TopowarGameState:
             target = action.get("tile")
             mg.force_target = tuple(map(int, target)) if target else None
             return "Force target set." if mg.force_target else "Force target cleared."
+        if t == "tw_move_unit":
+            sid = int(action.get("unit_id", -1))
+            s = self.soldiers.get(sid)
+            if not s or s.owner != owner or s.hp <= 0:
+                raise ValueError("Invalid soldier.")
+            target = tuple(map(int, action.get("tile", [])))
+            if len(target) != 2 or not self.map.in_bounds(target):
+                raise ValueError("Invalid move target.")
+            if s.mode != "defend":
+                raise ValueError("Only defending soldiers can be redirected from select mode.")
+            if target not in self.map.trenches:
+                raise ValueError("Move target must be a trench tile.")
+            occ = set(self._occupied_tiles().keys()) | self._mg_tile_set()
+            s.current_task = None
+            s.path = self.path.find_path(s.tile, target, trench_only=False, blocked=occ - {s.tile})
+            return "Unit rerouted."
         if t == "tw_cancel_task":
             s = self.soldiers.get(int(action.get("unit_id", -1)))
             if not s or s.owner != owner:
@@ -615,6 +625,8 @@ class TopowarGameState:
             if not hit:
                 for mg in self.mgs.values():
                     if mg.hp <= 0 or mg.owner == p.owner:
+                        continue
+                    if p.source != "mg":
                         continue
                     if math.dist((p.x, p.y), mg.tile) <= 0.45:
                         mg.hp -= 1
