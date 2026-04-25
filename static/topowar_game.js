@@ -406,6 +406,17 @@ function draw() {
       ctx.fillRect(OX + tx * CELL + 2, OY + ty * CELL + CELL - 5, (CELL - 4) * prog, 3);
     }
 
+    // Task label
+    if (s.task) {
+      const taskLabels = { dig: 'DIG', build_mg: 'BUILD', operate_mg: 'CREW' };
+      const lbl = taskLabels[s.task.type];
+      if (lbl) {
+        ctx.fillStyle = 'rgba(255,220,80,0.9)';
+        ctx.font = '7px system-ui';
+        ctx.fillText(lbl, scx - 7, scy - 8);
+      }
+    }
+
     // Rifle-firing flash
     if (s.rifle_cooldown > 2.5) {
       ctx.fillStyle = 'rgba(255,255,180,0.55)';
