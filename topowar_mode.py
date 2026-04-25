@@ -287,8 +287,8 @@ class TopowarGameState:
                 s = self.soldiers.get(uid)
                 if s and s.owner == owner and s.hp > 0:
                     s.current_task = {"type": "operate_mg", "mg_id": mg.structure_id}
-                    if math.dist(s.tile, mg.tile) > 1.5:
-                        s.path = self.path.find_path(s.tile, mg.tile, trench_only=False, blocked=occ - {s.tile})
+                    if s.tile == mg.tile or math.dist(s.tile, mg.tile) > 1.5:
+                        s.path = self.path.find_path(s.tile, mg.tile, trench_only=False, blocked=occ - {s.tile}, stop_adjacent=True)
             return "MG operators updated."
         if t == "tw_force_fire":
             mg = self.mgs.get(int(action.get("mg_id", -1)))
@@ -464,8 +464,8 @@ class TopowarGameState:
                 if not mg or mg.hp <= 0 or not mg.built:
                     s.current_task = None
                     continue
-                if math.dist(s.tile, mg.tile) > 1.5:
-                    s.path = self.path.find_path(s.tile, mg.tile, trench_only=False, blocked=blocked_keys - {s.tile})
+                if s.tile == mg.tile or math.dist(s.tile, mg.tile) > 1.5:
+                    s.path = self.path.find_path(s.tile, mg.tile, trench_only=False, blocked=blocked_keys - {s.tile}, stop_adjacent=True)
 
     def _update_mgs(self, dt: float):
         for mg in self.mgs.values():
