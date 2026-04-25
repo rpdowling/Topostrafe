@@ -16,8 +16,9 @@ class RulesConfig:
     dig_seconds_per_tile: float = 5.0
     mg_build_seconds: float = 30.0
     match_time_seconds: int = 600
-    soldier_move_speed: float = 2.0
-    projectile_speed: float = 5.0
+    # Soldiers move discretely: one tile per (1 / soldier_move_speed) seconds.
+    soldier_move_speed: float = 1.0
+    projectile_speed: float = 8.0
 
 
 @dataclass
@@ -39,13 +40,15 @@ class GridMap:
 class Unit:
     unit_id: int
     owner: int
+    # Soldiers occupy a single discrete tile at any moment; x and y are
+    # the integer tile coordinates (kept as float for JSON compatibility).
     x: float
     y: float
     hp: int = 1
 
     @property
     def tile(self) -> tuple[int, int]:
-        return int(round(self.x)), int(round(self.y))
+        return int(self.x), int(self.y)
 
 
 @dataclass
@@ -58,6 +61,9 @@ class Soldier(Unit):
     path: list[tuple[int, int]] = field(default_factory=list)
     attack_target_id: int | None = None
     rifle_cooldown: float = 0.0
+    # Seconds remaining until the soldier completes the current step in
+    # `path`. While > 0 the soldier is still on its current tile.
+    move_cooldown: float = 0.0
 
 
 @dataclass
@@ -96,10 +102,18 @@ class PathfindingService:
     def __init__(self, grid: GridMap):
         self.grid = grid
 
-    def find_path(self, start: tuple[int, int], goal: tuple[int, int], trench_only: bool = False, blocked: set[tuple[int, int]] | None = None) -> list[tuple[int, int]]:
+    def find_path(self, start: tuple[int, int], goal: tuple[int, int], trench_only: bool = False, blocked: set[tuple[int, int]] | None = None, stop_adjacent: bool = False) -> list[tuple[int, int]]:
+        """BFS over the 4-connected grid.
+
+        - `trench_only`: only step onto trench tiles (the goal itself is exempt).
+        - `blocked`: tiles that cannot be stepped on (the goal is exempt so we
+          can always reach it, even if currently occupied).
+        - `stop_adjacent`: stop one tile short of the goal (used when the goal
+          is an enemy unit we should not walk on top of).
+        """
         if start == goal:
             return [start]
-        blocked = blocked or set()
+        blocked = (blocked or set()) - {goal}
         q = deque([start])
         prev: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
         while q:
@@ -125,6 +139,8 @@ class PathfindingService:
             out.append(cur)
             cur = prev[cur]
         out.reverse()
+        if stop_adjacent and len(out) >= 2:
+            out = out[:-1]
         return out
 
 
@@ -289,39 +305,48 @@ class TopowarGameState:
             s.path = []
             s.blocked = False
             s.blocked_for = 0.0
+            s.move_cooldown = 0.0
+            s.attack_target_id = None
             return "Task canceled."
         raise ValueError("Unknown Topowar action.")
 
     def _move_soldier(self, s: Soldier, dt: float):
-        # Sentry and actively-firing soldiers don't move
-        if s.sentry or s.rifle_cooldown > 0:
+        # Sentry soldiers hold position. All others may walk while reloading.
+        if s.sentry:
+            s.move_cooldown = 0.0
             return
+        # Drop any path step that points to the tile we're already on.
+        while s.path and s.path[0] == s.tile:
+            s.path.pop(0)
+            s.move_cooldown = 0.0
         if not s.path:
             s.blocked = False
+            s.move_cooldown = 0.0
             return
         target = s.path[0]
-        if s.tile == target:
-            s.path.pop(0)
-            if not s.path:
-                s.blocked = False
-                return
-            target = s.path[0]
+        # Reject non-rectilinear / non-adjacent steps (defensive guard).
+        if abs(target[0] - s.tile[0]) + abs(target[1] - s.tile[1]) != 1:
+            s.path = []
+            s.move_cooldown = 0.0
+            return
         occ = self._occupied_tiles()
         if target in occ and occ[target] != s.unit_id:
             s.blocked = True
             s.blocked_for += dt
+            s.move_cooldown = 0.0
             return
         s.blocked = False
         s.blocked_for = 0.0
-        tx, ty = target
-        dx, dy = tx - s.x, ty - s.y
-        dist = math.hypot(dx, dy)
-        step = self.rules.soldier_move_speed * dt
-        if dist <= step:
-            s.x, s.y = float(tx), float(ty)
-        elif dist > 0:
-            s.x += dx / dist * step
-            s.y += dy / dist * step
+        # One full tile-step takes (1 / soldier_move_speed) seconds. The
+        # soldier remains visually on its current tile until the cooldown
+        # reaches zero, then snaps to the next tile.
+        if s.move_cooldown <= 0.0:
+            s.move_cooldown = 1.0 / max(0.001, self.rules.soldier_move_speed)
+        s.move_cooldown -= dt
+        if s.move_cooldown <= 0.0:
+            s.x, s.y = float(target[0]), float(target[1])
+            s.path.pop(0)
+            s.move_cooldown = 0.0
 
     def _rifle_combat(self, dt: float):
         for s in self.soldiers.values():
@@ -381,8 +406,23 @@ class TopowarGameState:
                     if near:
                         typ, tid = near
                         goal = self.soldiers[tid].tile if typ == "soldier" else self.mgs[tid].tile
-                        if not s.path or s.path[-1] != goal:
-                            s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
+                        d = math.dist(s.tile, goal)
+                        if d <= 5.0:
+                            # Inside rifle range: hold position and shoot.
+                            s.path = []
+                        else:
+                            # Re-path if goal changed or path went stale.
+                            need = (not s.path) or (
+                                s.path[-1] != goal and
+                                math.dist(s.path[-1], goal) > 1.5
+                            )
+                            if need:
+                                s.path = self.path.find_path(
+                                    s.tile, goal,
+                                    trench_only=False,
+                                    blocked=blocked_keys - {s.tile},
+                                    stop_adjacent=(typ == "soldier"),
+                                )
                 # defend + sentry: stay put, no automatic pathing
                 continue
             if task["type"] == "dig":

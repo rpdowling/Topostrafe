@@ -4,45 +4,105 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=56" />
+  <link rel="stylesheet" href="/static/app.css?v=58" />
 </head>
 <body>
   <div class="page game-layout topowar-layout">
     <section class="panel board-panel um-board-panel topo-board-panel">
-      <div class="toolbar">
-        <div><strong id="game-title">Topowar {{ game_id }}</strong><div class="muted" id="share-line"></div></div>
-        <div class="toolbar-right"><span id="status-line" class="muted">Connecting…</span><a class="button-link quit-link" href="/">Quit</a></div>
-      </div>
-      <div id="board-scroll" class="board-scroll um-board-scroll"><canvas id="board" width="1200" height="900"></canvas></div>
-    </section>
-    <section class="panel sidebar">
-      <div class="stack gap-12">
-        <div><h2>Mode</h2><div id="mode-line" class="muted">Select</div></div>
-        <div class="grid two stat-grid">
-          <div class="stat"><span>You</span><strong id="seat-line">Spectator</strong></div>
-          <div class="stat"><span>Time Left</span><strong id="clock-line">10:00</strong></div>
-          <div class="stat"><span>Red Kills</span><strong id="kills0">0</strong></div>
-          <div class="stat"><span>Blue Kills</span><strong id="kills1">0</strong></div>
-        </div>
+      <div class="toolbar topowar-toolbar">
         <div>
-          <h2>Commands</h2>
-          <div class="mode-buttons topowar-command-grid top-8">
-            <button id="mode-select">Select</button>
-            <button id="mode-dig">Dig</button>
-            <button id="mode-plan">Plan Dig</button>
-            <button id="mode-build">Build MG</button>
-            <button id="mode-operate">Operate MG</button>
-            <button id="mode-attack">Attack</button>
-            <button id="mode-sentry">Sentry</button>
-            <button id="cancel-task">Cancel Task</button>
-            <button id="resign">Resign</button>
+          <strong id="game-title">Topowar</strong>
+          <div class="muted" id="share-line"></div>
+        </div>
+        <div class="topowar-scoreboard">
+          <div class="score-pill score-red"><span class="score-label">Red</span><strong id="kills0">0</strong></div>
+          <div class="score-pill score-clock"><span class="score-label">Time</span><strong id="clock-line">10:00</strong></div>
+          <div class="score-pill score-blue"><span class="score-label">Blue</span><strong id="kills1">0</strong></div>
+        </div>
+        <div class="toolbar-right">
+          <span id="status-line" class="muted">Connecting&hellip;</span>
+          <a class="button-link quit-link" href="/">Quit</a>
+        </div>
+      </div>
+      <div id="board-scroll" class="board-scroll um-board-scroll topowar-board-scroll">
+        <canvas id="board" width="1200" height="900"></canvas>
+      </div>
+    </section>
+
+    <section class="panel sidebar topowar-sidebar">
+      <div class="stack gap-12">
+        <div class="topowar-seat-row">
+          <div class="seat-chip" id="seat-chip">
+            <span class="seat-dot" id="seat-dot"></span>
+            <span id="seat-line">Spectator</span>
+          </div>
+          <div class="mode-banner">
+            <span class="muted">Mode:</span>
+            <strong id="mode-line">Select</strong>
           </div>
         </div>
-        <div><h2>Log</h2><div id="log" class="log-box"></div></div>
+
+        <div>
+          <h2 class="section-title">Commands</h2>
+          <div class="mode-buttons topowar-command-grid top-8">
+            <button id="mode-select" class="cmd-btn cmd-select" title="Click units or MGs to select (Esc to clear)">
+              <span class="cmd-key">1</span><span class="cmd-label">Select</span>
+            </button>
+            <button id="mode-attack" class="cmd-btn cmd-attack" title="Order selected soldiers to advance and engage">
+              <span class="cmd-key">2</span><span class="cmd-label">Attack</span>
+            </button>
+            <button id="mode-sentry" class="cmd-btn cmd-sentry" title="Order soldiers to hold ground and snipe">
+              <span class="cmd-key">3</span><span class="cmd-label">Sentry</span>
+            </button>
+            <button id="mode-defend" class="cmd-btn cmd-defend" title="Order soldiers back to their trench">
+              <span class="cmd-key">4</span><span class="cmd-label">Defend</span>
+            </button>
+            <button id="mode-dig" class="cmd-btn cmd-dig" title="Click an empty tile adjacent to your trench to dig one square">
+              <span class="cmd-key">D</span><span class="cmd-label">Dig (1)</span>
+            </button>
+            <button id="mode-plan" class="cmd-btn cmd-plan" title="Trace a chain of tiles, then click a soldier to assign the dig plan">
+              <span class="cmd-key">P</span><span class="cmd-label">Plan Dig</span>
+            </button>
+            <button id="mode-build" class="cmd-btn cmd-build" title="Place a machine gun on or next to your trench (needs 2 builders)">
+              <span class="cmd-key">B</span><span class="cmd-label">Build MG</span>
+            </button>
+            <button id="mode-operate" class="cmd-btn cmd-operate" title="Click a built MG to crew it; then click a tile to force-fire">
+              <span class="cmd-key">O</span><span class="cmd-label">Crew MG</span>
+            </button>
+            <button id="cancel-task" class="cmd-btn cmd-cancel" title="Cancel the selected soldier's current task">
+              <span class="cmd-key">C</span><span class="cmd-label">Cancel</span>
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <h2 class="section-title">Selection</h2>
+          <div id="selection-panel" class="selection-panel">
+            <div class="muted">Nothing selected.</div>
+          </div>
+        </div>
+
+        <div>
+          <h2 class="section-title">Quick rules</h2>
+          <ul class="quick-rules">
+            <li>Soldiers move <strong>1 tile/second</strong> in straight lines.</li>
+            <li>Rifles: range 5, fire while moving, 1 shot per 3s.</li>
+            <li>MG: range 20, needs 2 nearby soldiers to fire bursts.</li>
+            <li>Dig only adjacent to your trench. Build only on/next to it.</li>
+            <li>Eliminate the enemy or out-kill them by 10:00.</li>
+          </ul>
+        </div>
+
+        <div>
+          <h2 class="section-title">Log</h2>
+          <div id="log" class="log-box"></div>
+        </div>
+
+        <button id="resign" class="resign-btn">Resign</button>
       </div>
     </section>
   </div>
   <script>window.TOPOS_GAME_ID = "{{ game_id }}";</script>
-  <script src="/static/topowar_game.js?v=3"></script>
+  <script src="/static/topowar_game.js?v=6"></script>
 </body>
 </html>
