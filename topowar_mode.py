@@ -33,6 +33,9 @@ class GridMap:
         return 0 <= x < self.width and 0 <= y < self.height
 
     def elevation_at(self, t: tuple[int, int]) -> int:
+        # Trench tiles are dug down — two units below open ground.
+        if t in self.trenches:
+            return self.default_elevation - 2
         return self.default_elevation
 
 
@@ -96,6 +99,7 @@ class Projectile:
     dy: float
     remaining: float
     source: str
+    origin_elevation: int = 0
 
 
 class PathfindingService:
@@ -401,7 +405,7 @@ class TopowarGameState:
             if typ == "soldier":
                 se = self.map.elevation_at(s.tile)
                 te = self.map.elevation_at(target_tile)
-                if se - te >= 1 and target_tile in self.map.trenches:
+                if te < se:
                     chance = 0.25
 
             s.rifle_cooldown = 3.0
@@ -519,7 +523,7 @@ class TopowarGameState:
                 sx, sy = mg.tile
                 spreadx = self.random.uniform(-0.3, 0.3)
                 spready = self.random.uniform(-0.3, 0.3)
-                self.projectiles.append(Projectile(mg.owner, float(sx), float(sy), target[0] - sx + spreadx, target[1] - sy + spready, 20.0, "mg"))
+                self.projectiles.append(Projectile(mg.owner, float(sx), float(sy), target[0] - sx + spreadx, target[1] - sy + spready, 20.0, "mg", self.map.elevation_at(mg.tile)))
 
     def _update_projectiles(self, dt: float):
         remaining: list[Projectile] = []
@@ -536,10 +540,13 @@ class TopowarGameState:
                 if s.hp <= 0 or s.owner == p.owner:
                     continue
                 if math.dist((p.x, p.y), (s.x, s.y)) <= 0.35:
-                    if p.source == "mg":
-                        mg_e = self.map.elevation_at((int(round(p.x)), int(round(p.y))))
-                        su_e = self.map.elevation_at(s.tile)
-                        if s.tile in self.map.trenches and su_e < mg_e:
+                    target_e = self.map.elevation_at(s.tile)
+                    if target_e < p.origin_elevation:
+                        # Lower-elevation targets are harder to hit: 25% chance.
+                        # MG fire at trench soldiers is fully deflected (shoots over them).
+                        if p.source == "mg":
+                            continue
+                        if self.random.random() > 0.25:
                             continue
                     s.hp = 0
                     self.kill_counts[p.owner] += 1
