@@ -232,16 +232,12 @@ board.addEventListener('click', (evt) => {
       refreshBuildStatus();
       if (pendingBuildTile && selectedUnits.size === 2) {
         send({ type: 'tw_assign_build_mg', unit_ids: [...selectedUnits], tile: pendingBuildTile });
-        pendingBuildTile = null;
-        selectedUnits = new Set();
       }
     } else {
       pendingBuildTile = tile;
       refreshBuildStatus();
       if (selectedUnits.size === 2) {
         send({ type: 'tw_assign_build_mg', unit_ids: [...selectedUnits], tile: pendingBuildTile });
-        pendingBuildTile = null;
-        selectedUnits = new Set();
       }
     }
 

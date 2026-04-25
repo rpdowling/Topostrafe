@@ -196,7 +196,12 @@ class TopowarGameState:
     def _crew_positions_for_mg(self, mg: "MachineGun") -> list[tuple[int, int]]:
         """Adjacent trench tiles a crew member can stand at to operate this MG."""
         mx, my = mg.tile
-        neighbours = [(mx+1, my), (mx-1, my), (mx, my+1), (mx, my-1)]
+        neighbours = [
+            (mx + dx, my + dy)
+            for dx in (-1, 0, 1)
+            for dy in (-1, 0, 1)
+            if not (dx == 0 and dy == 0)
+        ]
         trench_adj = [t for t in neighbours if t in self.map.trenches and self.map.in_bounds(t)]
         # Fall back to any adjacent in-bounds tile if no trench is adjacent.
         return trench_adj if trench_adj else [t for t in neighbours if self.map.in_bounds(t)]
@@ -204,7 +209,12 @@ class TopowarGameState:
     def _build_positions_for_mg(self, mg_tile: tuple[int, int]) -> list[tuple[int, int]]:
         """Adjacent trench tiles where builders can stand to construct an MG."""
         mx, my = mg_tile
-        neighbours = [(mx+1, my), (mx-1, my), (mx, my+1), (mx, my-1)]
+        neighbours = [
+            (mx + dx, my + dy)
+            for dx in (-1, 0, 1)
+            for dy in (-1, 0, 1)
+            if not (dx == 0 and dy == 0)
+        ]
         return [t for t in neighbours if self.map.in_bounds(t) and t in self.map.trenches]
 
     def _nearest_enemy(self, owner: int, from_tile: tuple[int, int]) -> tuple[str, int] | None:
@@ -285,7 +295,12 @@ class TopowarGameState:
                 raise ValueError("Invalid MG tile.")
             # MG must be placed on or adjacent to a friendly trench tile
             friendly = set(self._friendly_trench_tiles(owner))
-            tile_and_adj = [tile] + [(tile[0] + dx, tile[1] + dy) for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))]
+            tile_and_adj = [tile] + [
+                (tile[0] + dx, tile[1] + dy)
+                for dx in (-1, 0, 1)
+                for dy in (-1, 0, 1)
+                if not (dx == 0 and dy == 0)
+            ]
             if not any(n in friendly for n in tile_and_adj):
                 raise ValueError("MG must be placed on or adjacent to a friendly trench tile.")
             mid = self.next_structure_id
