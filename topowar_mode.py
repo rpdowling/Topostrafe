@@ -77,6 +77,7 @@ class MachineGun(Structure):
     force_target: tuple[int, int] | None = None
     cooldown: float = 0.0
     burst_left: int = 0
+    burst_shot_cooldown: float = 0.0  # inter-shot delay within a burst
     operators: set[int] = field(default_factory=set)
 
 
@@ -185,21 +186,32 @@ class TopowarGameState:
             return None
         return best[1], best[2]
 
+    def _friendly_trench_tiles(self, owner: int) -> list[tuple[int, int]]:
+        mid = self.map.height // 2
+        return [p for p in self.map.trenches if (owner == 0 and p[1] >= mid) or (owner == 1 and p[1] < mid)]
+
     def command(self, owner: int, action: dict[str, Any]) -> str:
         t = action.get("type")
         if t == "tw_order_mode":
             mode = str(action.get("mode", "defend"))
+            if mode not in {"defend", "attack", "sentry"}:
+                raise ValueError("Unknown mode.")
+            occ = set(self._occupied_tiles().keys())
             for sid in action.get("unit_ids", []):
                 s = self.soldiers.get(int(sid))
                 if not s or s.owner != owner or s.hp <= 0:
                     continue
                 s.mode = mode
                 s.sentry = mode == "sentry"
+                s.current_task = None
                 if mode == "defend":
-                    trench_targets = [p for p in self.map.trenches if (owner == 0 and p[1] > self.map.height // 2) or (owner == 1 and p[1] < self.map.height // 2)]
+                    trench_targets = self._friendly_trench_tiles(owner)
                     if trench_targets:
                         target = min(trench_targets, key=lambda p: math.dist(p, s.tile))
-                        s.path = self.path.find_path(s.tile, target, trench_only=False, blocked=set(self._occupied_tiles().keys()) - {s.tile})
+                        # Walk directly to the trench from anywhere
+                        s.path = self.path.find_path(s.tile, target, trench_only=False, blocked=occ - {s.tile})
+                elif mode in ("attack", "sentry"):
+                    s.path = []
             return "Mode updated."
         if t == "tw_assign_dig":
             sid = int(action.get("unit_id", -1))
@@ -212,7 +224,20 @@ class TopowarGameState:
             for p in plan:
                 if not self.map.in_bounds(p):
                     raise ValueError("Dig target out of bounds.")
-            s.current_task = {"type": "dig", "plan": plan, "target": plan[0], "progress": 0.0}
+                if p in self.map.trenches:
+                    raise ValueError("Tile is already a trench.")
+            # First tile in the plan must be adjacent to an existing trench
+            first = plan[0]
+            adj4 = [(first[0]+dx, first[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
+            if not any(a in self.map.trenches for a in adj4):
+                raise ValueError("Dig must start adjacent to an existing trench.")
+            # Cancel any other soldier already assigned to the same first tile
+            for other in self.soldiers.values():
+                if other.unit_id != sid and other.current_task and other.current_task.get("type") == "dig":
+                    if tuple(other.current_task.get("target", (-1,-1))) == first:
+                        other.current_task = None
+                        other.path = []
+            s.current_task = {"type": "dig", "plan": plan, "target": list(plan[0]), "progress": 0.0}
             s.path = self.path.find_path(s.tile, plan[0], trench_only=True, blocked=set(self._occupied_tiles().keys()) - {s.tile})
             return "Dig task assigned."
         if t == "tw_assign_build_mg":
@@ -253,14 +278,17 @@ class TopowarGameState:
         raise ValueError("Unknown Topowar action.")
 
     def _move_soldier(self, s: Soldier, dt: float):
-        if s.rifle_cooldown > 0:
+        # Sentry and actively-firing soldiers don't move
+        if s.sentry or s.rifle_cooldown > 0:
             return
         if not s.path:
+            s.blocked = False
             return
         target = s.path[0]
         if s.tile == target:
             s.path.pop(0)
             if not s.path:
+                s.blocked = False
                 return
             target = s.path[0]
         occ = self._occupied_tiles()
@@ -269,6 +297,7 @@ class TopowarGameState:
             s.blocked_for += dt
             return
         s.blocked = False
+        s.blocked_for = 0.0
         tx, ty = target
         dx, dy = tx - s.x, ty - s.y
         dist = math.hypot(dx, dy)
@@ -284,26 +313,49 @@ class TopowarGameState:
             if s.hp <= 0:
                 continue
             s.rifle_cooldown = max(0.0, s.rifle_cooldown - dt)
-            t = self._nearest_enemy(s.owner, s.tile)
-            if not t:
+            if s.rifle_cooldown > 0:
                 continue
-            typ, tid = t
+
+            # Sentry mode: stick to current attack target if still alive and in range
+            picked: tuple[str, int] | None = None
+            if s.sentry and s.attack_target_id is not None:
+                typ_hint = "soldier" if s.attack_target_id in self.soldiers else "mg"
+                target_obj = self.soldiers.get(s.attack_target_id) or self.mgs.get(s.attack_target_id)
+                if target_obj and getattr(target_obj, "hp", 0) > 0 and math.dist(s.tile, target_obj.tile) <= 5.0:
+                    picked = (typ_hint, s.attack_target_id)
+                else:
+                    s.attack_target_id = None
+
+            if picked is None:
+                t = self._nearest_enemy(s.owner, s.tile)
+                if not t:
+                    continue
+                picked = t
+                if s.sentry:
+                    s.attack_target_id = picked[1]
+
+            typ, tid = picked
             target_tile = self.soldiers[tid].tile if typ == "soldier" else self.mgs[tid].tile
             d = math.dist(s.tile, target_tile)
-            if d > 5.0 or s.rifle_cooldown > 0:
+            if d > 5.0:
+                if s.sentry:
+                    s.attack_target_id = None
                 continue
+
             chance = 0.5
             if typ == "soldier":
                 se = self.map.elevation_at(s.tile)
                 te = self.map.elevation_at(target_tile)
-                if se - te == 1 and target_tile in self.map.trenches:
+                if se - te >= 1 and target_tile in self.map.trenches:
                     chance = 0.25
+
             s.rifle_cooldown = 3.0
             if self.random.random() <= chance:
                 self.projectiles.append(Projectile(s.owner, s.x, s.y, target_tile[0] - s.x, target_tile[1] - s.y, 5.0, "rifle"))
 
     def _update_tasks(self, dt: float):
         occ = self._occupied_tiles()
+        blocked_keys = set(occ.keys())
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
@@ -314,31 +366,39 @@ class TopowarGameState:
                     if near:
                         typ, tid = near
                         goal = self.soldiers[tid].tile if typ == "soldier" else self.mgs[tid].tile
-                        s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=set(occ.keys()) - {s.tile})
+                        if not s.path or s.path[-1] != goal:
+                            s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
+                # defend + sentry: stay put, no automatic pathing
                 continue
             if task["type"] == "dig":
                 tgt = tuple(task["target"])
                 if s.tile != tgt:
                     if not s.path:
-                        s.path = self.path.find_path(s.tile, tgt, trench_only=True, blocked=set(occ.keys()) - {s.tile})
+                        s.path = self.path.find_path(s.tile, tgt, trench_only=True, blocked=blocked_keys - {s.tile})
                     continue
-                task["progress"] += dt
+                task["progress"] = task.get("progress", 0.0) + dt
                 if task["progress"] >= self.rules.dig_seconds_per_tile:
                     self.map.trenches.add(tgt)
                     plan = task["plan"]
-                    plan.pop(0)
+                    if plan:
+                        plan.pop(0)
                     if not plan:
                         s.current_task = None
                     else:
-                        task["target"] = plan[0]
+                        next_tgt = tuple(plan[0])
+                        task["target"] = list(next_tgt)
                         task["progress"] = 0.0
+                        # Validate next tile is still adjacent to trench
+                        adj4 = [(next_tgt[0]+dx, next_tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
+                        if not any(a in self.map.trenches for a in adj4):
+                            s.current_task = None
             elif task["type"] == "build_mg":
                 mg = self.mgs.get(task["mg_id"])
                 if not mg or mg.hp <= 0 or mg.built:
                     s.current_task = None
                     continue
                 if math.dist(s.tile, mg.tile) > 1.5:
-                    s.path = self.path.find_path(s.tile, mg.tile, trench_only=False, blocked=set(occ.keys()) - {s.tile})
+                    s.path = self.path.find_path(s.tile, mg.tile, trench_only=False, blocked=blocked_keys - {s.tile})
                 adj = [u for u in self.soldiers.values() if u.hp > 0 and u.owner == mg.owner and math.dist(u.tile, mg.tile) <= 1.5]
                 if len(adj) >= 2:
                     mg.build_progress += dt
@@ -350,6 +410,7 @@ class TopowarGameState:
             if mg.hp <= 0 or not mg.built:
                 continue
             mg.cooldown = max(0.0, mg.cooldown - dt)
+            mg.burst_shot_cooldown = max(0.0, mg.burst_shot_cooldown - dt)
             ops = [self.soldiers.get(uid) for uid in mg.operators]
             live_ops = [u for u in ops if u and u.hp > 0 and math.dist(u.tile, mg.tile) <= 1.5]
             if len(live_ops) < 2:
@@ -367,15 +428,19 @@ class TopowarGameState:
                     target = nearest[1]
             if target is None:
                 continue
+            # Start a new burst cycle when cooldown expires
             if mg.cooldown <= 0 and mg.burst_left <= 0:
                 mg.burst_left = 3
+                mg.burst_shot_cooldown = 0.0
                 mg.cooldown = 3.0
-            if mg.burst_left > 0:
+            # Fire one shot per ~0.33 s within the burst
+            if mg.burst_left > 0 and mg.burst_shot_cooldown <= 0:
                 mg.burst_left -= 1
+                mg.burst_shot_cooldown = 1.0 / 3.0
                 sx, sy = mg.tile
-                spreadx = self.random.uniform(-0.25, 0.25)
-                spready = self.random.uniform(-0.25, 0.25)
-                self.projectiles.append(Projectile(mg.owner, sx, sy, target[0] - sx + spreadx, target[1] - sy + spready, 20.0, "mg"))
+                spreadx = self.random.uniform(-0.3, 0.3)
+                spready = self.random.uniform(-0.3, 0.3)
+                self.projectiles.append(Projectile(mg.owner, float(sx), float(sy), target[0] - sx + spreadx, target[1] - sy + spready, 20.0, "mg"))
 
     def _update_projectiles(self, dt: float):
         remaining: list[Projectile] = []

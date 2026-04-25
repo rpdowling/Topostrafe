@@ -1177,6 +1177,11 @@ body.info-modal-open {
   padding: 8px 10px;
   min-height: 40px;
 }
+.topowar-layout .mode-buttons.topowar-command-grid button.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  background: linear-gradient(180deg, #2a4d6a 0%, #1b3346 100%);
+}
 @media (max-width: 1480px) {
   .topowar-layout {
     grid-template-columns: minmax(640px, 1fr) minmax(320px, 42vw);
