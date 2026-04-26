@@ -9,9 +9,13 @@ let state = null;
 let mode = 'select';
 let selectedUnits = new Set();
 let selectedMg = null;
+let selectedMortar = null;
+let retargetMortarId = null;
 let plan = [];
 let pendingBuildTile = null;
 let pendingBuildFacing = null; // degrees, null = not yet set
+let pendingMortarTile = null;
+let pendingMortarTarget = null;
 let attackTargetTile = null;
 let mouseCanvas = { x: 0, y: 0 };
 
@@ -90,11 +94,21 @@ function getSelectedSoldier() {
 function getSelectedMg() {
   return selectedMg ? ((tw()?.machine_guns || []).find(m => m.structure_id === selectedMg) || null) : null;
 }
+function mortarAt(tile) {
+  return (tw()?.mortars || []).find(m => m.tile[0] === tile[0] && m.tile[1] === tile[1] && m.hp > 0) || null;
+}
+function myMortarAt(tile) {
+  const m = mortarAt(tile);
+  return (m && m.owner === mySeat()) ? m : null;
+}
+function getSelectedMortar() {
+  return selectedMortar ? ((tw()?.mortars || []).find(m => m.structure_id === selectedMortar) || null) : null;
+}
 
 // === MODE MANAGEMENT ===
 
 function updateModeButtons() {
-  const modes = ['select','attack','sentry','defend','dig','plan','build','operate'];
+  const modes = ['select','attack','sentry','defend','dig','plan','build','operate','mortar'];
   for (const m of modes) {
     const btn = el('mode-' + m);
     if (btn) btn.classList.toggle('active', mode === m);
@@ -109,15 +123,17 @@ function setMode(m) {
     }
     mode = 'select';
     plan = [];
-    pendingBuildTile = null;
-    pendingBuildFacing = null;
+    pendingBuildTile = null; pendingBuildFacing = null;
+    pendingMortarTile = null; pendingMortarTarget = null;
     attackTargetTile = null;
+    retargetMortarId = null;
   } else {
     mode = m;
     if (m !== 'plan') plan = [];
     if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; }
+    if (m !== 'mortar') { pendingMortarTile = null; pendingMortarTarget = null; }
     if (m !== 'attack') attackTargetTile = null;
-    if (m === 'build') selectedUnits = new Set();
+    if (m === 'build' || m === 'mortar') selectedUnits = new Set();
   }
   updateModeButtons();
   updateModeLabel();
@@ -127,7 +143,7 @@ function setMode(m) {
 function updateModeLabel() {
   const labels = {
     select: 'Select', attack: 'Attack', sentry: 'Sentry', defend: 'Defend',
-    dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew MG',
+    dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew', mortar: 'Build Mortar',
   };
   const e = el('mode-line');
   if (e) e.textContent = labels[mode] || 'Select';
@@ -149,6 +165,22 @@ function refreshBuildStatus() {
     : 'Sending build order…');
 }
 
+function refreshMortarStatus() {
+  if (mode !== 'mortar') return;
+  if (!pendingMortarTile) {
+    setStatus('Build Mortar — Step 1: click a tile (all 8 neighbours must be same ground type).');
+    return;
+  }
+  if (!pendingMortarTarget) {
+    setStatus('Build Mortar — Step 2: click the target tile to aim at.');
+    return;
+  }
+  const need = Math.max(0, 2 - selectedUnits.size);
+  setStatus(need > 0
+    ? `Build Mortar — Step 3: select ${need} more soldier${need > 1 ? 's' : ''} to build.`
+    : 'Sending build order…');
+}
+
 // === KEYBOARD SHORTCUTS ===
 
 document.addEventListener('keydown', (evt) => {
@@ -157,9 +189,9 @@ document.addEventListener('keydown', (evt) => {
 
   if (evt.key === 'Escape') {
     plan = [];
-    pendingBuildTile = null;
-    pendingBuildFacing = null;
-    attackTargetTile = null;
+    pendingBuildTile = null; pendingBuildFacing = null;
+    pendingMortarTile = null; pendingMortarTarget = null;
+    attackTargetTile = null; retargetMortarId = null;
     selectedUnits = new Set();
     selectedMg = null;
     setMode('select');
@@ -167,7 +199,7 @@ document.addEventListener('keydown', (evt) => {
     return;
   }
 
-  const shortcutMap = { '1':'select','2':'attack','3':'sentry','4':'defend','D':'dig','P':'plan','B':'build','O':'operate' };
+  const shortcutMap = { '1':'select','2':'attack','3':'sentry','4':'defend','D':'dig','P':'plan','B':'build','O':'operate','M':'mortar' };
   if (shortcutMap[key]) {
     evt.preventDefault();
     if (['2','3','4'].includes(key) && mode === shortcutMap[key] && selectedUnits.size) {
@@ -196,8 +228,14 @@ board.addEventListener('click', (evt) => {
   const myS = mySoldiersAt(tile);
   const myMg = myMgAt(tile);
 
+  const myMortar = myMortarAt(tile);
+
   if (mode === 'select') {
-    if (myS.length) {
+    if (retargetMortarId !== null && !myMortar && !myMg && !myS.length) {
+      send({ type: 'tw_set_mortar_target', mortar_id: retargetMortarId, target: tile });
+      retargetMortarId = null;
+      setStatus('Mortar retargeted (20 s cooldown).');
+    } else if (myS.length) {
       const uid = myS[0].unit_id;
       if (evt.ctrlKey || evt.shiftKey) {
         if (selectedUnits.has(uid)) selectedUnits.delete(uid);
@@ -205,10 +243,14 @@ board.addEventListener('click', (evt) => {
       } else {
         selectedUnits = new Set([uid]);
       }
-      selectedMg = null;
+      selectedMg = null; selectedMortar = null;
+    } else if (myMortar) {
+      selectedMortar = myMortar.structure_id; selectedMg = null; selectedUnits = new Set();
+      if (myMortar.built && myMortar.ready) {
+        send({ type: 'tw_fire_mortar', mortar_id: myMortar.structure_id });
+      }
     } else if (myMg) {
-      selectedMg = myMg.structure_id;
-      selectedUnits = new Set();
+      selectedMg = myMg.structure_id; selectedMortar = null; selectedUnits = new Set();
     } else {
       const uid = firstSelected();
       const selected = uid ? (tw().soldiers || []).find(s => s.unit_id === uid && s.owner === mySeat()) : null;
@@ -216,8 +258,7 @@ board.addEventListener('click', (evt) => {
       if (selected && selected.mode === 'defend' && trenchSet.has(`${tile[0]},${tile[1]}`)) {
         send({ type: 'tw_move_unit', unit_id: selected.unit_id, tile });
       } else {
-        selectedUnits = new Set();
-        selectedMg = null;
+        selectedUnits = new Set(); selectedMg = null; selectedMortar = null;
       }
     }
 
@@ -303,13 +344,21 @@ board.addEventListener('click', (evt) => {
     refreshBuildStatus();
 
   } else if (mode === 'operate') {
+    const myMortar = myMortarAt(tile);
     if (myMg) {
-      selectedMg = myMg.structure_id;
+      selectedMg = myMg.structure_id; selectedMortar = null;
       const ops = (tw().soldiers || [])
         .filter(s => s.owner === mySeat())
         .sort((a, b) => Math.hypot(a.tile[0]-myMg.tile[0],a.tile[1]-myMg.tile[1]) - Math.hypot(b.tile[0]-myMg.tile[0],b.tile[1]-myMg.tile[1]))
         .slice(0, 2).map(s => s.unit_id);
       send({ type: 'tw_toggle_operate_mg', mg_id: selectedMg, unit_ids: ops });
+    } else if (myMortar) {
+      selectedMortar = myMortar.structure_id; selectedMg = null;
+      const ops = (tw().soldiers || [])
+        .filter(s => s.owner === mySeat())
+        .sort((a, b) => Math.hypot(a.tile[0]-myMortar.tile[0],a.tile[1]-myMortar.tile[1]) - Math.hypot(b.tile[0]-myMortar.tile[0],b.tile[1]-myMortar.tile[1]))
+        .slice(0, 2).map(s => s.unit_id);
+      send({ type: 'tw_toggle_operate_mortar', mortar_id: selectedMortar, unit_ids: ops });
     } else if (selectedMg !== null && myS.length) {
       const mg = getSelectedMg();
       if (mg) {
@@ -323,6 +372,31 @@ board.addEventListener('click', (evt) => {
     } else if (selectedMg !== null) {
       send({ type: 'tw_force_fire', mg_id: selectedMg, tile });
     }
+
+  } else if (mode === 'mortar') {
+    const tryDispatchMortar = () => {
+      if (pendingMortarTile && pendingMortarTarget && selectedUnits.size >= 2) {
+        send({ type: 'tw_assign_build_mortar', unit_ids: [...selectedUnits], tile: pendingMortarTile, target: pendingMortarTarget });
+        pendingMortarTile = null; pendingMortarTarget = null;
+        selectedUnits = new Set();
+      }
+    };
+    if (myS.length) {
+      const uid = myS[0].unit_id;
+      if (selectedUnits.has(uid)) selectedUnits.delete(uid);
+      else {
+        if (selectedUnits.size >= 2) selectedUnits = new Set();
+        selectedUnits.add(uid);
+      }
+      tryDispatchMortar();
+    } else if (!pendingMortarTile) {
+      pendingMortarTile = tile;
+    } else if (!pendingMortarTarget) {
+      pendingMortarTarget = tile;
+      tryDispatchMortar();
+    }
+    refreshMortarStatus();
+
   }
 
   render();
@@ -334,7 +408,13 @@ board.addEventListener('contextmenu', (evt) => {
   const tile = tileFromEvent(evt);
   if (!tile) return;
   const myMg = myMgAt(tile);
-  if (myMg) send({ type: 'tw_force_fire', mg_id: myMg.structure_id, tile: null });
+  if (myMg) { send({ type: 'tw_force_fire', mg_id: myMg.structure_id, tile: null }); return; }
+  const myMortar = myMortarAt(tile);
+  if (myMortar && myMortar.built) {
+    retargetMortarId = myMortar.structure_id;
+    setStatus('Mortar retarget: click a new target tile.');
+    render();
+  }
 });
 
 board.addEventListener('mousemove', (evt) => {
@@ -342,6 +422,7 @@ board.addEventListener('mousemove', (evt) => {
   mouseCanvas.x = (evt.clientX - r.left) * (board.width / r.width);
   mouseCanvas.y = (evt.clientY - r.top) * (board.height / r.height);
   if (mode === 'build' && pendingBuildTile && pendingBuildFacing === null) render();
+  if (mode === 'mortar' && pendingMortarTile && !pendingMortarTarget) render();
 });
 
 // === DRAW ===
@@ -721,6 +802,175 @@ function draw() {
     }
   }
 
+  // Mortars
+  if (mode === 'mortar') {
+    if (pendingMortarTile) {
+      const [bx, by] = pendingMortarTile;
+      ctx.strokeStyle = '#f4a020';
+      ctx.setLineDash([5, 3]);
+      ctx.lineWidth = 2;
+      ctx.strokeRect(OX + bx * CELL + 1, tileTop(by) + 1, CELL - 2, CELL - 2);
+      ctx.setLineDash([]);
+      ctx.lineWidth = 1;
+    }
+    if (pendingMortarTarget) {
+      const [tx, ty] = pendingMortarTarget;
+      const tcx = cpx(tx), tcy = cpy(ty);
+      ctx.strokeStyle = '#f4a020';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(tcx - CELL * 0.6, tcy); ctx.lineTo(tcx + CELL * 0.6, tcy);
+      ctx.moveTo(tcx, tcy - CELL * 0.6); ctx.lineTo(tcx, tcy + CELL * 0.6);
+      ctx.stroke();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = 'rgba(244,160,32,0.5)';
+      ctx.beginPath();
+      ctx.arc(tcx, tcy, 4 * CELL, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.lineWidth = 1;
+    } else if (pendingMortarTile) {
+      // Preview: scatter circle follows mouse
+      const [bx, by] = pendingMortarTile;
+      const dx = mouseCanvas.x - cpx(bx), dy = mouseCanvas.y - cpy(by);
+      if (Math.hypot(dx, dy) > CELL * 0.5) {
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = 'rgba(244,160,32,0.35)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(mouseCanvas.x, mouseCanvas.y, 4 * CELL, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+  }
+
+  for (const mortar of data.mortars || []) {
+    const [mx, my] = mortar.tile;
+    const tlx = OX + mx * CELL, tly = tileTop(my);
+    const mcx = cpx(mx), mcy = cpy(my);
+    const isSelected = mortar.structure_id === selectedMortar;
+    const teamFill = mortar.owner === 0 ? '#8b1515' : '#1a3fa0';
+
+    // Show target crosshair + scatter ring
+    if (mortar.target && mortar.built && (isSelected || mortar.owner === mySeat())) {
+      const [ttx, tty] = mortar.target;
+      const tcx = cpx(ttx), tcy = cpy(tty);
+      ctx.strokeStyle = 'rgba(244,160,32,0.6)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(mcx, mcy); ctx.lineTo(tcx, tcy);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(tcx - CELL * 0.5, tcy); ctx.lineTo(tcx + CELL * 0.5, tcy);
+      ctx.moveTo(tcx, tcy - CELL * 0.5); ctx.lineTo(tcx, tcy + CELL * 0.5);
+      ctx.stroke();
+      if (isSelected) {
+        ctx.strokeStyle = 'rgba(244,160,32,0.35)';
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.arc(tcx, tcy, 4 * CELL, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      ctx.lineWidth = 1;
+    }
+
+    // Square body
+    ctx.fillStyle = teamFill;
+    ctx.fillRect(tlx + 3, tly + 3, CELL - 6, CELL - 6);
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(tlx + 3, tly + 3, CELL - 6, CELL - 6);
+    // Inner circle (barrel)
+    ctx.beginPath();
+    ctx.arc(mcx, mcy, CELL * 0.2, 0, Math.PI * 2);
+    ctx.fillStyle = '#333';
+    ctx.fill();
+    ctx.strokeStyle = '#aaa';
+    ctx.stroke();
+
+    // Ready indicator
+    if (mortar.built && mortar.ready) {
+      ctx.strokeStyle = '#f4a020';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(tlx + 2, tly + 2, CELL - 4, CELL - 4);
+      ctx.lineWidth = 1;
+    }
+    // Selection ring
+    if (isSelected) {
+      ctx.strokeStyle = '#7aff9e';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(tlx + 1, tly + 1, CELL - 2, CELL - 2);
+      ctx.lineWidth = 1;
+    }
+
+    // HP bar
+    const hpFrac = mortar.hp / (mortar.hp_max || 10);
+    ctx.fillStyle = '#111';
+    ctx.fillRect(tlx + 2, tly - 5, CELL - 4, 3);
+    ctx.fillStyle = hpFrac > 0.5 ? '#65e06f' : (hpFrac > 0.25 ? '#f4c84e' : '#e04040');
+    ctx.fillRect(tlx + 2, tly - 5, (CELL - 4) * hpFrac, 3);
+
+    if (!mortar.built) {
+      const bpFrac = mortar.build_progress / (mortar.build_required || 60);
+      ctx.fillStyle = '#222';
+      ctx.fillRect(tlx + 2, tly + CELL + 1, CELL - 4, 3);
+      ctx.fillStyle = '#f4a020';
+      ctx.fillRect(tlx + 2, tly + CELL + 1, (CELL - 4) * bpFrac, 3);
+      ctx.fillStyle = 'rgba(244,160,32,0.85)';
+      ctx.font = '8px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('BUILD', mcx, tly + CELL - 2);
+      ctx.textAlign = 'left';
+    } else if (!mortar.ready) {
+      const cdFrac = 1 - mortar.cooldown / 20;
+      ctx.fillStyle = '#222';
+      ctx.fillRect(tlx + 2, tly + CELL + 1, CELL - 4, 3);
+      ctx.fillStyle = '#f4a020';
+      ctx.fillRect(tlx + 2, tly + CELL + 1, (CELL - 4) * cdFrac, 3);
+    }
+    if (mortar.built && mortar.auto_fire) {
+      ctx.fillStyle = '#f4a020';
+      ctx.font = 'bold 8px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('AUTO', mcx, tly + CELL - 2);
+      ctx.textAlign = 'left';
+    }
+    if (mortar.built && mortar.operators && mortar.operators.length) {
+      ctx.fillStyle = '#7aff9e';
+      ctx.font = 'bold 9px system-ui';
+      ctx.textAlign = 'right';
+      ctx.fillText(`\xd7${mortar.operators.length}`, tlx + CELL - 2, tly + CELL - 2);
+      ctx.textAlign = 'left';
+    }
+  }
+
+  // Mortar shells (lobbed arc)
+  for (const ms of data.mortar_shells || []) {
+    const totalDist = Math.hypot(ms.target[0] - ms.sx, ms.target[1] - ms.sy);
+    const traveledDist = Math.hypot(ms.x - ms.sx, ms.y - ms.sy);
+    const progress = totalDist > 0 ? Math.min(1, traveledDist / totalDist) : 0;
+    const arcHeight = Math.sin(progress * Math.PI); // 0→1→0
+    const radius = 2 + arcHeight * 5;
+    const alpha = 0.5 + arcHeight * 0.5;
+    const sx = cpx(ms.x), sy = cpy(ms.y);
+    // Shadow on the ground (small dot below)
+    ctx.globalAlpha = 0.3;
+    ctx.fillStyle = '#333';
+    ctx.beginPath();
+    ctx.arc(sx, sy, 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = ms.owner === 0 ? '#e05020' : '#5050e0';
+    ctx.beginPath();
+    ctx.arc(sx, sy - arcHeight * CELL * 0.8, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
   // Projectiles
   for (const p of data.projectiles || []) {
     const pcx = OX + p.x * CELL + CELL / 2;
@@ -729,6 +979,41 @@ function draw() {
     ctx.beginPath();
     ctx.arc(pcx, pcy, p.source === 'mg' ? 2.5 : 1.5, 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  // Explosions
+  for (const ex of data.explosions || []) {
+    const t = ex.age / ex.duration;
+    const alpha = 1 - t;
+    const radius = (0.5 + t * 3) * CELL;
+    ctx.globalAlpha = alpha * 0.75;
+    const ecx = cpx(ex.x), ecy = cpy(ex.y);
+    const grad = ctx.createRadialGradient(ecx, ecy, 0, ecx, ecy, radius);
+    grad.addColorStop(0, '#fff8c0');
+    grad.addColorStop(0.3, '#ff8800');
+    grad.addColorStop(1, 'rgba(180,30,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(ecx, ecy, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  // Death crosses
+  for (const dm of data.death_marks || []) {
+    const alpha = 1 - dm.age / dm.duration;
+    const dcx = OX + dm.x * CELL + CELL / 2;
+    const dcy = OY + dm.y * CELL + CELL / 2;
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    const s = 5;
+    ctx.beginPath();
+    ctx.moveTo(dcx - s, dcy - s); ctx.lineTo(dcx + s, dcy + s);
+    ctx.moveTo(dcx + s, dcy - s); ctx.lineTo(dcx - s, dcy + s);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 1;
   }
 
   // Game-over overlay
@@ -757,8 +1042,9 @@ function updateSelectionPanel() {
 
   const soldier = getSelectedSoldier();
   const mg = getSelectedMg();
+  const mortar = getSelectedMortar();
 
-  if (!soldier && !mg) {
+  if (!soldier && !mg && !mortar) {
     if (selectedUnits.size > 1) {
       const alive = [...selectedUnits].filter(uid => (tw()?.soldiers || []).some(s => s.unit_id === uid));
       panel.innerHTML = `<div class="sel-row"><strong>${alive.length}</strong>&nbsp;soldiers selected</div>`;
@@ -788,7 +1074,7 @@ function updateSelectionPanel() {
   if (mg) {
     const side = mg.owner === 0 ? 'Red' : 'Blue';
     const hp = Math.round((mg.hp / (mg.hp_max || 20)) * 100);
-    const ops = mg.operator_ids ? mg.operator_ids.length : 0;
+    const ops = (mg.operators || []).length;
     const ffTag = mg.force_target ? '<span class="sel-blocked">Force-fire active</span>' : '';
     panel.innerHTML = `
       <div class="sel-grid">
@@ -797,6 +1083,27 @@ function updateSelectionPanel() {
         <span class="sel-label">Built</span><span class="sel-val">${mg.built ? 'Yes' : 'No'}</span>
         <span class="sel-label">Crew</span><span class="sel-val">${ops}/2</span>
       </div>${ffTag}`;
+    return;
+  }
+
+  if (mortar) {
+    const side = mortar.owner === 0 ? 'Red' : 'Blue';
+    const hp = Math.round((mortar.hp / (mortar.hp_max || 10)) * 100);
+    const ops = (mortar.operators || []).length;
+    const stateStr = !mortar.built ? `Building ${Math.round((mortar.build_progress / (mortar.build_required || 60)) * 100)}%`
+      : mortar.ready ? '<span style="color:#f4a020">READY — click to fire</span>'
+      : `Reloading ${mortar.cooldown.toFixed(1)}s`;
+    const tgt = mortar.target ? `(${mortar.target[0]}, ${mortar.target[1]})` : '—';
+    const autoBtn = mortar.built && mortar.owner === mySeat()
+      ? `<button class="cmd-btn" style="margin-top:6px;width:100%" onclick="send({type:'tw_toggle_mortar_autofire',mortar_id:${mortar.structure_id}});render()">Auto-fire: ${mortar.auto_fire ? 'ON' : 'OFF'}</button>` : '';
+    panel.innerHTML = `
+      <div class="sel-grid">
+        <span class="sel-label">Side</span><span class="sel-val">${side}</span>
+        <span class="sel-label">HP</span><span class="sel-val">${hp}%</span>
+        <span class="sel-label">Crew</span><span class="sel-val">${ops}/2</span>
+        <span class="sel-label">Target</span><span class="sel-val">${tgt}</span>
+        <span class="sel-label">State</span><span class="sel-val">${stateStr}</span>
+      </div>${autoBtn}`;
   }
 }
 
@@ -856,7 +1163,7 @@ function render() {
 
 [
   ['mode-select','select'], ['mode-attack','attack'], ['mode-sentry','sentry'], ['mode-defend','defend'],
-  ['mode-dig','dig'], ['mode-plan','plan'], ['mode-build','build'], ['mode-operate','operate'],
+  ['mode-dig','dig'], ['mode-plan','plan'], ['mode-build','build'], ['mode-operate','operate'], ['mode-mortar','mortar'],
 ].forEach(([id, m]) => {
   const btn = el(id);
   if (btn) btn.addEventListener('click', (evt) => { evt.stopPropagation(); setMode(m); render(); });
