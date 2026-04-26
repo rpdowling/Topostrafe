@@ -11,7 +11,9 @@ let selectedUnits = new Set();
 let selectedMg = null;
 let plan = [];
 let pendingBuildTile = null;
+let pendingBuildFacing = null; // degrees, null = not yet set
 let attackTargetTile = null;
+let mouseCanvas = { x: 0, y: 0 };
 
 const CELL = 24;
 const OX = 20;
@@ -108,11 +110,12 @@ function setMode(m) {
     mode = 'select';
     plan = [];
     pendingBuildTile = null;
+    pendingBuildFacing = null;
     attackTargetTile = null;
   } else {
     mode = m;
     if (m !== 'plan') plan = [];
-    if (m !== 'build') pendingBuildTile = null;
+    if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; }
     if (m !== 'attack') attackTargetTile = null;
     if (m === 'build') selectedUnits = new Set();
   }
@@ -133,10 +136,17 @@ function updateModeLabel() {
 function refreshBuildStatus() {
   if (mode !== 'build') return;
   if (!pendingBuildTile) {
-    setStatus('Build MG: click an MG tile next to trench, then pick 2 soldiers.');
+    setStatus('Build MG — Step 1: click a tile on or next to your trench.');
     return;
   }
-  setStatus(`Build MG @ (${pendingBuildTile[0]},${pendingBuildTile[1]}): select ${Math.max(0, 2 - selectedUnits.size)} more soldier(s).`);
+  if (pendingBuildFacing === null) {
+    setStatus('Build MG — Step 2: click anywhere to aim the barrel direction.');
+    return;
+  }
+  const need = Math.max(0, 2 - selectedUnits.size);
+  setStatus(need > 0
+    ? `Build MG — Step 3: select ${need} more soldier${need > 1 ? 's' : ''} to build.`
+    : 'Sending build order…');
 }
 
 // === KEYBOARD SHORTCUTS ===
@@ -148,6 +158,7 @@ document.addEventListener('keydown', (evt) => {
   if (evt.key === 'Escape') {
     plan = [];
     pendingBuildTile = null;
+    pendingBuildFacing = null;
     attackTargetTile = null;
     selectedUnits = new Set();
     selectedMg = null;
@@ -258,24 +269,38 @@ board.addEventListener('click', (evt) => {
     }
 
   } else if (mode === 'build') {
+    const tryDispatch = () => {
+      if (pendingBuildTile && pendingBuildFacing !== null && selectedUnits.size >= 2) {
+        send({ type: 'tw_assign_build_mg', unit_ids: [...selectedUnits], tile: pendingBuildTile, facing: pendingBuildFacing });
+        pendingBuildTile = null;
+        pendingBuildFacing = null;
+        selectedUnits = new Set();
+      }
+    };
     if (myS.length) {
+      // Click on soldier — toggle selection
       const uid = myS[0].unit_id;
       if (selectedUnits.has(uid)) selectedUnits.delete(uid);
       else {
         if (selectedUnits.size >= 2) selectedUnits = new Set();
         selectedUnits.add(uid);
       }
-      refreshBuildStatus();
-      if (pendingBuildTile && selectedUnits.size === 2) {
-        send({ type: 'tw_assign_build_mg', unit_ids: [...selectedUnits], tile: pendingBuildTile });
-      }
-    } else {
+      tryDispatch();
+    } else if (!pendingBuildTile) {
+      // Step 1: place MG tile
       pendingBuildTile = tile;
-      refreshBuildStatus();
-      if (selectedUnits.size === 2) {
-        send({ type: 'tw_assign_build_mg', unit_ids: [...selectedUnits], tile: pendingBuildTile });
-      }
+    } else if (pendingBuildFacing === null) {
+      // Step 2: aim barrel toward click point
+      const r = board.getBoundingClientRect();
+      const cx = (evt.clientX - r.left) * (board.width / r.width);
+      const cy = (evt.clientY - r.top) * (board.height / r.height);
+      const dx = cx - cpx(pendingBuildTile[0]);
+      const dy = cy - cpy(pendingBuildTile[1]);
+      const gameDy = mySeat() === 1 ? -dy : dy;
+      pendingBuildFacing = Math.atan2(gameDy, dx) * 180 / Math.PI;
+      tryDispatch();
     }
+    refreshBuildStatus();
 
   } else if (mode === 'operate') {
     if (myMg) {
@@ -310,6 +335,13 @@ board.addEventListener('contextmenu', (evt) => {
   if (!tile) return;
   const myMg = myMgAt(tile);
   if (myMg) send({ type: 'tw_force_fire', mg_id: myMg.structure_id, tile: null });
+});
+
+board.addEventListener('mousemove', (evt) => {
+  const r = board.getBoundingClientRect();
+  mouseCanvas.x = (evt.clientX - r.left) * (board.width / r.width);
+  mouseCanvas.y = (evt.clientY - r.top) * (board.height / r.height);
+  if (mode === 'build' && pendingBuildTile && pendingBuildFacing === null) render();
 });
 
 // === DRAW ===
@@ -437,29 +469,129 @@ function draw() {
     ctx.lineWidth = 1;
   }
 
-  // Range circles
+  // Range circle for selected soldier
   const selSoldier = getSelectedSoldier();
   if (selSoldier) drawRangeCircle(cpx(selSoldier.x), cpy(selSoldier.y), RIFLE_RANGE * CELL, 'rgba(255,180,50,0.8)');
-  const selMg = getSelectedMg();
-  if (selMg) drawRangeCircle(cpx(selMg.tile[0]), cpy(selMg.tile[1]), MG_RANGE * CELL, 'rgba(255,220,80,0.7)');
+
+  // Build mode: pending MG arc preview (before MG sprites so it renders underneath)
+  if (mode === 'build' && pendingBuildTile) {
+    const [bx, by] = pendingBuildTile;
+    const pmcx = cpx(bx), pmcy = cpy(by);
+    let previewAngle;
+    if (pendingBuildFacing !== null) {
+      const gr = pendingBuildFacing * Math.PI / 180;
+      previewAngle = mySeat() === 1 ? -gr : gr;
+    } else {
+      const dx = mouseCanvas.x - pmcx;
+      const dy = mouseCanvas.y - pmcy;
+      previewAngle = Math.atan2(dy, dx);
+    }
+    const arcHalfRad = 45 * Math.PI / 180;
+    // Arc sector fill
+    const previewFill = mySeat() === 0 ? 'rgba(139,21,21,0.22)' : 'rgba(26,63,160,0.22)';
+    ctx.beginPath();
+    ctx.moveTo(pmcx, pmcy);
+    ctx.arc(pmcx, pmcy, CELL * 1.8, previewAngle - arcHalfRad, previewAngle + arcHalfRad);
+    ctx.closePath();
+    ctx.fillStyle = previewFill;
+    ctx.fill();
+    // Range arc
+    ctx.strokeStyle = pendingBuildFacing !== null ? '#f4c84e' : 'rgba(255,200,80,0.45)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 3]);
+    ctx.beginPath();
+    ctx.arc(pmcx, pmcy, MG_RANGE * CELL, previewAngle - arcHalfRad, previewAngle + arcHalfRad);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Tile highlight
+    ctx.strokeStyle = pendingBuildFacing !== null ? '#f4c84e' : 'rgba(255,200,80,0.7)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(OX + bx * CELL + 1, tileTop(by) + 1, CELL - 2, CELL - 2);
+    // Barrel preview
+    ctx.strokeStyle = '#ddd';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(pmcx, pmcy);
+    ctx.lineTo(pmcx + Math.cos(previewAngle) * CELL * 0.6, pmcy + Math.sin(previewAngle) * CELL * 0.6);
+    ctx.stroke();
+    ctx.lineCap = 'butt';
+    ctx.lineWidth = 1;
+  }
 
   // Machine guns
   for (const mg of data.machine_guns || []) {
     const [mx, my] = mg.tile;
     const tlx = OX + mx * CELL, tly = tileTop(my);
+    const mcx = cpx(mx), mcy = cpy(my);
 
-    ctx.fillStyle = mg.owner === 0 ? '#8b1515' : '#1a3fa0';
-    ctx.fillRect(tlx + 3, tly + 3, CELL - 6, CELL - 6);
-    ctx.fillStyle = '#aaa';
-    ctx.fillRect(tlx + CELL / 2 - 2, tly + 1, 4, 6);
+    const gameAngleRad = (mg.facing || 0) * Math.PI / 180;
+    const va = mySeat() === 1 ? -gameAngleRad : gameAngleRad;
+    const arcHalfRad = (mg.arc_half || 45) * Math.PI / 180;
+    const teamFill = mg.owner === 0 ? '#8b1515' : '#1a3fa0';
+    const teamAlpha = mg.owner === 0 ? 'rgba(139,21,21,0.22)' : 'rgba(26,63,160,0.22)';
+    const isSelected = mg.structure_id === selectedMg;
 
-    if (mg.structure_id === selectedMg) {
+    if (mg.built) {
+      // Firing arc sector
+      ctx.beginPath();
+      ctx.moveTo(mcx, mcy);
+      ctx.arc(mcx, mcy, CELL * 1.8, va - arcHalfRad, va + arcHalfRad);
+      ctx.closePath();
+      ctx.fillStyle = teamAlpha;
+      ctx.fill();
+      ctx.strokeStyle = teamFill;
+      ctx.lineWidth = 0.5;
+      ctx.globalAlpha = 0.5;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 1;
+
+      if (isSelected) {
+        // Range arc for selected MG
+        ctx.strokeStyle = 'rgba(255,220,80,0.75)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.arc(mcx, mcy, MG_RANGE * CELL, va - arcHalfRad, va + arcHalfRad);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.lineWidth = 1;
+      }
+    }
+
+    // Circle body
+    ctx.beginPath();
+    ctx.arc(mcx, mcy, CELL * 0.38, 0, Math.PI * 2);
+    ctx.fillStyle = teamFill;
+    ctx.fill();
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Barrel line
+    const barrelLen = CELL * 0.55;
+    ctx.strokeStyle = '#e0e0e0';
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(mcx, mcy);
+    ctx.lineTo(mcx + Math.cos(va) * barrelLen, mcy + Math.sin(va) * barrelLen);
+    ctx.stroke();
+    ctx.lineCap = 'butt';
+    ctx.lineWidth = 1;
+
+    // Selection ring
+    if (isSelected) {
       ctx.strokeStyle = '#7aff9e';
       ctx.lineWidth = 2;
-      ctx.strokeRect(tlx + 1, tly + 1, CELL - 2, CELL - 2);
+      ctx.beginPath();
+      ctx.arc(mcx, mcy, CELL * 0.46, 0, Math.PI * 2);
+      ctx.stroke();
       ctx.lineWidth = 1;
     }
 
+    // Force-fire target line
     if (mg.force_target) {
       const [fx, fy] = mg.force_target;
       ctx.strokeStyle = '#ff6767';
@@ -467,14 +599,15 @@ function draw() {
       ctx.strokeRect(OX + fx * CELL + 2, tileTop(fy) + 2, CELL - 4, CELL - 4);
       ctx.strokeStyle = 'rgba(255,100,100,0.4)';
       ctx.setLineDash([3, 3]);
+      ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(cpx(mx), cpy(my));
+      ctx.moveTo(mcx, mcy);
       ctx.lineTo(cpx(fx), cpy(fy));
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.lineWidth = 1;
     }
 
+    // HP bar
     const hpFrac = mg.hp / (mg.hp_max || 20);
     ctx.fillStyle = '#111';
     ctx.fillRect(tlx + 2, tly - 5, CELL - 4, 3);
@@ -489,13 +622,17 @@ function draw() {
       ctx.fillRect(tlx + 2, tly + CELL + 1, (CELL - 4) * bpFrac, 3);
       ctx.fillStyle = 'rgba(244,200,78,0.85)';
       ctx.font = '8px system-ui';
-      ctx.fillText('BUILD', tlx + 2, tly + CELL - 2);
+      ctx.textAlign = 'center';
+      ctx.fillText('BUILD', mcx, tly + CELL - 2);
+      ctx.textAlign = 'left';
     }
 
-    if (mg.built && mg.operator_ids && mg.operator_ids.length) {
+    if (mg.built && mg.operators && mg.operators.length) {
       ctx.fillStyle = '#7aff9e';
       ctx.font = 'bold 9px system-ui';
-      ctx.fillText(`\xd7${mg.operator_ids.length}`, tlx + CELL - 12, tly + CELL - 2);
+      ctx.textAlign = 'right';
+      ctx.fillText(`\xd7${mg.operators.length}`, tlx + CELL - 2, tly + CELL - 2);
+      ctx.textAlign = 'left';
     }
   }
 

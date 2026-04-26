@@ -98,6 +98,9 @@ class MachineGun(Structure):
     burst_left: int = 0
     burst_shot_cooldown: float = 0.0  # inter-shot delay within a burst
     operators: set[int] = field(default_factory=set)
+    facing: float = 0.0        # current barrel angle in degrees (0=east, 90=south, clockwise)
+    arc_half: float = 45.0     # degrees either side of facing within which MG can fire
+    swivel_speed: float = 15.0 # degrees per second the barrel can rotate
 
 
 @dataclass
@@ -292,6 +295,14 @@ class TopowarGameState:
             return self.soldiers[tid].tile if typ == "soldier" else self.mgs[tid].tile
         return None
 
+    @staticmethod
+    def _angle_diff_deg(a: float, b: float) -> float:
+        """Signed shortest rotation from a to b in degrees, result in [-180, 180]."""
+        d = (b - a) % 360.0
+        if d > 180.0:
+            d -= 360.0
+        return d
+
     def _friendly_trench_tiles(self, owner: int) -> list[tuple[int, int]]:
         mid = self.map.height // 2
         return [p for p in self.map.trenches if (owner == 0 and p[1] >= mid) or (owner == 1 and p[1] < mid)]
@@ -422,7 +433,8 @@ class TopowarGameState:
                 raise ValueError("MG must be placed on or adjacent to a friendly trench tile.")
             mid = self.next_structure_id
             self.next_structure_id += 1
-            mg = MachineGun(mid, owner, tile, build_required=self.rules.mg_build_seconds)
+            facing = float(action.get("facing", 0.0)) % 360.0
+            mg = MachineGun(mid, owner, tile, build_required=self.rules.mg_build_seconds, facing=facing)
             self.mgs[mid] = mg
             build_positions = self._build_positions_for_mg(tile)
             if len(build_positions) < 2:
@@ -729,6 +741,18 @@ class TopowarGameState:
                     target = nearest[1]
             if target is None:
                 continue
+            # Swivel barrel toward target at swivel_speed deg/s.
+            sx, sy = mg.tile
+            target_angle = math.degrees(math.atan2(target[1] - sy, target[0] - sx))
+            diff = self._angle_diff_deg(mg.facing, target_angle)
+            max_turn = mg.swivel_speed * dt
+            if abs(diff) <= max_turn:
+                mg.facing = target_angle % 360.0
+            else:
+                mg.facing = (mg.facing + math.copysign(max_turn, diff)) % 360.0
+            # Only fire when barrel is within the firing arc.
+            if abs(self._angle_diff_deg(mg.facing, target_angle)) > mg.arc_half:
+                continue
             # Start a new burst cycle when cooldown expires
             if mg.cooldown <= 0 and mg.burst_left <= 0:
                 mg.burst_left = 3
@@ -738,7 +762,6 @@ class TopowarGameState:
             if mg.burst_left > 0 and mg.burst_shot_cooldown <= 0:
                 mg.burst_left -= 1
                 mg.burst_shot_cooldown = 1.0 / 3.0
-                sx, sy = mg.tile
                 spreadx = self.random.uniform(-0.3, 0.3)
                 spready = self.random.uniform(-0.3, 0.3)
                 self.projectiles.append(Projectile(mg.owner, float(sx), float(sy), target[0] - sx + spreadx, target[1] - sy + spready, 20.0, "mg", self.map.elevation_at(mg.tile)))
@@ -874,6 +897,8 @@ class TopowarGameState:
                 "build_required": mg.build_required,
                 "operators": sorted(list(mg.operators)),
                 "force_target": list(mg.force_target) if mg.force_target else None,
+                "facing": mg.facing,
+                "arc_half": mg.arc_half,
             })
         return {
             "rules": self.rules.__dict__.copy(),
