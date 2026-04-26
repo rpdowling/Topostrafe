@@ -198,7 +198,7 @@ function refreshBuildStatus() {
     return;
   }
   if (!pendingBuildTile) {
-    setStatus('Build MG — Step 1: click a tile on or next to your trench.');
+    setStatus('Build MG — Step 1: click a tile next to your trench (not in trench).');
     return;
   }
   if (pendingBuildFacing === null) {
@@ -366,16 +366,7 @@ board.addEventListener('click', (evt) => {
         pendingMgDispatch = true;
       }
     };
-    if (myS.length) {
-      // Click on soldier — toggle selection
-      const uid = myS[0].unit_id;
-      if (selectedUnits.has(uid)) selectedUnits.delete(uid);
-      else {
-        if (selectedUnits.size >= 2) selectedUnits = new Set();
-        selectedUnits.add(uid);
-      }
-      tryDispatch();
-    } else if (!pendingBuildTile) {
+    if (!pendingBuildTile) {
       // Step 1: place MG tile
       pendingBuildTile = tile;
     } else if (pendingBuildFacing === null) {
@@ -387,6 +378,15 @@ board.addEventListener('click', (evt) => {
       const dy = cy - cpy(pendingBuildTile[1]);
       const gameDy = mySeat() === 1 ? -dy : dy;
       pendingBuildFacing = Math.atan2(gameDy, dx) * 180 / Math.PI;
+      tryDispatch();
+    } else if (myS.length) {
+      // Step 3: click on soldier — toggle builder selection
+      const uid = myS[0].unit_id;
+      if (selectedUnits.has(uid)) selectedUnits.delete(uid);
+      else {
+        if (selectedUnits.size >= 2) selectedUnits = new Set();
+        selectedUnits.add(uid);
+      }
       tryDispatch();
     }
     refreshBuildStatus();
@@ -428,18 +428,18 @@ board.addEventListener('click', (evt) => {
         pendingMortarDispatch = true;
       }
     };
-    if (myS.length) {
+    if (!pendingMortarTile) {
+      pendingMortarTile = tile;
+    } else if (!pendingMortarTarget) {
+      pendingMortarTarget = tile;
+      tryDispatchMortar();
+    } else if (myS.length) {
       const uid = myS[0].unit_id;
       if (selectedUnits.has(uid)) selectedUnits.delete(uid);
       else {
         if (selectedUnits.size >= 2) selectedUnits = new Set();
         selectedUnits.add(uid);
       }
-      tryDispatchMortar();
-    } else if (!pendingMortarTile) {
-      pendingMortarTile = tile;
-    } else if (!pendingMortarTarget) {
-      pendingMortarTarget = tile;
       tryDispatchMortar();
     }
     refreshMortarStatus();
