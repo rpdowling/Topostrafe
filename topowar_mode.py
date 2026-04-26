@@ -76,6 +76,7 @@ class Soldier(Unit):
     # `path`. While > 0 the soldier is still on its current tile.
     move_cooldown: float = 0.0
     name: str = ""
+    combat_halt: bool = False
 
 
 @dataclass
@@ -520,8 +521,8 @@ class TopowarGameState:
         raise ValueError("Unknown Topowar action.")
 
     def _move_soldier(self, s: Soldier, dt: float):
-        # Sentry soldiers hold position. All others may walk while reloading.
-        if s.sentry:
+        # Sentry soldiers and combat-halted soldiers hold position.
+        if s.sentry or s.combat_halt:
             s.move_cooldown = 0.0
             return
         # Drop any path step that points to the tile we're already on.
@@ -562,6 +563,27 @@ class TopowarGameState:
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
+
+            # Determine whether this advancing soldier should halt to engage an open-ground enemy.
+            # Soldiers only halt when crossing open ground (not when already in a trench).
+            advancing = (
+                s.mode == "attack"
+                and s.current_task is not None
+                and s.current_task.get("type") == "advance"
+                and s.tile not in self.map.trenches
+            )
+            if advancing:
+                open_enemy_near = any(
+                    s2.hp > 0 and s2.owner != s.owner
+                    and self._soldier_visible_to(s2, s.owner)
+                    and s2.tile not in self.map.trenches
+                    and math.dist(s.tile, s2.tile) <= 5.0
+                    for s2 in self.soldiers.values()
+                )
+                s.combat_halt = open_enemy_near
+            else:
+                s.combat_halt = False
+
             s.rifle_cooldown = max(0.0, s.rifle_cooldown - dt)
             if s.rifle_cooldown > 0:
                 continue
@@ -593,12 +615,11 @@ class TopowarGameState:
                     s.attack_target_id = None
                 continue
 
-            chance = 0.5
-            if typ == "soldier":
-                se = self.map.elevation_at(s.tile)
-                te = self.map.elevation_at(target_tile)
-                if te < se:
-                    chance = 0.25
+            # Hit chance: 25% when moving through open ground toward a trench enemy;
+            # 50% when stationary (halted, sentry, or already in a trench).
+            is_moving = advancing and not s.combat_halt
+            target_in_trench = typ == "soldier" and target_tile in self.map.trenches
+            chance = 0.25 if (is_moving and target_in_trench) else 0.5
 
             s.rifle_cooldown = 3.0
             if self.random.random() <= chance:
@@ -624,14 +645,7 @@ class TopowarGameState:
                 if s.tile == goal:
                     s.current_task = None
                     s.path = []
-                    if goal in self.map.trenches:
-                        # Entered a trench — occupy and defend from here
-                        s.mode = "defend"
-                        s.sentry = False
-                    else:
-                        # Reached open-ground target — hold and fire
-                        s.mode = "sentry"
-                        s.sentry = True
+                    # Stay in attack mode — _update_tasks will assign the next goal on the next tick.
                 else:
                     need = (not s.path) or math.dist(s.path[-1], goal) > 1.5
                     if need:
@@ -843,6 +857,7 @@ class TopowarGameState:
                 "path": [list(p) for p in s.path],
                 "rifle_cooldown": s.rifle_cooldown,
                 "name": s.name,
+                "combat_halt": s.combat_halt,
             })
         mgs = []
         for mg in self.mgs.values():

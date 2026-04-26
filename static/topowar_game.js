@@ -556,12 +556,17 @@ function draw() {
       ctx.fillRect(OX + tx * CELL + 2, tileTop(ty) + CELL - 5, (CELL - 4) * prog, 3);
     }
 
-    // Task label
-    if (s.task) {
-      const taskLabels = { dig: 'DIG', build_mg: 'BLD', operate_mg: 'CREW', advance: '→' };
-      const lbl = taskLabels[s.task.type];
+    // Task / combat-state label
+    {
+      let lbl = null;
+      if (s.combat_halt) {
+        lbl = '■';  // halted to engage open enemy
+      } else if (s.task) {
+        const taskLabels = { dig: 'DIG', build_mg: 'BLD', operate_mg: 'CREW', advance: '→' };
+        lbl = taskLabels[s.task.type] || null;
+      }
       if (lbl) {
-        ctx.fillStyle = 'rgba(255,220,80,0.95)';
+        ctx.fillStyle = s.combat_halt ? 'rgba(255,80,80,0.95)' : 'rgba(255,220,80,0.95)';
         ctx.font = '7px system-ui';
         ctx.textAlign = 'center';
         ctx.fillText(lbl, scx, scy - 9);
@@ -628,10 +633,10 @@ function updateSelectionPanel() {
 
   if (soldier) {
     const modeLabel = { select: '—', attack: 'Attack', sentry: 'Sentry', defend: 'Defend' };
-    const taskLabel = { dig: 'Digging', build_mg: 'Building MG', operate_mg: 'Crewing MG' };
+    const taskLabel = { dig: 'Digging', build_mg: 'Building MG', operate_mg: 'Crewing MG', advance: 'Advancing' };
     const side = soldier.owner === 0 ? 'Red' : 'Blue';
     const hp = Math.round((soldier.hp / (soldier.hp_max || 5)) * 100);
-    const tsk = soldier.task ? (taskLabel[soldier.task.type] || soldier.task.type) : '—';
+    const tsk = soldier.combat_halt ? 'Engaging' : (soldier.task ? (taskLabel[soldier.task.type] || soldier.task.type) : '—');
     const blockedTag = soldier.blocked ? '<span class="sel-blocked">BLOCKED</span>' : '';
     panel.innerHTML = `
       <div class="sel-grid">
