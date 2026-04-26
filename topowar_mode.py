@@ -17,8 +17,8 @@ SOLDIER_NAMES = [
 
 @dataclass
 class RulesConfig:
-    map_width: int = 30
-    map_height: int = 30
+    map_width: int = 40
+    map_height: int = 40
     default_elevation: int = 4
     tick_rate: int = 20
     dig_seconds_per_tile: float = 5.0
@@ -174,6 +174,7 @@ class TopowarGameState:
         self.projectiles: list[Projectile] = []
         self.last_tick_monotonic = 0.0
         self._name_pool: list[str] = []
+        self.next_recruit_time: dict[int, float] = {0: 180.0, 1: 180.0}
         self._setup()
 
     def _setup(self):
@@ -198,6 +199,32 @@ class TopowarGameState:
         self.next_unit_id += 1
         name = self._name_pool.pop(0) if self._name_pool else f"Pvt.{sid}"
         self.soldiers[sid] = Soldier(sid, owner, float(tile[0]), float(tile[1]), name=name)
+
+    def _spawn_recruit(self, owner: int):
+        """Spawn a new soldier on the back row. Weighted toward the middle 10 columns."""
+        back_y = self.map.height - 1 if owner == 0 else 0
+        x0_mid = (self.map.width - 10) // 2
+        roll = self.random.random()
+        if roll < 0.05:
+            base_x = self.random.randint(0, 9)
+        elif roll < 0.10:
+            base_x = self.random.randint(self.map.width - 10, self.map.width - 1)
+        else:
+            base_x = self.random.randint(x0_mid, x0_mid + 9)
+        occ = set(self._occupied_tiles().keys())
+        for delta in range(self.map.width):
+            for sign in (0, 1, -1):
+                cx = (base_x + sign * delta) % self.map.width
+                tile = (cx, back_y)
+                if tile not in occ and self.map.in_bounds(tile):
+                    self._spawn_soldier(owner, tile)
+                    return
+
+    def _try_spawn_recruits(self):
+        for owner in (0, 1):
+            if self.time_elapsed >= self.next_recruit_time[owner]:
+                self.next_recruit_time[owner] += 180.0
+                self._spawn_recruit(owner)
 
     def _occupied_tiles(self) -> dict[tuple[int, int], int]:
         return {s.tile: sid for sid, s in self.soldiers.items() if s.hp > 0}
@@ -753,6 +780,7 @@ class TopowarGameState:
         if self.winner is not None:
             return
         self.time_elapsed += dt
+        self._try_spawn_recruits()
         self._update_tasks(dt)
         for s in self.soldiers.values():
             if s.hp > 0:
@@ -845,6 +873,10 @@ class TopowarGameState:
             "projectiles": [{"x": p.x, "y": p.y, "owner": p.owner, "source": p.source} for p in self.projectiles],
             "time_elapsed": self.time_elapsed,
             "time_remaining": max(0.0, self.rules.match_time_seconds - self.time_elapsed),
+            "recruit_timers": {
+                "0": max(0.0, self.next_recruit_time[0] - self.time_elapsed),
+                "1": max(0.0, self.next_recruit_time[1] - self.time_elapsed),
+            },
             "winner": self.winner,
             "win_reason": self.win_reason,
             "kill_counts": {"0": self.kill_counts[0], "1": self.kill_counts[1]},
