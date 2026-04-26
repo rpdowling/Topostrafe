@@ -113,7 +113,7 @@ function getSelectedMortar() {
 // === MODE MANAGEMENT ===
 
 function updateModeButtons() {
-  const modes = ['select','attack','sentry','defend','dig','plan','build','operate','mortar'];
+  const modes = ['select','attack','sentry','defend','dig','plan','build','operate','mortar','sandbag'];
   for (const m of modes) {
     const btn = el('mode-' + m);
     if (btn) btn.classList.toggle('active', mode === m);
@@ -138,7 +138,7 @@ function setMode(m) {
     if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false; }
     if (m !== 'mortar') { pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false; }
     if (m !== 'attack') attackTargetTile = null;
-    if (m === 'build' || m === 'mortar') selectedUnits = new Set();
+    if (m === 'build' || m === 'mortar' || m === 'sandbag') selectedUnits = new Set();
   }
   updateModeButtons();
   updateModeLabel();
@@ -148,7 +148,7 @@ function setMode(m) {
 function updateModeLabel() {
   const labels = {
     select: 'Select', attack: 'Attack', sentry: 'Sentry', defend: 'Defend',
-    dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew', mortar: 'Build Mortar',
+    dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew', mortar: 'Build Mortar', sandbag: 'Build Sandbag',
   };
   const e = el('mode-line');
   if (e) e.textContent = labels[mode] || 'Select';
@@ -249,7 +249,7 @@ document.addEventListener('keydown', (evt) => {
     return;
   }
 
-  const shortcutMap = { '1':'select','2':'attack','3':'sentry','4':'defend','D':'dig','P':'plan','B':'build','O':'operate','M':'mortar' };
+  const shortcutMap = { '1':'select','2':'attack','3':'sentry','4':'defend','D':'dig','P':'plan','B':'build','O':'operate','M':'mortar','G':'sandbag' };
   if (shortcutMap[key]) {
     evt.preventDefault();
     if (['2','3','4'].includes(key) && mode === shortcutMap[key] && selectedUnits.size) {
@@ -447,6 +447,14 @@ board.addEventListener('click', (evt) => {
       tryDispatchMortar();
     }
     refreshMortarStatus();
+
+  } else if (mode === 'sandbag') {
+    if (myS.length) {
+      selectedUnits = new Set([myS[0].unit_id]);
+    } else {
+      const uid = firstSelected();
+      if (uid !== null) send({ type: 'tw_assign_build_sandbag', unit_id: uid, tile });
+    }
 
   }
 
@@ -765,6 +773,29 @@ function draw() {
       ctx.textAlign = 'right';
       ctx.fillText(`\xd7${mg.operators.length}`, tlx + CELL - 2, tly + CELL - 2);
       ctx.textAlign = 'left';
+    }
+  }
+
+  // Sandbags
+  for (const sb of data.sandbags || []) {
+    const [sx, sy] = sb.tile;
+    const tlx = OX + sx * CELL, tly = tileTop(sy);
+    ctx.fillStyle = '#8d7f66';
+    ctx.fillRect(tlx + 3, tly + 6, CELL - 6, CELL - 12);
+    ctx.strokeStyle = '#c9bca5';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(tlx + 3, tly + 6, CELL - 6, CELL - 12);
+    const hpFrac = sb.hp / (sb.hp_max || 3);
+    ctx.fillStyle = '#111';
+    ctx.fillRect(tlx + 2, tly - 5, CELL - 4, 3);
+    ctx.fillStyle = hpFrac > 0.5 ? '#65e06f' : (hpFrac > 0.25 ? '#f4c84e' : '#e04040');
+    ctx.fillRect(tlx + 2, tly - 5, (CELL - 4) * hpFrac, 3);
+    if (!sb.built) {
+      const bpFrac = sb.build_progress / (sb.build_required || 5);
+      ctx.fillStyle = '#222';
+      ctx.fillRect(tlx + 2, tly + CELL + 1, CELL - 4, 3);
+      ctx.fillStyle = '#d8c07a';
+      ctx.fillRect(tlx + 2, tly + CELL + 1, (CELL - 4) * bpFrac, 3);
     }
   }
 
@@ -1206,7 +1237,7 @@ function render() {
 
 [
   ['mode-select','select'], ['mode-attack','attack'], ['mode-sentry','sentry'], ['mode-defend','defend'],
-  ['mode-dig','dig'], ['mode-plan','plan'], ['mode-build','build'], ['mode-operate','operate'], ['mode-mortar','mortar'],
+  ['mode-dig','dig'], ['mode-plan','plan'], ['mode-build','build'], ['mode-operate','operate'], ['mode-mortar','mortar'], ['mode-sandbag','sandbag'],
 ].forEach(([id, m]) => {
   const btn = el(id);
   if (btn) btn.addEventListener('click', (evt) => { evt.stopPropagation(); setMode(m); render(); });

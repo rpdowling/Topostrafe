@@ -219,6 +219,7 @@ class TopowarGameState:
         self.soldiers: dict[int, Soldier] = {}
         self.mgs: dict[int, MachineGun] = {}
         self.mortars: dict[int, Mortar] = {}
+        self.sandbags: dict[int, Sandbag] = {}
         self.mortar_shells: list[MortarShell] = []
         self.projectiles: list[Projectile] = []
         self.explosions: list[Explosion] = []
@@ -429,6 +430,30 @@ class TopowarGameState:
                 return True
             if (cx, cy) != a and (cx, cy) not in self.map.trenches:
                 return False
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                cx += sx
+            if e2 < dx:
+                err += dx
+                cy += sy
+
+    def _has_sandbag_cover_between(self, a: tuple[int, int], b: tuple[int, int]) -> bool:
+        """True if a built sandbag lies strictly between endpoints on Bresenham path."""
+        x0, y0 = a
+        x1, y1 = b
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x1 >= x0 else -1
+        sy = 1 if y1 >= y0 else -1
+        err = dx - dy
+        cx, cy = x0, y0
+        sandbags = self._sandbag_tile_set()
+        while True:
+            if (cx, cy) == (x1, y1):
+                return False
+            if (cx, cy) != a and (cx, cy) in sandbags:
+                return True
             e2 = 2 * err
             if e2 > -dy:
                 err -= dy
@@ -735,6 +760,30 @@ class TopowarGameState:
                         goal = min(crew_spots, key=lambda tp: math.dist(s.tile, tp))
                         s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=occ - {s.tile})
             return "Mortar crew updated."
+        if t == "tw_assign_build_sandbag":
+            sid = int(action.get("unit_id", -1))
+            s = self.soldiers.get(sid)
+            if not s or s.owner != owner or s.hp <= 0:
+                raise ValueError("Invalid soldier.")
+            tile = tuple(map(int, action.get("tile", [])))
+            if len(tile) != 2 or not self.map.in_bounds(tile):
+                raise ValueError("Invalid sandbag tile.")
+            if tile in self.map.trenches:
+                raise ValueError("Sandbags can only be built on open ground.")
+            if tile in self._structure_tile_set():
+                raise ValueError("Tile already occupied by structure.")
+            mid = self.next_structure_id
+            self.next_structure_id += 1
+            sb = Sandbag(mid, owner, tile, build_required=5.0, base_ground_is_trench=False)
+            self.sandbags[mid] = sb
+            occ = set(self._occupied_tiles().keys()) | self._mg_tile_set() | self._mortar_tile_set()
+            s.current_task = {"type": "build_sandbag", "sandbag_id": mid, "build_tile": list(tile)}
+            s.path = self.path.find_path(s.tile, tile, trench_only=False, blocked=occ - {s.tile})
+            if not s.path:
+                del self.sandbags[mid]
+                s.current_task = None
+                raise ValueError("Selected soldier cannot reach sandbag tile.")
+            return "Sandbag construction started."
         if t == "tw_move_unit":
             sid = int(action.get("unit_id", -1))
             s = self.soldiers.get(sid)
@@ -871,7 +920,7 @@ class TopowarGameState:
 
     def _update_tasks(self, dt: float):
         occ = self._occupied_tiles()
-        blocked_keys = set(occ.keys()) | self._mg_tile_set() | self._mortar_tile_set()
+        blocked_keys = set(occ.keys()) | self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
@@ -970,6 +1019,18 @@ class TopowarGameState:
                 if crew_spots and s.tile not in crew_spots:
                     goal = min(crew_spots, key=lambda t: math.dist(s.tile, t))
                     s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
+            elif task["type"] == "build_sandbag":
+                sb = self.sandbags.get(task["sandbag_id"])
+                if not sb or sb.hp <= 0 or sb.built:
+                    s.current_task = None
+                    continue
+                build_tile = tuple(task.get("build_tile", s.tile))
+                if s.tile != build_tile:
+                    s.path = self.path.find_path(s.tile, build_tile, trench_only=False, blocked=blocked_keys - {s.tile})
+                else:
+                    sb.build_progress += dt
+                    if sb.build_progress >= sb.build_required:
+                        sb.built = True
 
     def _update_mgs(self, dt: float):
         for mg in self.mgs.values():
@@ -1037,8 +1098,10 @@ class TopowarGameState:
     def _fire_mortar(self, mortar: "Mortar"):
         if not mortar.target or not mortar.ready:
             return
+        dist = math.dist(mortar.tile, mortar.target)
+        scatter_radius = 3.0 + max(0.0, math.floor(max(0.0, dist - 10.0) / 5.0))
         angle = self.random.uniform(0.0, 2.0 * math.pi)
-        scatter = self.random.uniform(0.0, 4.0)
+        scatter = self.random.uniform(0.0, scatter_radius)
         lx = int(round(mortar.target[0] + math.cos(angle) * scatter))
         ly = int(round(mortar.target[1] + math.sin(angle) * scatter))
         lx = max(0, min(self.map.width - 1, lx))
@@ -1054,6 +1117,9 @@ class TopowarGameState:
 
     def _mortar_impact(self, landing: tuple[int, int], owner: int):
         lx, ly = landing
+        direct_sandbag = next((sb for sb in self.sandbags.values() if sb.hp > 0 and sb.built and sb.tile == landing), None)
+        if direct_sandbag:
+            direct_sandbag.hp -= 1
         target_in_trench = landing in self.map.trenches
         kill_radius = 3.0
         for s in self.soldiers.values():
@@ -1069,8 +1135,10 @@ class TopowarGameState:
                 else:
                     self._register_kill(s, owner)
             else:
-                if not s_in_trench:
+                if not s_in_trench and not self._has_sandbag_cover_between(landing, s.tile):
                     self._register_kill(s, owner)
+        if direct_sandbag and direct_sandbag.hp <= 0:
+            direct_sandbag.hp = 0
         # Terrain: impact tile → trench; 4 ortho adjacent → flip type
         if landing not in self.map.trenches:
             self.map.trenches.add(landing)
@@ -1132,6 +1200,15 @@ class TopowarGameState:
             p.y += p.dy / norm * speed * dt
             p.remaining -= speed * dt
             hit = False
+            if p.source == "mg":
+                for sb in self.sandbags.values():
+                    if sb.hp <= 0 or not sb.built:
+                        continue
+                    if math.dist((p.x, p.y), sb.tile) <= 0.45:
+                        hit = True
+                        break
+            if hit:
+                continue
             for s in self.soldiers.values():
                 if s.hp <= 0 or s.owner == p.owner:
                     continue
@@ -1277,6 +1354,20 @@ class TopowarGameState:
                 "cooldown": mortar.cooldown,
                 "operators": sorted(list(mortar.operators)),
             })
+        sandbags_out = []
+        for sb in self.sandbags.values():
+            if sb.hp <= 0:
+                continue
+            sandbags_out.append({
+                "structure_id": sb.structure_id,
+                "owner": sb.owner,
+                "tile": list(sb.tile),
+                "hp": sb.hp,
+                "hp_max": 3,
+                "built": sb.built,
+                "build_progress": sb.build_progress,
+                "build_required": sb.build_required,
+            })
         return {
             "rules": self.rules.__dict__.copy(),
             "map": {
@@ -1288,6 +1379,7 @@ class TopowarGameState:
             "soldiers": soldiers,
             "machine_guns": mgs,
             "mortars": mortars_out,
+            "sandbags": sandbags_out,
             "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "owner": ms.owner} for ms in self.mortar_shells],
             "projectiles": [{"x": p.x, "y": p.y, "owner": p.owner, "source": p.source} for p in self.projectiles],
             "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration} for e in self.explosions],
