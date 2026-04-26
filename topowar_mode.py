@@ -493,8 +493,6 @@ class TopowarGameState:
             tile = tuple(map(int, action.get("tile", [])))
             if len(tile) != 2 or not self.map.in_bounds(tile):
                 raise ValueError("Invalid MG tile.")
-            if tile in self.map.trenches:
-                raise ValueError("MG cannot be placed in a trench tile.")
             if tile in self._structure_tile_set():
                 raise ValueError("Only one equipment structure can occupy a tile.")
             # MG must be placed on or adjacent to a friendly trench tile
