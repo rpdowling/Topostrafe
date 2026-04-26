@@ -280,12 +280,16 @@ board.addEventListener('click', (evt) => {
 
   const myMortar = myMortarAt(tile);
 
+  if (retargetMortarId !== null) {
+    send({ type: 'tw_set_mortar_target', mortar_id: retargetMortarId, target: tile });
+    retargetMortarId = null;
+    setStatus('Mortar retarget requested.');
+    render();
+    return;
+  }
+
   if (mode === 'select') {
-    if (retargetMortarId !== null && !myMortar && !myMg && !myS.length) {
-      send({ type: 'tw_set_mortar_target', mortar_id: retargetMortarId, target: tile });
-      retargetMortarId = null;
-      setStatus('Mortar retargeted (20 s cooldown).');
-    } else if (myS.length) {
+    if (myS.length) {
       const uid = myS[0].unit_id;
       if (evt.ctrlKey || evt.shiftKey) {
         if (selectedUnits.has(uid)) selectedUnits.delete(uid);
@@ -979,13 +983,6 @@ function draw() {
       ctx.fillStyle = '#f4a020';
       ctx.fillRect(tlx + 2, tly + CELL + 1, (CELL - 4) * cdFrac, 3);
     }
-    if (mortar.built && mortar.auto_fire) {
-      ctx.fillStyle = '#f4a020';
-      ctx.font = 'bold 8px system-ui';
-      ctx.textAlign = 'center';
-      ctx.fillText('AUTO', mcx, tly + CELL - 2);
-      ctx.textAlign = 'left';
-    }
     if (mortar.built && mortar.operators && mortar.operators.length) {
       ctx.fillStyle = '#7aff9e';
       ctx.font = 'bold 9px system-ui';
@@ -1020,8 +1017,8 @@ function draw() {
 
   // Projectiles
   for (const p of data.projectiles || []) {
-    const pcx = OX + p.x * CELL + CELL / 2;
-    const pcy = OY + p.y * CELL + CELL / 2;
+    const pcx = cpx(p.x);
+    const pcy = cpy(p.y);
     ctx.fillStyle = p.source === 'mg' ? '#ffd34d' : 'rgba(255,255,255,0.9)';
     ctx.beginPath();
     ctx.arc(pcx, pcy, p.source === 'mg' ? 2.5 : 1.5, 0, Math.PI * 2);
@@ -1141,8 +1138,7 @@ function updateSelectionPanel() {
       : mortar.ready ? '<span style="color:#f4a020">READY — click to fire</span>'
       : `Reloading ${mortar.cooldown.toFixed(1)}s`;
     const tgt = mortar.target ? `(${mortar.target[0]}, ${mortar.target[1]})` : '—';
-    const autoBtn = mortar.built && mortar.owner === mySeat()
-      ? `<button class="cmd-btn" style="margin-top:6px;width:100%" onclick="send({type:'tw_toggle_mortar_autofire',mortar_id:${mortar.structure_id}});render()">Auto-fire: ${mortar.auto_fire ? 'ON' : 'OFF'}</button>` : '';
+    const operableTag = mortar.operable === false ? '<span class="sel-blocked">Inoperable: restore 3×3 ground</span>' : '';
     panel.innerHTML = `
       <div class="sel-grid">
         <span class="sel-label">Side</span><span class="sel-val">${side}</span>
@@ -1150,7 +1146,7 @@ function updateSelectionPanel() {
         <span class="sel-label">Crew</span><span class="sel-val">${ops}/2</span>
         <span class="sel-label">Target</span><span class="sel-val">${tgt}</span>
         <span class="sel-label">State</span><span class="sel-val">${stateStr}</span>
-      </div>${autoBtn}`;
+      </div>${operableTag}`;
   }
 }
 
