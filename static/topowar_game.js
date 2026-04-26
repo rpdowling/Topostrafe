@@ -14,8 +14,10 @@ let retargetMortarId = null;
 let plan = [];
 let pendingBuildTile = null;
 let pendingBuildFacing = null; // degrees, null = not yet set
+let pendingMgDispatch = false;
 let pendingMortarTile = null;
 let pendingMortarTarget = null;
+let pendingMortarDispatch = false;
 let attackTargetTile = null;
 let mouseCanvas = { x: 0, y: 0 };
 
@@ -46,8 +48,11 @@ function connect() {
     if (payload.type === 'state') {
       if (payload.message && state) state.log = [...(state.log || []), payload.message].slice(-20);
       state = payload.state;
+      reconcilePendingBuildState();
       render();
     } else if (payload.type === 'error') {
+      pendingMgDispatch = false;
+      pendingMortarDispatch = false;
       setStatus(payload.message || 'Error', true);
     }
   };
@@ -123,15 +128,15 @@ function setMode(m) {
     }
     mode = 'select';
     plan = [];
-    pendingBuildTile = null; pendingBuildFacing = null;
-    pendingMortarTile = null; pendingMortarTarget = null;
+    pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false;
+    pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false;
     attackTargetTile = null;
     retargetMortarId = null;
   } else {
     mode = m;
     if (m !== 'plan') plan = [];
-    if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; }
-    if (m !== 'mortar') { pendingMortarTile = null; pendingMortarTarget = null; }
+    if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false; }
+    if (m !== 'mortar') { pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false; }
     if (m !== 'attack') attackTargetTile = null;
     if (m === 'build' || m === 'mortar') selectedUnits = new Set();
   }
@@ -149,8 +154,49 @@ function updateModeLabel() {
   if (e) e.textContent = labels[mode] || 'Select';
 }
 
+function clearPendingMgBuild() {
+  pendingBuildTile = null;
+  pendingBuildFacing = null;
+  pendingMgDispatch = false;
+  selectedUnits = new Set();
+}
+
+function clearPendingMortarBuild() {
+  pendingMortarTile = null;
+  pendingMortarTarget = null;
+  pendingMortarDispatch = false;
+  selectedUnits = new Set();
+}
+
+function reconcilePendingBuildState() {
+  const data = tw();
+  if (!data) return;
+  if (pendingBuildTile) {
+    const placedMg = (data.machine_guns || []).find(
+      m => m.owner === mySeat() && m.tile[0] === pendingBuildTile[0] && m.tile[1] === pendingBuildTile[1]
+    );
+    if (placedMg) {
+      clearPendingMgBuild();
+      setStatus('MG construction started.');
+    }
+  }
+  if (pendingMortarTile) {
+    const placedMortar = (data.mortars || []).find(
+      m => m.owner === mySeat() && m.tile[0] === pendingMortarTile[0] && m.tile[1] === pendingMortarTile[1]
+    );
+    if (placedMortar) {
+      clearPendingMortarBuild();
+      setStatus('Mortar construction started.');
+    }
+  }
+}
+
 function refreshBuildStatus() {
   if (mode !== 'build') return;
+  if (pendingMgDispatch) {
+    setStatus('Build MG — awaiting server response…');
+    return;
+  }
   if (!pendingBuildTile) {
     setStatus('Build MG — Step 1: click a tile on or next to your trench.');
     return;
@@ -167,6 +213,10 @@ function refreshBuildStatus() {
 
 function refreshMortarStatus() {
   if (mode !== 'mortar') return;
+  if (pendingMortarDispatch) {
+    setStatus('Build Mortar — awaiting server response…');
+    return;
+  }
   if (!pendingMortarTile) {
     setStatus('Build Mortar — Step 1: click a tile (all 8 neighbours must be same ground type).');
     return;
@@ -189,8 +239,8 @@ document.addEventListener('keydown', (evt) => {
 
   if (evt.key === 'Escape') {
     plan = [];
-    pendingBuildTile = null; pendingBuildFacing = null;
-    pendingMortarTile = null; pendingMortarTarget = null;
+    pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false;
+    pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false;
     attackTargetTile = null; retargetMortarId = null;
     selectedUnits = new Set();
     selectedMg = null;
@@ -311,11 +361,9 @@ board.addEventListener('click', (evt) => {
 
   } else if (mode === 'build') {
     const tryDispatch = () => {
-      if (pendingBuildTile && pendingBuildFacing !== null && selectedUnits.size >= 2) {
+      if (pendingBuildTile && pendingBuildFacing !== null && selectedUnits.size >= 2 && !pendingMgDispatch) {
         send({ type: 'tw_assign_build_mg', unit_ids: [...selectedUnits], tile: pendingBuildTile, facing: pendingBuildFacing });
-        pendingBuildTile = null;
-        pendingBuildFacing = null;
-        selectedUnits = new Set();
+        pendingMgDispatch = true;
       }
     };
     if (myS.length) {
@@ -375,10 +423,9 @@ board.addEventListener('click', (evt) => {
 
   } else if (mode === 'mortar') {
     const tryDispatchMortar = () => {
-      if (pendingMortarTile && pendingMortarTarget && selectedUnits.size >= 2) {
+      if (pendingMortarTile && pendingMortarTarget && selectedUnits.size >= 2 && !pendingMortarDispatch) {
         send({ type: 'tw_assign_build_mortar', unit_ids: [...selectedUnits], tile: pendingMortarTile, target: pendingMortarTarget });
-        pendingMortarTile = null; pendingMortarTarget = null;
-        selectedUnits = new Set();
+        pendingMortarDispatch = true;
       }
     };
     if (myS.length) {
