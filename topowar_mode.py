@@ -132,6 +132,15 @@ class Mortar(Structure):
 
 
 @dataclass
+class Sandbag(Structure):
+    hp: int = 3
+    built: bool = False
+    build_progress: float = 0.0
+    build_required: float = 5.0
+    base_ground_is_trench: bool = False
+
+
+@dataclass
 class MortarShell:
     owner: int
     x: float
@@ -288,8 +297,11 @@ class TopowarGameState:
     def _mortar_tile_set(self) -> set[tuple[int, int]]:
         return {m.tile for m in self.mortars.values() if m.hp > 0}
 
+    def _sandbag_tile_set(self) -> set[tuple[int, int]]:
+        return {sb.tile for sb in self.sandbags.values() if sb.hp > 0}
+
     def _structure_tile_set(self) -> set[tuple[int, int]]:
-        return self._mg_tile_set() | self._mortar_tile_set()
+        return self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
 
     def _crew_positions_for_mortar(self, mortar: "Mortar") -> list[tuple[int, int]]:
         """Adjacent tiles of the same ground type as the mortar, usable as crew spots."""
@@ -335,6 +347,21 @@ class TopowarGameState:
             if current != mortar.base_ground_is_trench:
                 mortar.hp = 0
                 mortar.operators.clear()
+
+    def _ensure_runtime_compat(self):
+        """Backfill fields when loading older saved Topowar states."""
+        if not hasattr(self, "sandbags"):
+            self.sandbags = {}
+        for mg in self.mgs.values():
+            if not hasattr(mg, "arc_center"):
+                mg.arc_center = getattr(mg, "facing", 0.0)
+            if not hasattr(mg, "base_ground_is_trench"):
+                mg.base_ground_is_trench = (mg.tile in self.map.trenches)
+        for mortar in self.mortars.values():
+            if not hasattr(mortar, "base_ground_is_trench"):
+                mortar.base_ground_is_trench = (mortar.tile in self.map.trenches)
+            if not hasattr(mortar, "operable"):
+                mortar.operable = True
 
     def _crew_positions_for_mg(self, mg: "MachineGun") -> list[tuple[int, int]]:
         """Adjacent trench tiles a crew member can stand at to operate this MG."""
