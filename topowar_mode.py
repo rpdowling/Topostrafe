@@ -132,15 +132,6 @@ class Mortar(Structure):
 
 
 @dataclass
-class Sandbag(Structure):
-    hp: int = 3
-    built: bool = False
-    build_progress: float = 0.0
-    build_required: float = 5.0
-    base_ground_is_trench: bool = False
-
-
-@dataclass
 class MortarShell:
     owner: int
     x: float
@@ -297,11 +288,8 @@ class TopowarGameState:
     def _mortar_tile_set(self) -> set[tuple[int, int]]:
         return {m.tile for m in self.mortars.values() if m.hp > 0}
 
-    def _sandbag_tile_set(self) -> set[tuple[int, int]]:
-        return {sb.tile for sb in self.sandbags.values() if sb.hp > 0}
-
     def _structure_tile_set(self) -> set[tuple[int, int]]:
-        return self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
+        return self._mg_tile_set() | self._mortar_tile_set()
 
     def _crew_positions_for_mortar(self, mortar: "Mortar") -> list[tuple[int, int]]:
         """Adjacent tiles of the same ground type as the mortar, usable as crew spots."""
@@ -347,12 +335,6 @@ class TopowarGameState:
             if current != mortar.base_ground_is_trench:
                 mortar.hp = 0
                 mortar.operators.clear()
-        for sb in self.sandbags.values():
-            if sb.hp <= 0:
-                continue
-            current = sb.tile in self.map.trenches
-            if current != sb.base_ground_is_trench:
-                sb.hp = 0
 
     def _crew_positions_for_mg(self, mg: "MachineGun") -> list[tuple[int, int]]:
         """Adjacent trench tiles a crew member can stand at to operate this MG."""
@@ -570,8 +552,6 @@ class TopowarGameState:
             tile = tuple(map(int, action.get("tile", [])))
             if len(tile) != 2 or not self.map.in_bounds(tile):
                 raise ValueError("Invalid MG tile.")
-            if tile in self.map.trenches:
-                raise ValueError("MG cannot be placed in a trench tile.")
             if tile in self._structure_tile_set():
                 raise ValueError("Only one equipment structure can occupy a tile.")
             # MG must be placed on or adjacent to a friendly trench tile
@@ -587,15 +567,7 @@ class TopowarGameState:
             mid = self.next_structure_id
             self.next_structure_id += 1
             facing = float(action.get("facing", 0.0)) % 360.0
-            mg = MachineGun(
-                mid,
-                owner,
-                tile,
-                build_required=self.rules.mg_build_seconds,
-                facing=facing,
-                arc_center=facing,
-                base_ground_is_trench=(tile in self.map.trenches),
-            )
+            mg = MachineGun(mid, owner, tile, build_required=self.rules.mg_build_seconds, facing=facing, arc_center=facing)
             self.mgs[mid] = mg
             build_positions = self._build_positions_for_mg(tile)
             if len(build_positions) < 2:
@@ -1168,17 +1140,16 @@ class TopowarGameState:
         if direct_sandbag and direct_sandbag.hp <= 0:
             direct_sandbag.hp = 0
         # Terrain: impact tile → trench; 4 ortho adjacent → flip type
-        if not direct_sandbag:
-            if landing not in self.map.trenches:
-                self.map.trenches.add(landing)
-            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                adj = (lx + dx, ly + dy)
-                if not self.map.in_bounds(adj):
-                    continue
-                if adj in self.map.trenches:
-                    self.map.trenches.discard(adj)
-                else:
-                    self.map.trenches.add(adj)
+        if landing not in self.map.trenches:
+            self.map.trenches.add(landing)
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            adj = (lx + dx, ly + dy)
+            if not self.map.in_bounds(adj):
+                continue
+            if adj in self.map.trenches:
+                self.map.trenches.discard(adj)
+            else:
+                self.map.trenches.add(adj)
         self._enforce_structure_ground_integrity()
         self.explosions.append(Explosion(float(lx), float(ly)))
 
