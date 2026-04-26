@@ -480,6 +480,7 @@ class TopowarGameState:
         return False
 
     def command(self, owner: int, action: dict[str, Any]) -> str:
+        self._ensure_runtime_compat()
         t = action.get("type")
         if t == "tw_order_mode":
             mode = str(action.get("mode", "defend"))
@@ -1244,6 +1245,7 @@ class TopowarGameState:
         self.projectiles = remaining
 
     def tick(self, dt: float):
+        self._ensure_runtime_compat()
         if self.winner is not None:
             return
         self.time_elapsed += dt
@@ -1289,6 +1291,7 @@ class TopowarGameState:
         self.last_tick_monotonic = now_monotonic - dt_total
 
     def serialize(self, viewer: int | None = None) -> dict[str, Any]:
+        self._ensure_runtime_compat()
         soldiers = []
         for s in self.soldiers.values():
             if s.hp <= 0:
