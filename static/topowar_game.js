@@ -333,7 +333,29 @@ function draw() {
     ctx.lineWidth = 1;
   }
 
-  // Dig plan overlay
+  // Active dig plan overlays from assigned soldier tasks
+  for (const s of data.soldiers || []) {
+    if (!s.task || s.task.type !== 'dig' || !s.task.plan || !s.task.plan.length) continue;
+    const digPlan = s.task.plan;
+    const isOwn = s.owner === mySeat();
+    const lineColor = isOwn ? 'rgba(244,200,78,0.65)' : 'rgba(255,110,110,0.65)';
+    const fillColor = isOwn ? 'rgba(244,200,78,0.12)' : 'rgba(255,110,110,0.10)';
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    digPlan.forEach((t, i) => {
+      if (i === 0) ctx.moveTo(cpx(t[0]), cpy(t[1]));
+      else ctx.lineTo(cpx(t[0]), cpy(t[1]));
+    });
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1;
+    ctx.fillStyle = fillColor;
+    for (const t of digPlan) ctx.fillRect(OX + t[0] * CELL, OY + t[1] * CELL, CELL - 1, CELL - 1);
+  }
+
+  // Local (unsent) dig plan overlay
   if (plan.length) {
     ctx.strokeStyle = '#f4c84e';
     ctx.lineWidth = 2;

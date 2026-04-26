@@ -233,6 +233,43 @@ class TopowarGameState:
         mid = self.map.height // 2
         return [p for p in self.map.trenches if (owner == 0 and p[1] >= mid) or (owner == 1 and p[1] < mid)]
 
+    def _has_los_through_trenches(self, a: tuple[int, int], b: tuple[int, int]) -> bool:
+        """Bresenham line-of-sight between two trench tiles.
+        Blocked if any intermediate tile is not a trench (elevated open ground obstructs view)."""
+        x0, y0 = a
+        x1, y1 = b
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x1 >= x0 else -1
+        sy = 1 if y1 >= y0 else -1
+        err = dx - dy
+        cx, cy = x0, y0
+        while True:
+            if (cx, cy) == (x1, y1):
+                return True
+            if (cx, cy) != a and (cx, cy) not in self.map.trenches:
+                return False
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                cx += sx
+            if e2 < dx:
+                err += dx
+                cy += sy
+
+    def _soldier_visible_to(self, target: "Soldier", viewer: int) -> bool:
+        """An enemy in a trench is visible only if a friendly trench soldier has clear LOS to them."""
+        if target.tile not in self.map.trenches:
+            return True
+        for s in self.soldiers.values():
+            if s.hp <= 0 or s.owner != viewer:
+                continue
+            if s.tile not in self.map.trenches:
+                continue
+            if self._has_los_through_trenches(s.tile, target.tile):
+                return True
+        return False
+
     def command(self, owner: int, action: dict[str, Any]) -> str:
         t = action.get("type")
         if t == "tw_order_mode":
@@ -281,7 +318,11 @@ class TopowarGameState:
                         other.current_task = None
                         other.path = []
             s.current_task = {"type": "dig", "plan": plan, "target": list(plan[0]), "progress": 0.0}
-            s.path = self.path.find_path(s.tile, plan[0], trench_only=True, blocked=set(self._occupied_tiles().keys()) - {s.tile})
+            # Path to the nearest trench tile adjacent to the first dig target (not onto the target itself)
+            adj4_first = [(first[0]+dx, first[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
+            dig_from = [t for t in adj4_first if t in self.map.trenches and self.map.in_bounds(t)]
+            goal = min(dig_from, key=lambda t: math.dist(s.tile, t))
+            s.path = self.path.find_path(s.tile, goal, trench_only=True, blocked=set(self._occupied_tiles().keys()) - {s.tile})
             return "Dig task assigned."
         if t == "tw_assign_build_mg":
             tile = tuple(map(int, action.get("tile", [])))
@@ -515,9 +556,17 @@ class TopowarGameState:
                 continue
             if task["type"] == "dig":
                 tgt = tuple(task["target"])
-                if s.tile != tgt:
+                adj4_tgt = [(tgt[0]+dx, tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
+                in_adj_trench = s.tile in self.map.trenches and s.tile in set(adj4_tgt)
+                if not in_adj_trench:
                     if not s.path:
-                        s.path = self.path.find_path(s.tile, tgt, trench_only=True, blocked=blocked_keys - {s.tile})
+                        # Path to nearest trench tile adjacent to the dig target
+                        goals = [t for t in adj4_tgt if t in self.map.trenches and self.map.in_bounds(t)]
+                        if goals:
+                            goal = min(goals, key=lambda g: math.dist(s.tile, g))
+                            s.path = self.path.find_path(s.tile, goal, trench_only=True, blocked=blocked_keys - {s.tile})
+                        else:
+                            s.current_task = None
                     continue
                 task["progress"] = task.get("progress", 0.0) + dt
                 if task["progress"] >= self.rules.dig_seconds_per_tile:
@@ -531,9 +580,10 @@ class TopowarGameState:
                         next_tgt = tuple(plan[0])
                         task["target"] = list(next_tgt)
                         task["progress"] = 0.0
+                        s.path = []  # Re-path to adjacent trench of new target
                         # Validate next tile is still adjacent to trench
-                        adj4 = [(next_tgt[0]+dx, next_tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
-                        if not any(a in self.map.trenches for a in adj4):
+                        adj4_next = [(next_tgt[0]+dx, next_tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
+                        if not any(a in self.map.trenches for a in adj4_next):
                             s.current_task = None
             elif task["type"] == "build_mg":
                 mg = self.mgs.get(task["mg_id"])
@@ -682,10 +732,13 @@ class TopowarGameState:
             loops += 1
         self.last_tick_monotonic = now_monotonic - dt_total
 
-    def serialize(self) -> dict[str, Any]:
+    def serialize(self, viewer: int | None = None) -> dict[str, Any]:
         soldiers = []
         for s in self.soldiers.values():
             if s.hp <= 0:
+                continue
+            # Filter out enemy soldiers that are hidden in trenches
+            if viewer is not None and s.owner != viewer and not self._soldier_visible_to(s, viewer):
                 continue
             task = None
             if s.current_task:
