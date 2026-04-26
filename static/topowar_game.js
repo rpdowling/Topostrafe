@@ -57,9 +57,11 @@ function tileFromEvent(evt) {
   const px = (evt.clientX - rect.left) * (board.width / rect.width);
   const py = (evt.clientY - rect.top) * (board.height / rect.height);
   const tx = Math.floor((px - OX) / CELL);
-  const ty = Math.floor((py - OY) / CELL);
-  if (tx < 0 || ty < 0 || tx >= tw().map.width || ty >= tw().map.height) return null;
-  return [tx, ty];
+  let gy = Math.floor((py - OY) / CELL);
+  if (tx < 0 || gy < 0 || tx >= tw().map.width || gy >= tw().map.height) return null;
+  // Convert visual row back to game coordinate for player 2
+  if (mySeat() === 1) gy = tw().map.height - 1 - gy;
+  return [tx, gy];
 }
 
 function soldiersAt(tile) {
@@ -99,6 +101,10 @@ function updateModeButtons() {
 
 function setMode(m) {
   if (mode === m) {
+    // Re-clicking Attack while soldiers are selected = send general attack order
+    if (m === 'attack' && selectedUnits.size) {
+      send({ type: 'tw_order_mode', unit_ids: [...selectedUnits], mode: 'attack' });
+    }
     mode = 'select';
     plan = [];
     pendingBuildTile = null;
@@ -206,16 +212,20 @@ board.addEventListener('click', (evt) => {
 
   } else if (mode === 'attack') {
     if (myS.length) {
+      // Select soldiers — never send immediately; wait for a tile click
       const uid = myS[0].unit_id;
-      if (evt.ctrlKey || evt.shiftKey) selectedUnits.add(uid);
-      else selectedUnits = new Set([uid]);
-      if (selectedUnits.size) {
-        const cmd = { type: 'tw_order_mode', unit_ids: [...selectedUnits], mode: 'attack' };
-        if (attackTargetTile) cmd.target_tile = attackTargetTile;
-        send(cmd);
+      if (evt.ctrlKey || evt.shiftKey) {
+        if (selectedUnits.has(uid)) selectedUnits.delete(uid);
+        else selectedUnits.add(uid);
+      } else {
+        selectedUnits = new Set([uid]);
       }
+    } else if (selectedUnits.size) {
+      // Clicking a tile with soldiers selected → send directed attack there
+      send({ type: 'tw_order_mode', unit_ids: [...selectedUnits], mode: 'attack', target_tile: tile });
+      attackTargetTile = tile;
     } else {
-      // Clicking an empty tile sets the directed attack destination
+      // No selection yet — mark the tile as a pending target
       attackTargetTile = tile;
     }
 
@@ -305,7 +315,13 @@ board.addEventListener('contextmenu', (evt) => {
 // === DRAW ===
 
 function cpx(gx) { return OX + gx * CELL + CELL / 2; }
-function cpy(gy) { return OY + gy * CELL + CELL / 2; }
+// For player 2 the board is flipped vertically so their units appear at the bottom.
+function flipY(gy) {
+  return (mySeat() === 1 && tw()) ? (tw().map.height - 1 - gy) : gy;
+}
+function cpy(gy) { return OY + flipY(gy) * CELL + CELL / 2; }
+// Top-left pixel y of a tile (integer or float game-y).
+function tileTop(gy) { return OY + Math.floor(flipY(gy)) * CELL; }
 
 function drawRangeCircle(cx, cy, radius, color) {
   ctx.save();
@@ -333,21 +349,22 @@ function draw() {
   for (let y = 0; y < data.map.height; y++) {
     for (let x = 0; x < data.map.width; x++) {
       ctx.fillStyle = '#445a48';
-      ctx.fillRect(OX + x * CELL, OY + y * CELL, CELL - 1, CELL - 1);
+      ctx.fillRect(OX + x * CELL, tileTop(y), CELL - 1, CELL - 1);
     }
   }
 
   // Trench tiles
   for (const t of data.map.trenches) {
+    const tty = tileTop(t[1]);
     ctx.fillStyle = '#2e2a24';
-    ctx.fillRect(OX + t[0] * CELL, OY + t[1] * CELL, CELL - 1, CELL - 1);
+    ctx.fillRect(OX + t[0] * CELL, tty, CELL - 1, CELL - 1);
     ctx.strokeStyle = 'rgba(100,80,50,0.35)';
     ctx.lineWidth = 0.5;
     ctx.beginPath();
-    ctx.moveTo(OX + t[0] * CELL, OY + t[1] * CELL);
-    ctx.lineTo(OX + t[0] * CELL + CELL - 1, OY + t[1] * CELL + CELL - 1);
-    ctx.moveTo(OX + t[0] * CELL + CELL - 1, OY + t[1] * CELL);
-    ctx.lineTo(OX + t[0] * CELL, OY + t[1] * CELL + CELL - 1);
+    ctx.moveTo(OX + t[0] * CELL, tty);
+    ctx.lineTo(OX + t[0] * CELL + CELL - 1, tty + CELL - 1);
+    ctx.moveTo(OX + t[0] * CELL + CELL - 1, tty);
+    ctx.lineTo(OX + t[0] * CELL, tty + CELL - 1);
     ctx.stroke();
     ctx.lineWidth = 1;
   }
@@ -371,7 +388,7 @@ function draw() {
     ctx.setLineDash([]);
     ctx.lineWidth = 1;
     ctx.fillStyle = fillColor;
-    for (const t of digPlan) ctx.fillRect(OX + t[0] * CELL, OY + t[1] * CELL, CELL - 1, CELL - 1);
+    for (const t of digPlan) ctx.fillRect(OX + t[0] * CELL, tileTop(t[1]), CELL - 1, CELL - 1);
   }
 
   // Local (unsent) dig plan overlay
@@ -388,9 +405,9 @@ function draw() {
     ctx.setLineDash([]);
     ctx.lineWidth = 1;
     ctx.fillStyle = 'rgba(244,200,78,0.18)';
-    for (const t of plan) ctx.fillRect(OX + t[0] * CELL, OY + t[1] * CELL, CELL - 1, CELL - 1);
+    for (const t of plan) ctx.fillRect(OX + t[0] * CELL, tileTop(t[1]), CELL - 1, CELL - 1);
     ctx.strokeStyle = '#f4c84e';
-    ctx.strokeRect(OX + plan[0][0] * CELL + 1, OY + plan[0][1] * CELL + 1, CELL - 3, CELL - 3);
+    ctx.strokeRect(OX + plan[0][0] * CELL + 1, tileTop(plan[0][1]) + 1, CELL - 3, CELL - 3);
   }
 
   if (mode === 'build' && pendingBuildTile) {
@@ -398,24 +415,24 @@ function draw() {
     ctx.strokeStyle = '#f4c84e';
     ctx.setLineDash([5, 3]);
     ctx.lineWidth = 2;
-    ctx.strokeRect(OX + bx * CELL + 1, OY + by * CELL + 1, CELL - 2, CELL - 2);
+    ctx.strokeRect(OX + bx * CELL + 1, tileTop(by) + 1, CELL - 2, CELL - 2);
     ctx.setLineDash([]);
     ctx.lineWidth = 1;
   }
 
   if (mode === 'attack' && attackTargetTile) {
     const [ax, ay] = attackTargetTile;
+    const aty = tileTop(ay);
     ctx.strokeStyle = 'rgba(255,70,70,0.9)';
     ctx.lineWidth = 2;
     ctx.setLineDash([4, 2]);
-    ctx.strokeRect(OX + ax * CELL + 1, OY + ay * CELL + 1, CELL - 2, CELL - 2);
+    ctx.strokeRect(OX + ax * CELL + 1, aty + 1, CELL - 2, CELL - 2);
     ctx.setLineDash([]);
-    // Draw an X through the tile
     ctx.beginPath();
-    ctx.moveTo(OX + ax * CELL + 3, OY + ay * CELL + 3);
-    ctx.lineTo(OX + ax * CELL + CELL - 4, OY + ay * CELL + CELL - 4);
-    ctx.moveTo(OX + ax * CELL + CELL - 4, OY + ay * CELL + 3);
-    ctx.lineTo(OX + ax * CELL + 3, OY + ay * CELL + CELL - 4);
+    ctx.moveTo(OX + ax * CELL + 3, aty + 3);
+    ctx.lineTo(OX + ax * CELL + CELL - 4, aty + CELL - 4);
+    ctx.moveTo(OX + ax * CELL + CELL - 4, aty + 3);
+    ctx.lineTo(OX + ax * CELL + 3, aty + CELL - 4);
     ctx.stroke();
     ctx.lineWidth = 1;
   }
@@ -429,7 +446,7 @@ function draw() {
   // Machine guns
   for (const mg of data.machine_guns || []) {
     const [mx, my] = mg.tile;
-    const tlx = OX + mx * CELL, tly = OY + my * CELL;
+    const tlx = OX + mx * CELL, tly = tileTop(my);
 
     ctx.fillStyle = mg.owner === 0 ? '#8b1515' : '#1a3fa0';
     ctx.fillRect(tlx + 3, tly + 3, CELL - 6, CELL - 6);
@@ -447,7 +464,7 @@ function draw() {
       const [fx, fy] = mg.force_target;
       ctx.strokeStyle = '#ff6767';
       ctx.lineWidth = 2;
-      ctx.strokeRect(OX + fx * CELL + 2, OY + fy * CELL + 2, CELL - 4, CELL - 4);
+      ctx.strokeRect(OX + fx * CELL + 2, tileTop(fy) + 2, CELL - 4, CELL - 4);
       ctx.strokeStyle = 'rgba(255,100,100,0.4)';
       ctx.setLineDash([3, 3]);
       ctx.beginPath();
@@ -484,8 +501,8 @@ function draw() {
 
   // Soldiers
   for (const s of data.soldiers || []) {
-    const scx = OX + s.x * CELL + CELL / 2;
-    const scy = OY + s.y * CELL + CELL / 2;
+    const scx = cpx(s.x);
+    const scy = cpy(s.y);
 
     // Firing flash halo
     if (s.rifle_cooldown > 2.5) {
@@ -516,7 +533,7 @@ function draw() {
     if (selectedUnits.has(s.unit_id)) {
       ctx.strokeStyle = '#ffd45a';
       ctx.lineWidth = 2;
-      ctx.strokeRect(OX + s.tile[0] * CELL + 1, OY + s.tile[1] * CELL + 1, CELL - 2, CELL - 2);
+      ctx.strokeRect(OX + s.tile[0] * CELL + 1, tileTop(s.tile[1]) + 1, CELL - 2, CELL - 2);
       ctx.lineWidth = 1;
     }
 
@@ -534,9 +551,9 @@ function draw() {
       const [tx, ty] = s.task.target;
       const prog = Math.max(0, Math.min(1, (s.task.progress || 0) / (data.rules.dig_seconds_per_tile || 5)));
       ctx.fillStyle = '#000';
-      ctx.fillRect(OX + tx * CELL + 2, OY + ty * CELL + CELL - 5, CELL - 4, 3);
+      ctx.fillRect(OX + tx * CELL + 2, tileTop(ty) + CELL - 5, CELL - 4, 3);
       ctx.fillStyle = '#f4c84e';
-      ctx.fillRect(OX + tx * CELL + 2, OY + ty * CELL + CELL - 5, (CELL - 4) * prog, 3);
+      ctx.fillRect(OX + tx * CELL + 2, tileTop(ty) + CELL - 5, (CELL - 4) * prog, 3);
     }
 
     // Task label
@@ -679,6 +696,12 @@ function render() {
   const k0 = el('kills0'), k1 = el('kills1');
   if (k0) k0.textContent = String(k['0'] || 0);
   if (k1) k1.textContent = String(k['1'] || 0);
+
+  const rt = tw()?.recruit_timers || {};
+  const r0 = el('recruit0'), r1 = el('recruit1');
+  function fmtTimer(s) { s = Math.ceil(s); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
+  if (r0) r0.textContent = fmtTimer(rt['0'] ?? 180);
+  if (r1) r1.textContent = fmtTimer(rt['1'] ?? 180);
 
   const logEl = el('log');
   if (logEl) logEl.innerHTML = (state.log || []).slice(-20).map(m => `<div class="log-entry">${m}</div>`).join('');
