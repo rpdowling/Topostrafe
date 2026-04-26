@@ -666,7 +666,7 @@ class GameStore:
             if game.game_mode == "topowar":
                 if game.status == "active":
                     game.state.advance_to_time(time.monotonic())
-                ts = game.state.serialize()
+                ts = game.state.serialize(viewer=seat)
                 winner = ts.get("winner")
                 winner_name = None
                 if winner in (0, 1):
