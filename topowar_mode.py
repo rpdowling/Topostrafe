@@ -7,6 +7,13 @@ import itertools
 import math
 import random
 
+SOLDIER_NAMES = [
+    "James", "Fred", "Jerry", "Henry", "Ferdinand", "Samuel", "Neb", "Moe",
+    "Ned", "Art", "Red", "Leo", "Ted", "Ed", "Ray", "Roy", "Boe", "Ace",
+    "Curt", "Herb", "Yan", "Rick", "Otto", "Percy", "Wes", "Joe", "Ham",
+    "Ben", "Bert", "Zack", "Vin", "Ibble",
+]
+
 
 @dataclass
 class RulesConfig:
@@ -68,6 +75,7 @@ class Soldier(Unit):
     # Seconds remaining until the soldier completes the current step in
     # `path`. While > 0 the soldier is still on its current tile.
     move_cooldown: float = 0.0
+    name: str = ""
 
 
 @dataclass
@@ -165,9 +173,13 @@ class TopowarGameState:
         self.mgs: dict[int, MachineGun] = {}
         self.projectiles: list[Projectile] = []
         self.last_tick_monotonic = 0.0
+        self._name_pool: list[str] = []
         self._setup()
 
     def _setup(self):
+        names = list(SOLDIER_NAMES)
+        self.random.shuffle(names)
+        self._name_pool = names
         length = 10
         x0 = (self.map.width - length) // 2
         y_red = self.map.height - 5
@@ -184,7 +196,8 @@ class TopowarGameState:
     def _spawn_soldier(self, owner: int, tile: tuple[int, int]):
         sid = self.next_unit_id
         self.next_unit_id += 1
-        self.soldiers[sid] = Soldier(sid, owner, float(tile[0]), float(tile[1]))
+        name = self._name_pool.pop(0) if self._name_pool else f"Pvt.{sid}"
+        self.soldiers[sid] = Soldier(sid, owner, float(tile[0]), float(tile[1]), name=name)
 
     def _occupied_tiles(self) -> dict[tuple[int, int], int]:
         return {s.tile: sid for sid, s in self.soldiers.items() if s.hp > 0}
@@ -217,10 +230,12 @@ class TopowarGameState:
         ]
         return [t for t in neighbours if self.map.in_bounds(t) and t in self.map.trenches]
 
-    def _nearest_enemy(self, owner: int, from_tile: tuple[int, int]) -> tuple[str, int] | None:
+    def _nearest_enemy(self, owner: int, from_tile: tuple[int, int], visible_only: bool = False) -> tuple[str, int] | None:
         best = None
         for sid, s in self.soldiers.items():
             if s.hp <= 0 or s.owner == owner:
+                continue
+            if visible_only and not self._soldier_visible_to(s, owner):
                 continue
             d = math.dist(from_tile, s.tile)
             if best is None or d < best[0]:
@@ -228,6 +243,26 @@ class TopowarGameState:
         if best is None:
             return None
         return best[1], best[2]
+
+    def _attack_goal(self, s: "Soldier") -> tuple[int, int] | None:
+        """Nearest enemy-occupied trench tile; falls back to nearest enemy anywhere."""
+        best_d = float("inf")
+        best_tile: tuple[int, int] | None = None
+        for s2 in self.soldiers.values():
+            if s2.hp <= 0 or s2.owner == s.owner:
+                continue
+            if s2.tile in self.map.trenches:
+                d = math.dist(s.tile, s2.tile)
+                if d < best_d:
+                    best_d = d
+                    best_tile = s2.tile
+        if best_tile:
+            return best_tile
+        near = self._nearest_enemy(s.owner, s.tile)
+        if near:
+            typ, tid = near
+            return self.soldiers[tid].tile if typ == "soldier" else self.mgs[tid].tile
+        return None
 
     def _friendly_trench_tiles(self, owner: int) -> list[tuple[int, int]]:
         mid = self.map.height // 2
@@ -258,16 +293,20 @@ class TopowarGameState:
                 cy += sy
 
     def _soldier_visible_to(self, target: "Soldier", viewer: int) -> bool:
-        """An enemy in a trench is visible only if a friendly trench soldier has clear LOS to them."""
+        """Enemy in a trench: visible if a friendly trench soldier has LOS, or a friendly
+        soldier in the open is within rifle range (5 tiles) of the target."""
         if target.tile not in self.map.trenches:
             return True
         for s in self.soldiers.values():
             if s.hp <= 0 or s.owner != viewer:
                 continue
-            if s.tile not in self.map.trenches:
-                continue
-            if self._has_los_through_trenches(s.tile, target.tile):
-                return True
+            if s.tile in self.map.trenches:
+                if self._has_los_through_trenches(s.tile, target.tile):
+                    return True
+            else:
+                # Soldier in the open can spot nearby enemies within rifle range
+                if math.dist(s.tile, target.tile) <= 5.0:
+                    return True
         return False
 
     def command(self, owner: int, action: dict[str, Any]) -> str:
@@ -284,14 +323,29 @@ class TopowarGameState:
                 s.mode = mode
                 s.sentry = mode == "sentry"
                 s.current_task = None
+                s.path = []
                 if mode == "defend":
-                    trench_targets = self._friendly_trench_tiles(owner)
-                    if trench_targets:
-                        target = min(trench_targets, key=lambda p: math.dist(p, s.tile))
-                        # Walk directly to the trench from anywhere
+                    # Prefer retreating to nearest trench occupied by a friendly soldier
+                    sid_int = int(sid)
+                    friendly_occupied = [
+                        s2.tile for s2 in self.soldiers.values()
+                        if s2.hp > 0 and s2.owner == owner and s2.unit_id != sid_int
+                        and s2.tile in self.map.trenches
+                    ]
+                    if friendly_occupied:
+                        target = min(friendly_occupied, key=lambda p: math.dist(p, s.tile))
+                    else:
+                        trench_targets = self._friendly_trench_tiles(owner)
+                        target = min(trench_targets, key=lambda p: math.dist(p, s.tile)) if trench_targets else None
+                    if target:
                         s.path = self.path.find_path(s.tile, target, trench_only=False, blocked=occ - {s.tile})
-                elif mode in ("attack", "sentry"):
-                    s.path = []
+                elif mode == "attack":
+                    target_tile = action.get("target_tile")
+                    if target_tile:
+                        goal = tuple(map(int, target_tile))
+                        if self.map.in_bounds(goal):
+                            s.current_task = {"type": "advance", "goal": list(goal)}
+                            s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=occ - {s.tile})
             return "Mode updated."
         if t == "tw_assign_dig":
             sid = int(action.get("unit_id", -1))
@@ -485,18 +539,19 @@ class TopowarGameState:
             if s.rifle_cooldown > 0:
                 continue
 
-            # Sentry mode: stick to current attack target if still alive and in range
+            # Sentry mode: stick to current attack target if still alive, visible, and in range
             picked: tuple[str, int] | None = None
             if s.sentry and s.attack_target_id is not None:
                 typ_hint = "soldier" if s.attack_target_id in self.soldiers else "mg"
                 target_obj = self.soldiers.get(s.attack_target_id) or self.mgs.get(s.attack_target_id)
-                if target_obj and getattr(target_obj, "hp", 0) > 0 and math.dist(s.tile, target_obj.tile) <= 5.0:
+                visible = (not isinstance(target_obj, Soldier)) or self._soldier_visible_to(target_obj, s.owner)
+                if target_obj and getattr(target_obj, "hp", 0) > 0 and math.dist(s.tile, target_obj.tile) <= 5.0 and visible:
                     picked = (typ_hint, s.attack_target_id)
                 else:
                     s.attack_target_id = None
 
             if picked is None:
-                t = self._nearest_enemy(s.owner, s.tile)
+                t = self._nearest_enemy(s.owner, s.tile, visible_only=True)
                 if not t:
                     continue
                 picked = t
@@ -531,30 +586,30 @@ class TopowarGameState:
             task = s.current_task
             if not task:
                 if s.mode == "attack":
-                    near = self._nearest_enemy(s.owner, s.tile)
-                    if near:
-                        typ, tid = near
-                        goal = self.soldiers[tid].tile if typ == "soldier" else self.mgs[tid].tile
-                        d = math.dist(s.tile, goal)
-                        if d <= 5.0:
-                            # Inside rifle range: hold position and shoot.
-                            s.path = []
-                        else:
-                            # Re-path if goal changed or path went stale.
-                            need = (not s.path) or (
-                                s.path[-1] != goal and
-                                math.dist(s.path[-1], goal) > 1.5
-                            )
-                            if need:
-                                s.path = self.path.find_path(
-                                    s.tile, goal,
-                                    trench_only=False,
-                                    blocked=blocked_keys - {s.tile},
-                                    stop_adjacent=(typ == "soldier"),
-                                )
+                    goal = self._attack_goal(s)
+                    if goal:
+                        s.current_task = {"type": "advance", "goal": list(goal)}
+                        s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
                 # defend + sentry: stay put, no automatic pathing
                 continue
-            if task["type"] == "dig":
+            if task["type"] == "advance":
+                goal = tuple(task["goal"])
+                if s.tile == goal:
+                    s.current_task = None
+                    s.path = []
+                    if goal in self.map.trenches:
+                        # Entered a trench — occupy and defend from here
+                        s.mode = "defend"
+                        s.sentry = False
+                    else:
+                        # Reached open-ground target — hold and fire
+                        s.mode = "sentry"
+                        s.sentry = True
+                else:
+                    need = (not s.path) or math.dist(s.path[-1], goal) > 1.5
+                    if need:
+                        s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
+            elif task["type"] == "dig":
                 tgt = tuple(task["target"])
                 adj4_tgt = [(tgt[0]+dx, tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
                 in_adj_trench = s.tile in self.map.trenches and s.tile in set(adj4_tgt)
@@ -623,6 +678,8 @@ class TopowarGameState:
                 nearest = None
                 for sv in self.soldiers.values():
                     if sv.hp <= 0 or sv.owner == mg.owner:
+                        continue
+                    if not self._soldier_visible_to(sv, mg.owner):
                         continue
                     d = math.dist(sv.tile, mg.tile)
                     if d <= 20 and (nearest is None or d < nearest[0]):
@@ -757,6 +814,7 @@ class TopowarGameState:
                 "task": task,
                 "path": [list(p) for p in s.path],
                 "rifle_cooldown": s.rifle_cooldown,
+                "name": s.name,
             })
         mgs = []
         for mg in self.mgs.values():

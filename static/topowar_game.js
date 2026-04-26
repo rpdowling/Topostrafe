@@ -11,6 +11,7 @@ let selectedUnits = new Set();
 let selectedMg = null;
 let plan = [];
 let pendingBuildTile = null;
+let attackTargetTile = null;
 
 const CELL = 24;
 const OX = 20;
@@ -101,10 +102,12 @@ function setMode(m) {
     mode = 'select';
     plan = [];
     pendingBuildTile = null;
+    attackTargetTile = null;
   } else {
     mode = m;
     if (m !== 'plan') plan = [];
     if (m !== 'build') pendingBuildTile = null;
+    if (m !== 'attack') attackTargetTile = null;
     if (m === 'build') selectedUnits = new Set();
   }
   updateModeButtons();
@@ -139,6 +142,7 @@ document.addEventListener('keydown', (evt) => {
   if (evt.key === 'Escape') {
     plan = [];
     pendingBuildTile = null;
+    attackTargetTile = null;
     selectedUnits = new Set();
     selectedMg = null;
     setMode('select');
@@ -200,7 +204,22 @@ board.addEventListener('click', (evt) => {
       }
     }
 
-  } else if (mode === 'attack' || mode === 'sentry' || mode === 'defend') {
+  } else if (mode === 'attack') {
+    if (myS.length) {
+      const uid = myS[0].unit_id;
+      if (evt.ctrlKey || evt.shiftKey) selectedUnits.add(uid);
+      else selectedUnits = new Set([uid]);
+      if (selectedUnits.size) {
+        const cmd = { type: 'tw_order_mode', unit_ids: [...selectedUnits], mode: 'attack' };
+        if (attackTargetTile) cmd.target_tile = attackTargetTile;
+        send(cmd);
+      }
+    } else {
+      // Clicking an empty tile sets the directed attack destination
+      attackTargetTile = tile;
+    }
+
+  } else if (mode === 'sentry' || mode === 'defend') {
     if (myS.length) {
       const uid = myS[0].unit_id;
       if (evt.ctrlKey || evt.shiftKey) selectedUnits.add(uid);
@@ -384,6 +403,23 @@ function draw() {
     ctx.lineWidth = 1;
   }
 
+  if (mode === 'attack' && attackTargetTile) {
+    const [ax, ay] = attackTargetTile;
+    ctx.strokeStyle = 'rgba(255,70,70,0.9)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 2]);
+    ctx.strokeRect(OX + ax * CELL + 1, OY + ay * CELL + 1, CELL - 2, CELL - 2);
+    ctx.setLineDash([]);
+    // Draw an X through the tile
+    ctx.beginPath();
+    ctx.moveTo(OX + ax * CELL + 3, OY + ay * CELL + 3);
+    ctx.lineTo(OX + ax * CELL + CELL - 4, OY + ay * CELL + CELL - 4);
+    ctx.moveTo(OX + ax * CELL + CELL - 4, OY + ay * CELL + 3);
+    ctx.lineTo(OX + ax * CELL + 3, OY + ay * CELL + CELL - 4);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+
   // Range circles
   const selSoldier = getSelectedSoldier();
   if (selSoldier) drawRangeCircle(cpx(selSoldier.x), cpy(selSoldier.y), RIFLE_RANGE * CELL, 'rgba(255,180,50,0.8)');
@@ -505,7 +541,7 @@ function draw() {
 
     // Task label
     if (s.task) {
-      const taskLabels = { dig: 'DIG', build_mg: 'BLD', operate_mg: 'CREW' };
+      const taskLabels = { dig: 'DIG', build_mg: 'BLD', operate_mg: 'CREW', advance: '→' };
       const lbl = taskLabels[s.task.type];
       if (lbl) {
         ctx.fillStyle = 'rgba(255,220,80,0.95)';
@@ -514,6 +550,15 @@ function draw() {
         ctx.fillText(lbl, scx, scy - 9);
         ctx.textAlign = 'left';
       }
+    }
+
+    // Name label
+    if (s.name) {
+      ctx.fillStyle = s.owner === mySeat() ? 'rgba(220,255,220,0.92)' : 'rgba(255,210,210,0.92)';
+      ctx.font = '5px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText(s.name, scx, scy + 14);
+      ctx.textAlign = 'left';
     }
   }
 
