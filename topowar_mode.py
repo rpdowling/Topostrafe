@@ -527,8 +527,6 @@ class TopowarGameState:
             tile = tuple(map(int, action.get("tile", [])))
             if len(tile) != 2 or not self.map.in_bounds(tile):
                 raise ValueError("Invalid MG tile.")
-            if tile in self.map.trenches:
-                raise ValueError("MG cannot be placed in a trench tile.")
             if tile in self._structure_tile_set():
                 raise ValueError("Only one equipment structure can occupy a tile.")
             # MG must be placed on or adjacent to a friendly trench tile
@@ -544,15 +542,7 @@ class TopowarGameState:
             mid = self.next_structure_id
             self.next_structure_id += 1
             facing = float(action.get("facing", 0.0)) % 360.0
-            mg = MachineGun(
-                mid,
-                owner,
-                tile,
-                build_required=self.rules.mg_build_seconds,
-                facing=facing,
-                arc_center=facing,
-                base_ground_is_trench=(tile in self.map.trenches),
-            )
+            mg = MachineGun(mid, owner, tile, build_required=self.rules.mg_build_seconds, facing=facing, arc_center=facing)
             self.mgs[mid] = mg
             build_positions = self._build_positions_for_mg(tile)
             if len(build_positions) < 2:
