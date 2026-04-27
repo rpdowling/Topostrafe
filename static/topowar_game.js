@@ -122,10 +122,6 @@ function updateModeButtons() {
 
 function setMode(m) {
   if (mode === m) {
-    // Re-clicking Attack while soldiers are selected = send general attack order
-    if (m === 'attack' && selectedUnits.size) {
-      send({ type: 'tw_order_mode', unit_ids: [...selectedUnits], mode: 'attack' });
-    }
     mode = 'select';
     plan = [];
     pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false;
@@ -318,7 +314,7 @@ board.addEventListener('click', (evt) => {
 
   } else if (mode === 'attack') {
     if (myS.length) {
-      // Select soldiers — never send immediately; wait for a tile click
+      // Click soldier to select/deselect
       const uid = myS[0].unit_id;
       if (evt.ctrlKey || evt.shiftKey) {
         if (selectedUnits.has(uid)) selectedUnits.delete(uid);
@@ -327,12 +323,14 @@ board.addEventListener('click', (evt) => {
         selectedUnits = new Set([uid]);
       }
     } else if (selectedUnits.size) {
-      // Clicking a tile with soldiers selected → send directed attack there
-      send({ type: 'tw_order_mode', unit_ids: [...selectedUnits], mode: 'attack', target_tile: tile });
-      attackTargetTile = tile;
-    } else {
-      // No selection yet — mark the tile as a pending target
-      attackTargetTile = tile;
+      // Click a trench tile to send the storm order
+      const trenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
+      if (trenchSet.has(`${tile[0]},${tile[1]}`)) {
+        send({ type: 'tw_order_mode', unit_ids: [...selectedUnits], mode: 'attack', target_tile: tile });
+        attackTargetTile = tile;
+      } else {
+        setStatus('Click a trench tile to set the attack objective.', true);
+      }
     }
 
   } else if (mode === 'sentry' || mode === 'defend') {
@@ -896,8 +894,11 @@ function draw() {
       ctx.lineWidth = 1;
     }
     if (pendingMortarTarget) {
+      const [bx2, by2] = pendingMortarTile;
       const [tx, ty] = pendingMortarTarget;
       const tcx = cpx(tx), tcy = cpy(ty);
+      const buildDist = Math.hypot(tx - bx2, ty - by2);
+      const buildScatterR = 3 + Math.max(0, Math.floor(Math.max(0, buildDist - 10) / 5));
       ctx.strokeStyle = '#f4a020';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
@@ -907,7 +908,7 @@ function draw() {
       ctx.setLineDash([4, 4]);
       ctx.strokeStyle = 'rgba(244,160,32,0.5)';
       ctx.beginPath();
-      ctx.arc(tcx, tcy, 4 * CELL, 0, Math.PI * 2);
+      ctx.arc(tcx, tcy, buildScatterR * CELL, 0, Math.PI * 2);
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.lineWidth = 1;
@@ -915,12 +916,14 @@ function draw() {
       // Preview: scatter circle follows mouse
       const [bx, by] = pendingMortarTile;
       const dx = mouseCanvas.x - cpx(bx), dy = mouseCanvas.y - cpy(by);
-      if (Math.hypot(dx, dy) > CELL * 0.5) {
+      const dPixels = Math.hypot(dx, dy);
+      if (dPixels > CELL * 0.5) {
+        const previewScatterR = 3 + Math.max(0, Math.floor(Math.max(0, dPixels / CELL - 10) / 5));
         ctx.setLineDash([4, 4]);
         ctx.strokeStyle = 'rgba(244,160,32,0.35)';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.arc(mouseCanvas.x, mouseCanvas.y, 4 * CELL, 0, Math.PI * 2);
+        ctx.arc(mouseCanvas.x, mouseCanvas.y, previewScatterR * CELL, 0, Math.PI * 2);
         ctx.stroke();
         ctx.setLineDash([]);
       }
@@ -950,10 +953,12 @@ function draw() {
       ctx.moveTo(tcx, tcy - CELL * 0.5); ctx.lineTo(tcx, tcy + CELL * 0.5);
       ctx.stroke();
       if (isSelected) {
+        const tgtDist = Math.hypot(ttx - mx, tty - my);
+        const tgtScatterR = 3 + Math.max(0, Math.floor(Math.max(0, tgtDist - 10) / 5));
         ctx.strokeStyle = 'rgba(244,160,32,0.35)';
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
-        ctx.arc(tcx, tcy, 4 * CELL, 0, Math.PI * 2);
+        ctx.arc(tcx, tcy, tgtScatterR * CELL, 0, Math.PI * 2);
         ctx.stroke();
         ctx.setLineDash([]);
       }
@@ -1195,6 +1200,9 @@ function render() {
       ? `${state.winner_name} wins — ${state.win_reason || ''}`
       : (state.win_reason || 'Game over.');
     setStatus(msg);
+  } else if (mode === 'attack') {
+    if (!selectedUnits.size) setStatus('Attack — click a soldier to select, then click an enemy trench.');
+    else setStatus(`Attack — ${selectedUnits.size} selected. Click an enemy trench tile.`);
   } else {
     setStatus('Active.');
   }

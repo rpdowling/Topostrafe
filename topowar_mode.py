@@ -437,6 +437,22 @@ class TopowarGameState:
         rel = max(-arc_half, min(arc_half, rel))
         return (arc_center + rel) % 360.0
 
+    def _trench_component(self, start: tuple[int, int]) -> set[tuple[int, int]]:
+        """4-connected flood fill over trench tiles starting from start."""
+        if start not in self.map.trenches:
+            return set()
+        visited: set[tuple[int, int]] = {start}
+        queue: deque[tuple[int, int]] = deque([start])
+        while queue:
+            cx, cy = queue.popleft()
+            for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+                nt = (nx, ny)
+                if nt in visited or not self.map.in_bounds(nt) or nt not in self.map.trenches:
+                    continue
+                visited.add(nt)
+                queue.append(nt)
+        return visited
+
     def _friendly_trench_tiles(self, owner: int) -> list[tuple[int, int]]:
         mid = self.map.height // 2
         return [p for p in self.map.trenches if (owner == 0 and p[1] >= mid) or (owner == 1 and p[1] < mid)]
@@ -541,9 +557,12 @@ class TopowarGameState:
                     target_tile = action.get("target_tile")
                     if target_tile:
                         goal = tuple(map(int, target_tile))
-                        if self.map.in_bounds(goal):
-                            s.current_task = {"type": "advance", "goal": list(goal)}
-                            s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=occ - {s.tile})
+                        if self.map.in_bounds(goal) and goal in self.map.trenches:
+                            component = self._trench_component(goal)
+                            s.current_task = {"type": "storm_trench", "goal": list(goal)}
+                            s.combat_halt = False
+                            nearest = min(component, key=lambda t: math.dist(s.tile, t))
+                            s.path = self.path.find_path(s.tile, nearest, trench_only=False, blocked=occ - {s.tile})
             return "Mode updated."
         if t == "tw_assign_dig":
             sid = int(action.get("unit_id", -1))
@@ -885,12 +904,11 @@ class TopowarGameState:
             if s.hp <= 0:
                 continue
 
-            # Determine whether this advancing soldier should halt to engage an open-ground enemy.
-            # Soldiers only halt when crossing open ground (not when already in a trench).
+            # Halt to engage when crossing open ground toward target trench.
             advancing = (
                 s.mode == "attack"
                 and s.current_task is not None
-                and s.current_task.get("type") == "advance"
+                and s.current_task.get("type") == "storm_trench"
                 and s.tile not in self.map.trenches
             )
             if advancing:
@@ -949,28 +967,40 @@ class TopowarGameState:
     def _update_tasks(self, dt: float):
         occ = self._occupied_tiles()
         blocked_keys = set(occ.keys()) | self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
+        component_cache: dict[tuple[int, int], set[tuple[int, int]]] = {}
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
             task = s.current_task
             if not task:
-                if s.mode == "attack":
-                    goal = self._attack_goal(s)
-                    if goal:
-                        s.current_task = {"type": "advance", "goal": list(goal)}
-                        s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
-                # defend + sentry: stay put, no automatic pathing
+                # defend + sentry + attack-idle: stay put, no automatic pathing
                 continue
-            if task["type"] == "advance":
+            if task["type"] == "storm_trench":
                 goal = tuple(task["goal"])
-                if s.tile == goal:
+                if goal not in self.map.trenches:
+                    # Target tile deformed away (mortar impact), cancel
                     s.current_task = None
                     s.path = []
-                    # Stay in attack mode — _update_tasks will assign the next goal on the next tick.
-                else:
-                    need = (not s.path) or math.dist(s.path[-1], goal) > 1.5
-                    if need:
-                        s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
+                    continue
+                if goal not in component_cache:
+                    component_cache[goal] = self._trench_component(goal)
+                component = component_cache[goal]
+                if s.tile in component:
+                    # In target trench — hold and fight; stop when cleared of visible enemies
+                    enemies_visible = any(
+                        s2.hp > 0 and s2.owner != s.owner
+                        and s2.tile in component
+                        and self._soldier_visible_to(s2, s.owner)
+                        for s2 in self.soldiers.values()
+                    )
+                    if not enemies_visible:
+                        s.current_task = None
+                    s.path = []
+                    continue
+                # Not yet in component — path toward nearest tile in it
+                if not s.path or s.path[-1] not in component:
+                    nearest = min(component, key=lambda t: math.dist(s.tile, t))
+                    s.path = self.path.find_path(s.tile, nearest, trench_only=False, blocked=blocked_keys - {s.tile})
             elif task["type"] == "dig":
                 tgt = tuple(task["target"])
                 adj4_tgt = [(tgt[0]+dx, tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
@@ -1328,7 +1358,7 @@ class TopowarGameState:
                 continue
             task = None
             if s.current_task:
-                task = {k: v for k, v in s.current_task.items() if k != "plan"}
+                task = {k: v for k, v in s.current_task.items() if k not in ("plan", "component")}
                 if "plan" in s.current_task:
                     task["plan"] = [list(p) for p in s.current_task["plan"]]
             soldiers.append({
