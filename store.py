@@ -830,6 +830,7 @@ class GameStore:
                 "tw_toggle_mortar_autofire",
                 "tw_toggle_operate_mortar",
                 "tw_assign_build_sandbag",
+                "tw_set_grenade_tile",
             }:
                 out = {"type": t}
                 for key in (
