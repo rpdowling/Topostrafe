@@ -68,6 +68,11 @@ function tileFromEvent(evt) {
   const rect = board.getBoundingClientRect();
   const px = (evt.clientX - rect.left) * (board.width / rect.width);
   const py = (evt.clientY - rect.top) * (board.height / rect.height);
+  return tileFromCanvas(px, py);
+}
+
+function tileFromCanvas(px, py) {
+  if (!tw()) return null;
   const tx = Math.floor((px - OX) / CELL);
   let gy = Math.floor((py - OY) / CELL);
   if (tx < 0 || gy < 0 || tx >= tw().map.width || gy >= tw().map.height) return null;
@@ -80,6 +85,11 @@ function soldiersAt(tile) {
   return (tw()?.soldiers || []).filter(s => s.tile[0] === tile[0] && s.tile[1] === tile[1]);
 }
 function mySoldiersAt(tile) { return soldiersAt(tile).filter(s => s.owner === mySeat()); }
+function myOfficer() {
+  const seat = mySeat();
+  if (seat === null) return null;
+  return (tw()?.soldiers || []).find(s => s.owner === seat && s.is_officer) || null;
+}
 function mgAt(tile) {
   return (tw()?.machine_guns || []).find(m => m.tile[0] === tile[0] && m.tile[1] === tile[1]) || null;
 }
@@ -465,9 +475,11 @@ board.addEventListener('click', (evt) => {
   } else if (mode === 'flare') {
     const fr = tw()?.flares_remaining;
     const remaining = fr ? (fr[String(mySeat())] ?? 0) : 0;
-    if (remaining > 0) {
+    if (!myOfficer()) {
+      setStatus('No living officer available to fire flares.', true);
+    } else if (remaining > 0) {
       send({ type: 'tw_fire_flare', tile });
-      setStatus(`Flare fired. ${remaining - 1} remaining.`);
+      setStatus('Flare request sent…');
     } else {
       setStatus('No flares remaining.', true);
     }
@@ -519,6 +531,7 @@ board.addEventListener('mousemove', (evt) => {
   mouseCanvas.y = (evt.clientY - r.top) * (board.height / r.height);
   if (mode === 'build' && pendingBuildTile && pendingBuildFacing === null) render();
   if (mode === 'mortar' && pendingMortarTile && !pendingMortarTarget) render();
+  if (mode === 'flare') render();
 });
 
 // === DRAW ===
@@ -542,6 +555,15 @@ function drawRangeCircle(cx, cy, radius, color) {
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.stroke();
   ctx.restore();
+}
+
+function flareScatterRadius(targetTile) {
+  const officer = myOfficer();
+  if (!officer || !targetTile) return 0;
+  const srcX = officer.tile[0];
+  const srcY = officer.tile[1];
+  const dist = Math.hypot(targetTile[0] - srcX, targetTile[1] - srcY);
+  return 3 + Math.max(0, Math.floor(Math.max(0, dist - 10) / 5));
 }
 
 function drawBuildPhaseOverlay(data) {
@@ -1315,6 +1337,22 @@ function draw() {
     ctx.lineWidth = 1;
   }
 
+  // Flare targeting preview (scatter area around selected tile)
+  if (mode === 'flare') {
+    const officer = myOfficer();
+    const hover = tileFromCanvas(mouseCanvas.x, mouseCanvas.y);
+    if (officer && hover) {
+      const scatter = flareScatterRadius(hover);
+      const cx = cpx(hover[0]);
+      const cy = cpy(hover[1]);
+      drawRangeCircle(cx, cy, scatter * CELL, 'rgba(255, 235, 120, 0.95)');
+      ctx.fillStyle = 'rgba(255, 235, 120, 0.14)';
+      ctx.beginPath();
+      ctx.arc(cx, cy, scatter * CELL, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
   // Projectiles
   for (const p of data.projectiles || []) {
     const pcx = cpx(p.x);
@@ -1482,7 +1520,8 @@ function render() {
   } else if (mode === 'flare') {
     const fr = tw()?.flares_remaining;
     const rem = fr ? (fr[String(mySeat())] ?? 0) : 0;
-    setStatus(`Flare — click any tile to illuminate it (${rem} remaining). Reveals all units in radius.`);
+    if (!myOfficer()) setStatus('Flare — unavailable (no living officer).', true);
+    else setStatus(`Flare — click any tile to illuminate it (${rem} remaining). Reveals all units in radius.`);
   } else {
     const bpr = tw()?.build_phase_remaining || 0;
     if (bpr > 0) setStatus(`Build phase: ${Math.ceil(bpr)}s (no firing / no crossing midline).`);
