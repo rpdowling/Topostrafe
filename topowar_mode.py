@@ -28,6 +28,8 @@ class RulesConfig:
     # Soldiers move discretely: one tile per (1 / soldier_move_speed) seconds.
     soldier_move_speed: float = 1.0
     projectile_speed: float = 8.0
+    grenade_range: float = 7.0
+    grenade_windup_seconds: float = 3.0
 
 
 @dataclass
@@ -370,6 +372,15 @@ class TopowarGameState:
         """Backfill fields when loading older saved Topowar states."""
         if not hasattr(self, "sandbags"):
             self.sandbags = {}
+        if not hasattr(self.rules, "grenade_range"):
+            self.rules.grenade_range = 7.0
+        if not hasattr(self.rules, "grenade_windup_seconds"):
+            self.rules.grenade_windup_seconds = 3.0
+        for s in self.soldiers.values():
+            if not hasattr(s, "grenade_target"):
+                s.grenade_target = None
+            if not hasattr(s, "grenade_windup"):
+                s.grenade_windup = 0.0
         for mg in self.mgs.values():
             if not hasattr(mg, "arc_center"):
                 mg.arc_center = getattr(mg, "facing", 0.0)
@@ -856,6 +867,18 @@ class TopowarGameState:
             self.sandbags[mid] = sb
             s.current_task = {"type": "build_sandbag", "sandbag_id": mid}
             return "Sandbag construction started."
+        if t == "tw_set_grenade_tile":
+            tile = tuple(map(int, action.get("tile", [])))
+            if len(tile) != 2 or not self.map.in_bounds(tile):
+                raise ValueError("Invalid grenade target tile.")
+            targets = self.grenade_tiles.setdefault(owner, set())
+            if tile in targets:
+                targets.remove(tile)
+                return "Grenade target removed."
+            if len(targets) >= 8:
+                raise ValueError("Maximum 8 grenade targets.")
+            targets.add(tile)
+            return "Grenade target added."
         if t == "tw_move_unit":
             sid = int(action.get("unit_id", -1))
             s = self.soldiers.get(sid)
@@ -932,7 +955,7 @@ class TopowarGameState:
         if self.time_elapsed < self.rules.build_phase_seconds:
             return
         for s in self.soldiers.values():
-            if s.hp <= 0:
+            if s.hp <= 0 or s.is_grenadier:
                 continue
 
             # Halt to engage an open-ground enemy when crossing open ground.
@@ -1165,6 +1188,12 @@ class TopowarGameState:
         victim.hp = 0
         self.kill_counts[killer_owner] += 1
         self.death_marks.append(DeathMark(victim.x, victim.y))
+        if victim.is_grenadier and victim.grenade_target is not None and victim.grenade_windup > 0.0:
+            # Grenadier dies mid-prep: dropped grenade detonates at current tile.
+            # Mark dead/clear grenade state first to avoid recursive self-kill loops.
+            victim.grenade_target = None
+            victim.grenade_windup = 0.0
+            self._grenade_impact(victim.tile, victim.owner)
 
     def _fire_mortar(self, mortar: "Mortar"):
         if not mortar.target or not mortar.ready:
@@ -1203,7 +1232,7 @@ class TopowarGameState:
         target_in_trench = landing in self.map.trenches
         kill_radius = 3.0
         for s in self.soldiers.values():
-            if s.hp <= 0 or s.owner == owner:
+            if s.hp <= 0:
                 continue
             if math.dist(s.tile, landing) > kill_radius:
                 continue
@@ -1280,9 +1309,9 @@ class TopowarGameState:
 
     def _grenade_impact(self, landing: tuple[int, int], owner: int):
         target_in_trench = landing in self.map.trenches
-        kill_radius = 3.0
+        kill_radius = 2.0
         for s in self.soldiers.values():
-            if s.hp <= 0 or s.owner == owner:
+            if s.hp <= 0:
                 continue
             if math.dist(s.tile, landing) > kill_radius:
                 continue
@@ -1320,7 +1349,10 @@ class TopowarGameState:
         for s in self.soldiers.values():
             if s.hp <= 0 or not s.is_grenadier:
                 continue
-            targets = [t for t in self.grenade_tiles.get(s.owner, set()) if math.dist(s.tile, t) <= 7.0]
+            targets = [
+                t for t in self.grenade_tiles.get(s.owner, set())
+                if math.dist(s.tile, t) <= self.rules.grenade_range
+            ]
             if not targets:
                 s.grenade_target = None
                 s.grenade_windup = 0.0
@@ -1328,7 +1360,7 @@ class TopowarGameState:
             target = min(targets, key=lambda t: math.dist(s.tile, t))
             if s.grenade_target != target:
                 s.grenade_target = target
-                s.grenade_windup = 2.0
+                s.grenade_windup = self.rules.grenade_windup_seconds
             else:
                 s.grenade_windup = max(0.0, s.grenade_windup - dt)
             s.path = []
@@ -1420,6 +1452,7 @@ class TopowarGameState:
         self._update_mgs(dt)
         self._update_mortars(dt)
         self._update_mortar_shells(dt)
+        self._update_grenadiers(dt)
         self._update_grenade_shells(dt)
         self._update_projectiles(dt)
         self._update_effects(dt)
@@ -1549,6 +1582,7 @@ class TopowarGameState:
             "machine_guns": mgs,
             "mortars": mortars_out,
             "sandbags": sandbags_out,
+            "grenade_targets": [list(t) for t in sorted(self.grenade_tiles.get(viewer, set()))] if viewer is not None else [],
             "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "owner": ms.owner} for ms in self.mortar_shells],
             "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
             "projectiles": [{"x": p.x, "y": p.y, "owner": p.owner, "source": p.source} for p in self.projectiles],
