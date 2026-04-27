@@ -314,23 +314,14 @@ board.addEventListener('click', (evt) => {
 
   } else if (mode === 'attack') {
     if (myS.length) {
-      // Click soldier to select/deselect
+      // Each click on a friendly soldier toggles them in/out of the selection
       const uid = myS[0].unit_id;
-      if (evt.ctrlKey || evt.shiftKey) {
-        if (selectedUnits.has(uid)) selectedUnits.delete(uid);
-        else selectedUnits.add(uid);
-      } else {
-        selectedUnits = new Set([uid]);
-      }
+      if (selectedUnits.has(uid)) selectedUnits.delete(uid);
+      else selectedUnits.add(uid);
     } else if (selectedUnits.size) {
-      // Click a trench tile to send the storm order
-      const trenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
-      if (trenchSet.has(`${tile[0]},${tile[1]}`)) {
-        send({ type: 'tw_order_mode', unit_ids: [...selectedUnits], mode: 'attack', target_tile: tile });
-        attackTargetTile = tile;
-      } else {
-        setStatus('Click a trench tile to set the attack objective.', true);
-      }
+      // Click any destination tile → send all selected soldiers there
+      send({ type: 'tw_order_mode', unit_ids: [...selectedUnits], mode: 'attack', target_tile: tile });
+      attackTargetTile = tile;
     }
 
   } else if (mode === 'sentry' || mode === 'defend') {
@@ -1250,8 +1241,8 @@ function render() {
       : (state.win_reason || 'Game over.');
     setStatus(msg);
   } else if (mode === 'attack') {
-    if (!selectedUnits.size) setStatus('Attack — click a soldier to select, then click an enemy trench.');
-    else setStatus(`Attack — ${selectedUnits.size} selected. Click an enemy trench tile.`);
+    if (!selectedUnits.size) setStatus('Attack — click soldiers to select, then click a destination tile.');
+    else setStatus(`Attack — ${selectedUnits.size} selected. Click any tile to advance.`);
   } else if (mode === 'sandbag') {
     if (!selectedUnits.size) setStatus('Sandbag — click a soldier, then click an adjacent open tile.');
     else setStatus('Sandbag — click an adjacent open tile to build.');
