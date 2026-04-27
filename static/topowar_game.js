@@ -850,8 +850,9 @@ function draw() {
       ctx.fill();
     }
 
-    // Body
-    ctx.fillStyle = s.owner === 0 ? '#e83030' : '#3d6cdf';
+    // Body (grenadiers are color-coded)
+    if (s.is_grenadier) ctx.fillStyle = s.owner === 0 ? '#ff9f1a' : '#1fc7b6';
+    else ctx.fillStyle = s.owner === 0 ? '#e83030' : '#3d6cdf';
     ctx.beginPath();
     ctx.arc(scx, scy, 6, 0, Math.PI * 2);
     ctx.fill();
@@ -1193,6 +1194,7 @@ function updateSelectionPanel() {
     panel.innerHTML = `
       <div class="sel-grid">
         <span class="sel-label">Side</span><span class="sel-val">${side}</span>
+        <span class="sel-label">Role</span><span class="sel-val">${soldier.is_grenadier ? 'Grenadier' : 'Rifleman'}</span>
         <span class="sel-label">HP</span><span class="sel-val">${hp}%</span>
         <span class="sel-label">Mode</span><span class="sel-val">${modeLabel[soldier.mode] || soldier.mode}</span>
         <span class="sel-label">Task</span><span class="sel-val">${tsk}</span>
