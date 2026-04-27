@@ -1292,9 +1292,6 @@ class TopowarGameState:
     def _register_kill(self, victim: "Soldier", killer_owner: int):
         if victim.hp <= 0:
             return
-        if victim.is_grenadier and victim.grenade_target is not None and victim.grenade_windup > 0.0:
-            # Grenadier dies mid-prep: dropped grenade detonates at current tile.
-            self._grenade_impact(victim.tile, victim.owner)
         victim.hp = 0
         self.kill_counts[killer_owner] += 1
         self.death_marks.append(DeathMark(victim.x, victim.y))
