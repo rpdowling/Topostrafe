@@ -1304,6 +1304,7 @@ class TopowarGameState:
             step = shell.speed * dt
             if dist <= step:
                 self._mortar_impact(shell.target, shell.owner)
+                continue
             else:
                 shell.x += dx / dist * step
                 shell.y += dy / dist * step
