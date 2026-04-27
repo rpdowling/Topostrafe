@@ -1214,6 +1214,9 @@ function draw() {
     ctx.globalAlpha = 1;
   }
 
+  // Draw build-phase fog/hatching late so enemy-side units/structures are obscured.
+  drawBuildPhaseOverlay(data);
+
   // Game-over overlay
   if (state && state.winner !== null && state.winner !== undefined) {
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
