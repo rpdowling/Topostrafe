@@ -558,10 +558,10 @@ function drawRangeCircle(cx, cy, radius, color) {
 }
 
 function flareScatterRadius(targetTile) {
-  const officer = myOfficer();
-  if (!officer || !targetTile) return 0;
-  const srcX = officer.tile[0];
-  const srcY = officer.tile[1];
+  const data = tw();
+  if (!data || !targetTile) return 0;
+  const srcX = data.map.width / 2;
+  const srcY = mySeat() === 0 ? data.map.height - 1 : 0;
   const dist = Math.hypot(targetTile[0] - srcX, targetTile[1] - srcY);
   return 3 + Math.max(0, Math.floor(Math.max(0, dist - 10) / 5));
 }
@@ -1339,9 +1339,8 @@ function draw() {
 
   // Flare targeting preview (scatter area around selected tile)
   if (mode === 'flare') {
-    const officer = myOfficer();
     const hover = tileFromCanvas(mouseCanvas.x, mouseCanvas.y);
-    if (officer && hover) {
+    if (hover) {
       const scatter = flareScatterRadius(hover);
       const cx = cpx(hover[0]);
       const cy = cpy(hover[1]);
