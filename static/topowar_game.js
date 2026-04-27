@@ -68,6 +68,11 @@ function tileFromEvent(evt) {
   const rect = board.getBoundingClientRect();
   const px = (evt.clientX - rect.left) * (board.width / rect.width);
   const py = (evt.clientY - rect.top) * (board.height / rect.height);
+  return tileFromCanvas(px, py);
+}
+
+function tileFromCanvas(px, py) {
+  if (!tw()) return null;
   const tx = Math.floor((px - OX) / CELL);
   let gy = Math.floor((py - OY) / CELL);
   if (tx < 0 || gy < 0 || tx >= tw().map.width || gy >= tw().map.height) return null;
@@ -467,7 +472,7 @@ board.addEventListener('click', (evt) => {
     const remaining = fr ? (fr[String(mySeat())] ?? 0) : 0;
     if (remaining > 0) {
       send({ type: 'tw_fire_flare', tile });
-      setStatus(`Flare fired. ${remaining - 1} remaining.`);
+      setStatus('Flare request sent…');
     } else {
       setStatus('No flares remaining.', true);
     }
@@ -519,6 +524,7 @@ board.addEventListener('mousemove', (evt) => {
   mouseCanvas.y = (evt.clientY - r.top) * (board.height / r.height);
   if (mode === 'build' && pendingBuildTile && pendingBuildFacing === null) render();
   if (mode === 'mortar' && pendingMortarTile && !pendingMortarTarget) render();
+  if (mode === 'flare') render();
 });
 
 // === DRAW ===
@@ -542,6 +548,15 @@ function drawRangeCircle(cx, cy, radius, color) {
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.stroke();
   ctx.restore();
+}
+
+function flareScatterRadius(targetTile) {
+  const data = tw();
+  if (!data || !targetTile) return 0;
+  const srcX = data.map.width / 2;
+  const srcY = mySeat() === 0 ? data.map.height - 1 : 0;
+  const dist = Math.hypot(targetTile[0] - srcX, targetTile[1] - srcY);
+  return 3 + Math.max(0, Math.floor(Math.max(0, dist - 10) / 5));
 }
 
 function drawBuildPhaseOverlay(data) {
@@ -1313,6 +1328,21 @@ function draw() {
     ctx.strokeRect(OX + gx * CELL + 2, gty + 2, CELL - 4, CELL - 4);
     ctx.setLineDash([]);
     ctx.lineWidth = 1;
+  }
+
+  // Flare targeting preview (scatter area around selected tile)
+  if (mode === 'flare') {
+    const hover = tileFromCanvas(mouseCanvas.x, mouseCanvas.y);
+    if (hover) {
+      const scatter = flareScatterRadius(hover);
+      const cx = cpx(hover[0]);
+      const cy = cpy(hover[1]);
+      drawRangeCircle(cx, cy, scatter * CELL, 'rgba(255, 235, 120, 0.95)');
+      ctx.fillStyle = 'rgba(255, 235, 120, 0.14)';
+      ctx.beginPath();
+      ctx.arc(cx, cy, scatter * CELL, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   // Projectiles
