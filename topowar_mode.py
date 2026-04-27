@@ -81,6 +81,7 @@ class Soldier(Unit):
     name: str = ""
     combat_halt: bool = False
     is_grenadier: bool = False
+    is_officer: bool = False
     grenade_target: tuple[int, int] | None = None
     grenade_windup: float = 0.0
 
@@ -177,6 +178,17 @@ class GrenadeShell:
 
 
 @dataclass
+class FlareShell:
+    owner: int
+    x: float
+    y: float
+    sx: float
+    sy: float
+    target: tuple[int, int]
+    speed: float = 2.5
+
+
+@dataclass
 class Explosion:
     x: float
     y: float
@@ -257,6 +269,8 @@ class TopowarGameState:
         self.barbed_wire: dict[int, BarbedWire] = {}
         self.mortar_shells: list[MortarShell] = []
         self.grenade_shells: list[GrenadeShell] = []
+        self.flare_shells: list[FlareShell] = []
+        self.flares_remaining: dict[int, int] = {0: 5, 1: 5}
         self.projectiles: list[Projectile] = []
         self.explosions: list[Explosion] = []
         self.death_marks: list[DeathMark] = []
@@ -280,14 +294,14 @@ class TopowarGameState:
         for i in range(7):
             rx = x0 + i
             bx = x0 + i
-            self._spawn_soldier(0, (rx, y_red), is_grenadier=(i < 2))
-            self._spawn_soldier(1, (bx, y_blue), is_grenadier=(i < 2))
+            self._spawn_soldier(0, (rx, y_red), is_grenadier=(i < 2), is_officer=(i == 2))
+            self._spawn_soldier(1, (bx, y_blue), is_grenadier=(i < 2), is_officer=(i == 2))
 
-    def _spawn_soldier(self, owner: int, tile: tuple[int, int], is_grenadier: bool = False):
+    def _spawn_soldier(self, owner: int, tile: tuple[int, int], is_grenadier: bool = False, is_officer: bool = False):
         sid = self.next_unit_id
         self.next_unit_id += 1
         name = self._name_pool.pop(0) if self._name_pool else f"Pvt.{sid}"
-        self.soldiers[sid] = Soldier(sid, owner, float(tile[0]), float(tile[1]), name=name, is_grenadier=is_grenadier)
+        self.soldiers[sid] = Soldier(sid, owner, float(tile[0]), float(tile[1]), name=name, is_grenadier=is_grenadier, is_officer=is_officer)
 
     def _spawn_recruit(self, owner: int):
         """Spawn a new soldier on the back row. Weighted toward the middle 10 columns."""
@@ -306,8 +320,11 @@ class TopowarGameState:
                 cx = (base_x + sign * delta) % self.map.width
                 tile = (cx, back_y)
                 if tile not in occ and self.map.in_bounds(tile):
+                    live_officers = sum(1 for s in self.soldiers.values() if s.owner == owner and s.hp > 0 and s.is_officer)
                     live_grenadiers = sum(1 for s in self.soldiers.values() if s.owner == owner and s.hp > 0 and s.is_grenadier)
-                    self._spawn_soldier(owner, tile, is_grenadier=(live_grenadiers < 2))
+                    is_officer = live_officers < 1
+                    is_grenadier = not is_officer and live_grenadiers < 2
+                    self._spawn_soldier(owner, tile, is_grenadier=is_grenadier, is_officer=is_officer)
                     return
 
     def _try_spawn_recruits(self):
@@ -391,6 +408,13 @@ class TopowarGameState:
             self.sandbags = {}
         if not hasattr(self, "barbed_wire"):
             self.barbed_wire = {}
+        if not hasattr(self, "flare_shells"):
+            self.flare_shells = []
+        if not hasattr(self, "flares_remaining"):
+            self.flares_remaining = {0: 5, 1: 5}
+        for s in self.soldiers.values():
+            if not hasattr(s, "is_officer"):
+                s.is_officer = False
         if not hasattr(self.rules, "grenade_range"):
             self.rules.grenade_range = 7.0
         if not hasattr(self.rules, "grenade_windup_seconds"):
@@ -898,6 +922,26 @@ class TopowarGameState:
                 raise ValueError("Maximum 8 grenade targets.")
             targets.add(tile)
             return "Grenade target added."
+        if t == "tw_fire_flare":
+            if self.flares_remaining.get(owner, 0) <= 0:
+                raise ValueError("No flares remaining.")
+            target = tuple(map(int, action.get("tile", [])))
+            if len(target) != 2 or not self.map.in_bounds(target):
+                raise ValueError("Invalid flare target.")
+            mid_x = self.map.width // 2
+            src_y = float(self.map.height - 1) if owner == 0 else 0.0
+            src = (float(mid_x), src_y)
+            dist = math.dist(src, target)
+            scatter_radius = 3.0 + max(0.0, math.floor(max(0.0, dist - 10.0) / 5.0))
+            angle = self.random.uniform(0.0, 2.0 * math.pi)
+            scatter = self.random.uniform(0.0, scatter_radius)
+            lx = int(round(target[0] + math.cos(angle) * scatter))
+            ly = int(round(target[1] + math.sin(angle) * scatter))
+            lx = max(0, min(self.map.width - 1, lx))
+            ly = max(0, min(self.map.height - 1, ly))
+            self.flare_shells.append(FlareShell(owner, src[0], src[1], src[0], src[1], (lx, ly)))
+            self.flares_remaining[owner] -= 1
+            return "Flare fired."
         if t == "tw_assign_wire":
             sid = int(action.get("unit_id", -1))
             s = self.soldiers.get(sid)
@@ -1450,6 +1494,38 @@ class TopowarGameState:
                 s.grenade_target = None
                 s.grenade_windup = 0.0
 
+    def _illuminated_tiles(self) -> set[tuple[int, int]]:
+        """Tiles currently lit by in-flight flares (for fog-of-war override)."""
+        result: set[tuple[int, int]] = set()
+        for fs in self.flare_shells:
+            total = math.dist((fs.sx, fs.sy), (fs.target[0], fs.target[1]))
+            if total < 0.001:
+                continue
+            progress = min(1.0, math.dist((fs.x, fs.y), (fs.sx, fs.sy)) / total)
+            radius = round(2 + 2 * (1 - abs(2 * progress - 1)))
+            cx, cy = int(round(fs.x)), int(round(fs.y))
+            for dx in range(-radius, radius + 1):
+                for dy in range(-radius, radius + 1):
+                    if dx * dx + dy * dy <= radius * radius:
+                        t = (cx + dx, cy + dy)
+                        if self.map.in_bounds(t):
+                            result.add(t)
+        return result
+
+    def _update_flare_shells(self, dt: float):
+        remaining: list[FlareShell] = []
+        for shell in self.flare_shells:
+            tx, ty = shell.target
+            vx, vy = tx - shell.x, ty - shell.y
+            dist = math.hypot(vx, vy)
+            if dist <= shell.speed * dt:
+                continue  # arrived, disappear with no ground effect
+            step = shell.speed * dt
+            shell.x += vx / dist * step
+            shell.y += vy / dist * step
+            remaining.append(shell)
+        self.flare_shells = remaining
+
     def _update_effects(self, dt: float):
         for e in self.explosions:
             e.age += dt
@@ -1530,6 +1606,7 @@ class TopowarGameState:
         self._update_mortar_shells(dt)
         self._update_grenadiers(dt)
         self._update_grenade_shells(dt)
+        self._update_flare_shells(dt)
         self._update_projectiles(dt)
         self._update_effects(dt)
         alive0 = sum(1 for s in self.soldiers.values() if s.owner == 0 and s.hp > 0)
@@ -1564,15 +1641,17 @@ class TopowarGameState:
     def serialize(self, viewer: int | None = None) -> dict[str, Any]:
         self._ensure_runtime_compat()
         in_build_phase = self.time_elapsed < self.rules.build_phase_seconds
+        illuminated = self._illuminated_tiles()
         soldiers = []
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
             if viewer is not None and s.owner != viewer:
-                # Hide all enemy data on their half during build phase
-                if in_build_phase and not self._on_owner_side(viewer, s.tile):
-                    continue
-                if not self._soldier_visible_to(s, viewer):
+                hidden = (
+                    (in_build_phase and not self._on_owner_side(viewer, s.tile))
+                    or not self._soldier_visible_to(s, viewer)
+                )
+                if hidden and s.tile not in illuminated:
                     continue
             task = None
             if s.current_task:
@@ -1594,12 +1673,13 @@ class TopowarGameState:
                 "name": s.name,
                 "combat_halt": s.combat_halt,
                 "is_grenadier": s.is_grenadier,
+                "is_officer": s.is_officer,
             })
         mgs = []
         for mg in self.mgs.values():
             if mg.hp <= 0:
                 continue
-            if viewer is not None and mg.owner != viewer and in_build_phase and not self._on_owner_side(viewer, mg.tile):
+            if viewer is not None and mg.owner != viewer and in_build_phase and not self._on_owner_side(viewer, mg.tile) and mg.tile not in illuminated:
                 continue
             mgs.append({
                 "structure_id": mg.structure_id,
@@ -1621,9 +1701,10 @@ class TopowarGameState:
             if mortar.hp <= 0:
                 continue
             if viewer is not None and mortar.owner != viewer:
-                if in_build_phase and not self._on_owner_side(viewer, mortar.tile):
+                lit = mortar.tile in illuminated
+                if in_build_phase and not self._on_owner_side(viewer, mortar.tile) and not lit:
                     continue
-                if mortar.tile in self.map.trenches:
+                if mortar.tile in self.map.trenches and not lit:
                     continue
             mortars_out.append({
                 "structure_id": mortar.structure_id,
@@ -1644,7 +1725,7 @@ class TopowarGameState:
         for sb in self.sandbags.values():
             if sb.hp <= 0:
                 continue
-            if viewer is not None and sb.owner != viewer and in_build_phase and not self._on_owner_side(viewer, sb.tile):
+            if viewer is not None and sb.owner != viewer and in_build_phase and not self._on_owner_side(viewer, sb.tile) and sb.tile not in illuminated:
                 continue
             sandbags_out.append({
                 "structure_id": sb.structure_id,
@@ -1660,7 +1741,7 @@ class TopowarGameState:
         for w in self.barbed_wire.values():
             if w.hp <= 0:
                 continue
-            if viewer is not None and w.owner != viewer and in_build_phase and not self._on_owner_side(viewer, w.tile):
+            if viewer is not None and w.owner != viewer and in_build_phase and not self._on_owner_side(viewer, w.tile) and w.tile not in illuminated:
                 continue
             wire_out.append({
                 "structure_id": w.structure_id,
@@ -1673,7 +1754,7 @@ class TopowarGameState:
             })
         visible_trenches = self.map.trenches
         if in_build_phase and viewer is not None:
-            visible_trenches = {t for t in self.map.trenches if self._on_owner_side(viewer, t)}
+            visible_trenches = {t for t in self.map.trenches if self._on_owner_side(viewer, t) or t in illuminated}
         return {
             "rules": self.rules.__dict__.copy(),
             "build_phase_remaining": max(0.0, self.rules.build_phase_seconds - self.time_elapsed),
@@ -1689,6 +1770,8 @@ class TopowarGameState:
             "sandbags": sandbags_out,
             "barbed_wire": wire_out,
             "grenade_targets": [list(t) for t in sorted(self.grenade_tiles.get(viewer, set()))] if viewer is not None else [],
+            "flare_shells": [{"x": fs.x, "y": fs.y, "sx": fs.sx, "sy": fs.sy, "target": list(fs.target), "owner": fs.owner} for fs in self.flare_shells],
+            "flares_remaining": {"0": self.flares_remaining.get(0, 0), "1": self.flares_remaining.get(1, 0)},
             "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "owner": ms.owner} for ms in self.mortar_shells],
             "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
             "projectiles": [{"x": p.x, "y": p.y, "owner": p.owner, "source": p.source} for p in self.projectiles],

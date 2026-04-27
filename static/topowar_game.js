@@ -114,7 +114,7 @@ function getSelectedMortar() {
 // === MODE MANAGEMENT ===
 
 function updateModeButtons() {
-  const modes = ['select','attack','sentry','defend','dig','plan','build','operate','mortar','grenade','sandbag','wire'];
+  const modes = ['select','attack','sentry','defend','dig','plan','build','operate','mortar','grenade','sandbag','wire','flare'];
   for (const m of modes) {
     const btn = el('mode-' + m);
     if (btn) btn.classList.toggle('active', mode === m);
@@ -145,7 +145,7 @@ function setMode(m) {
 function updateModeLabel() {
   const labels = {
     select: 'Select', attack: 'Attack', sentry: 'Sentry', defend: 'Defend',
-    dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew', mortar: 'Build Mortar', grenade: 'Grenade', sandbag: 'Build Sandbag', wire: 'Wire',
+    dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew', mortar: 'Build Mortar', grenade: 'Grenade', sandbag: 'Build Sandbag', wire: 'Wire', flare: 'Flare',
   };
   const e = el('mode-line');
   if (e) e.textContent = labels[mode] || 'Select';
@@ -246,7 +246,7 @@ document.addEventListener('keydown', (evt) => {
     return;
   }
 
-  const shortcutMap = { '1':'select','2':'attack','3':'sentry','4':'defend','D':'dig','P':'plan','B':'build','O':'operate','M':'mortar','N':'grenade','G':'sandbag','W':'wire' };
+  const shortcutMap = { '1':'select','2':'attack','3':'sentry','4':'defend','D':'dig','P':'plan','B':'build','O':'operate','M':'mortar','N':'grenade','G':'sandbag','W':'wire','F':'flare' };
   if (shortcutMap[key]) {
     evt.preventDefault();
     if (['2','3','4'].includes(key) && mode === shortcutMap[key] && selectedUnits.size) {
@@ -461,6 +461,16 @@ board.addEventListener('click', (evt) => {
   } else if (mode === 'grenade') {
     send({ type: 'tw_set_grenade_tile', tile });
     setStatus('Grenade target updated.');
+
+  } else if (mode === 'flare') {
+    const fr = tw()?.flares_remaining;
+    const remaining = fr ? (fr[String(mySeat())] ?? 0) : 0;
+    if (remaining > 0) {
+      send({ type: 'tw_fire_flare', tile });
+      setStatus(`Flare fired. ${remaining - 1} remaining.`);
+    } else {
+      setStatus('No flares remaining.', true);
+    }
 
   } else if (mode === 'wire') {
     if (myS.length) {
@@ -998,12 +1008,30 @@ function draw() {
       ctx.fill();
     }
 
-    // Body (grenadiers are color-coded)
-    if (s.is_grenadier) ctx.fillStyle = s.owner === 0 ? '#ff9f1a' : '#1fc7b6';
-    else ctx.fillStyle = s.owner === 0 ? '#e83030' : '#3d6cdf';
-    ctx.beginPath();
-    ctx.arc(scx, scy, 6, 0, Math.PI * 2);
-    ctx.fill();
+    // Body (officers are star-shaped; grenadiers and riflemen are circles)
+    if (s.is_officer) {
+      ctx.fillStyle = s.owner === 0 ? '#f5e642' : '#22d4c8';
+      ctx.beginPath();
+      const pts = 5, outerR = 7, innerR = 3.5;
+      for (let i = 0; i < pts * 2; i++) {
+        const angle = (i * Math.PI / pts) - Math.PI / 2;
+        const r = i % 2 === 0 ? outerR : innerR;
+        if (i === 0) ctx.moveTo(scx + r * Math.cos(angle), scy + r * Math.sin(angle));
+        else ctx.lineTo(scx + r * Math.cos(angle), scy + r * Math.sin(angle));
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = s.owner === 0 ? '#a89a00' : '#0a8a82';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    } else {
+      if (s.is_grenadier) ctx.fillStyle = s.owner === 0 ? '#ff9f1a' : '#1fc7b6';
+      else ctx.fillStyle = s.owner === 0 ? '#e83030' : '#3d6cdf';
+      ctx.beginPath();
+      ctx.arc(scx, scy, 6, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     // Mode ring
     const modeRingColor = { attack: '#ffb020', sentry: '#60dfff', defend: '#50d080' };
@@ -1249,6 +1277,32 @@ function draw() {
     ctx.fill();
   }
 
+  // Flare shells — illumination glow + projectile dot
+  for (const fs of data.flare_shells || []) {
+    const totalDist = Math.hypot(fs.target[0] - fs.sx, fs.target[1] - fs.sy);
+    const traveledDist = Math.hypot(fs.x - fs.sx, fs.y - fs.sy);
+    const progress = totalDist > 0 ? Math.min(1, traveledDist / totalDist) : 0;
+    const illumR = (2 + 2 * (1 - Math.abs(2 * progress - 1))) * CELL;
+    const fcx = cpx(fs.x), fcy = cpy(fs.y);
+    // Ground illumination glow
+    const grad = ctx.createRadialGradient(fcx, fcy, 0, fcx, fcy, illumR);
+    grad.addColorStop(0, 'rgba(255,240,160,0.28)');
+    grad.addColorStop(0.6, 'rgba(255,220,80,0.10)');
+    grad.addColorStop(1, 'rgba(255,200,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(fcx, fcy, illumR, 0, Math.PI * 2);
+    ctx.fill();
+    // Flare dot (bright white-yellow)
+    ctx.fillStyle = '#fffde0';
+    ctx.shadowColor = '#ffe060';
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.arc(fcx, fcy, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
   // Planned grenade targets
   for (const gt of data.grenade_targets || []) {
     const [gx, gy] = gt;
@@ -1425,6 +1479,10 @@ function render() {
   } else if (mode === 'wire') {
     if (!selectedUnits.size) setStatus('Wire — click a soldier, then click an adjacent open tile to place wire.');
     else setStatus('Wire — click an adjacent open tile to place wire (2 s build).');
+  } else if (mode === 'flare') {
+    const fr = tw()?.flares_remaining;
+    const rem = fr ? (fr[String(mySeat())] ?? 0) : 0;
+    setStatus(`Flare — click any tile to illuminate it (${rem} remaining). Reveals all units in radius.`);
   } else {
     const bpr = tw()?.build_phase_remaining || 0;
     if (bpr > 0) setStatus(`Build phase: ${Math.ceil(bpr)}s (no firing / no crossing midline).`);
@@ -1458,6 +1516,11 @@ function render() {
   if (r0) r0.textContent = fmtTimer(rt['0'] ?? 180);
   if (r1) r1.textContent = fmtTimer(rt['1'] ?? 180);
 
+  const fr = tw()?.flares_remaining || {};
+  const f0 = el('flares0'), f1 = el('flares1');
+  if (f0) f0.textContent = fr['0'] ?? 5;
+  if (f1) f1.textContent = fr['1'] ?? 5;
+
   const logEl = el('log');
   if (logEl) logEl.innerHTML = (state.log || []).slice(-20).map(m => `<div class="log-entry">${m}</div>`).join('');
 
@@ -1469,7 +1532,7 @@ function render() {
 
 [
   ['mode-select','select'], ['mode-attack','attack'], ['mode-sentry','sentry'], ['mode-defend','defend'],
-  ['mode-dig','dig'], ['mode-plan','plan'], ['mode-build','build'], ['mode-operate','operate'], ['mode-mortar','mortar'], ['mode-grenade','grenade'], ['mode-sandbag','sandbag'], ['mode-wire','wire'],
+  ['mode-dig','dig'], ['mode-plan','plan'], ['mode-build','build'], ['mode-operate','operate'], ['mode-mortar','mortar'], ['mode-grenade','grenade'], ['mode-sandbag','sandbag'], ['mode-wire','wire'], ['mode-flare','flare'],
 ].forEach(([id, m]) => {
   const btn = el(id);
   if (btn) btn.addEventListener('click', (evt) => { evt.stopPropagation(); setMode(m); render(); });
