@@ -25,6 +25,7 @@ const CELL = 24;
 const OX = 20;
 const OY = 20;
 const RIFLE_RANGE = 5;
+const GRENADIER_RANGE = 7;
 const MG_RANGE = 20;
 
 function el(id) { return document.getElementById(id); }
@@ -637,7 +638,11 @@ function draw() {
 
   // Range circle for selected soldier
   const selSoldier = getSelectedSoldier();
-  if (selSoldier) drawRangeCircle(cpx(selSoldier.x), cpy(selSoldier.y), RIFLE_RANGE * CELL, 'rgba(255,180,50,0.8)');
+  if (selSoldier) {
+    const grenRange = tw()?.rules?.grenade_range ?? GRENADIER_RANGE;
+    const effectiveRange = selSoldier.is_grenadier ? grenRange : RIFLE_RANGE;
+    drawRangeCircle(cpx(selSoldier.x), cpy(selSoldier.y), effectiveRange * CELL, 'rgba(255,180,50,0.8)');
+  }
 
   // Build mode: pending MG arc preview (before MG sprites so it renders underneath)
   if (mode === 'build' && pendingBuildTile) {

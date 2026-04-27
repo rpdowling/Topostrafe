@@ -28,6 +28,8 @@ class RulesConfig:
     # Soldiers move discretely: one tile per (1 / soldier_move_speed) seconds.
     soldier_move_speed: float = 1.0
     projectile_speed: float = 8.0
+    grenade_range: float = 7.0
+    grenade_windup_seconds: float = 3.0
 
 
 @dataclass
@@ -370,6 +372,15 @@ class TopowarGameState:
         """Backfill fields when loading older saved Topowar states."""
         if not hasattr(self, "sandbags"):
             self.sandbags = {}
+        if not hasattr(self.rules, "grenade_range"):
+            self.rules.grenade_range = 7.0
+        if not hasattr(self.rules, "grenade_windup_seconds"):
+            self.rules.grenade_windup_seconds = 3.0
+        for s in self.soldiers.values():
+            if not hasattr(s, "grenade_target"):
+                s.grenade_target = None
+            if not hasattr(s, "grenade_windup"):
+                s.grenade_windup = 0.0
         for mg in self.mgs.values():
             if not hasattr(mg, "arc_center"):
                 mg.arc_center = getattr(mg, "facing", 0.0)
@@ -1174,6 +1185,9 @@ class TopowarGameState:
     def _register_kill(self, victim: "Soldier", killer_owner: int):
         if victim.hp <= 0:
             return
+        if victim.is_grenadier and victim.grenade_target is not None and victim.grenade_windup > 0.0:
+            # Grenadier dies mid-prep: dropped grenade detonates at current tile.
+            self._grenade_impact(victim.tile, victim.owner)
         victim.hp = 0
         self.kill_counts[killer_owner] += 1
         self.death_marks.append(DeathMark(victim.x, victim.y))
@@ -1215,7 +1229,7 @@ class TopowarGameState:
         target_in_trench = landing in self.map.trenches
         kill_radius = 3.0
         for s in self.soldiers.values():
-            if s.hp <= 0 or s.owner == owner:
+            if s.hp <= 0:
                 continue
             if math.dist(s.tile, landing) > kill_radius:
                 continue
@@ -1294,7 +1308,7 @@ class TopowarGameState:
         target_in_trench = landing in self.map.trenches
         kill_radius = 3.0
         for s in self.soldiers.values():
-            if s.hp <= 0 or s.owner == owner:
+            if s.hp <= 0:
                 continue
             if math.dist(s.tile, landing) > kill_radius:
                 continue
@@ -1332,7 +1346,10 @@ class TopowarGameState:
         for s in self.soldiers.values():
             if s.hp <= 0 or not s.is_grenadier:
                 continue
-            targets = [t for t in self.grenade_tiles.get(s.owner, set()) if math.dist(s.tile, t) <= 7.0]
+            targets = [
+                t for t in self.grenade_tiles.get(s.owner, set())
+                if math.dist(s.tile, t) <= self.rules.grenade_range
+            ]
             if not targets:
                 s.grenade_target = None
                 s.grenade_windup = 0.0
@@ -1340,7 +1357,7 @@ class TopowarGameState:
             target = min(targets, key=lambda t: math.dist(s.tile, t))
             if s.grenade_target != target:
                 s.grenade_target = target
-                s.grenade_windup = 2.0
+                s.grenade_windup = self.rules.grenade_windup_seconds
             else:
                 s.grenade_windup = max(0.0, s.grenade_windup - dt)
             s.path = []
