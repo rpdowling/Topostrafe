@@ -63,7 +63,7 @@
             <button id="mode-plan" class="cmd-btn cmd-plan" title="Trace a chain of tiles, then click a soldier to assign the dig plan">
               <span class="cmd-key">P</span><span class="cmd-label">Plan Dig</span>
             </button>
-            <button id="mode-build" class="cmd-btn cmd-build" title="Place a machine gun on or next to your trench (needs 2 builders)">
+            <button id="mode-build" class="cmd-btn cmd-build" title="Place a machine gun next to your trench (not in trench, needs 2 builders)">
               <span class="cmd-key">B</span><span class="cmd-label">Build MG</span>
             </button>
             <button id="mode-operate" class="cmd-btn cmd-operate" title="Click an MG or mortar to crew it; then click a tile to force-fire MG">
@@ -71,6 +71,12 @@
             </button>
             <button id="mode-mortar" class="cmd-btn cmd-mortar" title="Place a mortar (3×3 same-type zone, 2 builders, 60 s build; click to fire when ready)">
               <span class="cmd-key">M</span><span class="cmd-label">Mortar</span>
+            </button>
+            <button id="mode-sandbag" class="cmd-btn cmd-build" title="Build a sandbag on open ground (5 s build, blocks MG fire, absorbs mortar hits)">
+              <span class="cmd-key">G</span><span class="cmd-label">Sandbag</span>
+            </button>
+            <button id="mode-grenade" class="cmd-btn cmd-attack" title="Toggle grenade target tiles (grenadiers throw when in range)">
+              <span class="cmd-key">N</span><span class="cmd-label">Grenade</span>
             </button>
             <button id="cancel-task" class="cmd-btn cmd-cancel" title="Cancel the selected soldier's current task">
               <span class="cmd-key">C</span><span class="cmd-label">Cancel</span>
@@ -105,7 +111,7 @@
             <li>Soldiers move <strong>1 tile/second</strong> in straight lines.</li>
             <li>Rifles: range 5, fire while moving, 1 shot per 3s.</li>
             <li>MG: range 20, needs 2 nearby soldiers to fire bursts.</li>
-            <li>Dig only adjacent to your trench. Build only on/next to it.</li>
+            <li>Dig only adjacent to your trench. MGs build next to trench (not in trench).</li>
             <li>Eliminate the enemy or out-kill them by 10:00.</li>
           </ul>
         </div>
@@ -120,6 +126,6 @@
     </section>
   </div>
   <script>window.TOPOS_GAME_ID = "{{ game_id }}";</script>
-  <script src="/static/topowar_game.js?v=9"></script>
+  <script src="/static/topowar_game.js?v=13"></script>
 </body>
 </html>
