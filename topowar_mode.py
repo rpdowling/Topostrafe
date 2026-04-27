@@ -1432,6 +1432,7 @@ class TopowarGameState:
         self._update_mgs(dt)
         self._update_mortars(dt)
         self._update_mortar_shells(dt)
+        self._update_grenadiers(dt)
         self._update_grenade_shells(dt)
         self._update_projectiles(dt)
         self._update_effects(dt)
