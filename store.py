@@ -154,7 +154,8 @@ class GameStore:
             tick_rate=max(5, min(60, int(raw.get("tick_rate", 20)))),
             dig_seconds_per_tile=max(1.0, min(30.0, float(raw.get("dig_seconds_per_tile", 5.0)))),
             mg_build_seconds=max(5.0, min(120.0, float(raw.get("mg_build_seconds", 30.0)))),
-            match_time_seconds=max(60, min(3600, int(float(raw.get("match_minutes", 10)) * 60))),
+            match_time_seconds=max(60, min(3600, int(float(raw.get("match_minutes", 20)) * 60))),
+            build_phase_seconds=max(0, min(900, int(float(raw.get("build_phase_minutes", 3)) * 60))),
         )
 
     def _prune_expired_open_games_locked(self):
@@ -815,9 +816,34 @@ class GameStore:
         if game_mode == "topowar":
             if t == "resign":
                 return {"type": "resign"}
-            if t in {"tw_order_mode", "tw_assign_dig", "tw_assign_build_mg", "tw_toggle_operate_mg", "tw_force_fire", "tw_cancel_task", "tw_move_unit"}:
+            if t in {
+                "tw_order_mode",
+                "tw_assign_dig",
+                "tw_assign_build_mg",
+                "tw_toggle_operate_mg",
+                "tw_force_fire",
+                "tw_cancel_task",
+                "tw_move_unit",
+                "tw_assign_build_mortar",
+                "tw_fire_mortar",
+                "tw_set_mortar_target",
+                "tw_toggle_operate_mortar",
+                "tw_assign_build_sandbag",
+                "tw_set_grenade_tile",
+            }:
                 out = {"type": t}
-                for key in ("mode", "unit_ids", "unit_id", "plan", "tile", "mg_id"):
+                for key in (
+                    "mode",
+                    "unit_ids",
+                    "unit_id",
+                    "plan",
+                    "tile",
+                    "target",
+                    "target_tile",
+                    "facing",
+                    "mg_id",
+                    "mortar_id",
+                ):
                     if key in action:
                         out[key] = action[key]
                 return out
