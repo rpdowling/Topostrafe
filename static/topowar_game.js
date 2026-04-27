@@ -513,6 +513,54 @@ function drawRangeCircle(cx, cy, radius, color) {
   ctx.restore();
 }
 
+function drawBuildPhaseOverlay(data) {
+  const seat = mySeat();
+  const remaining = Math.max(0, Number(data.build_phase_remaining || 0));
+  if (seat === null || remaining <= 0) return;
+  const mid = Math.floor(data.map.height / 2);
+  const isOffLimitsY = seat === 0
+    ? (gy) => gy < mid
+    : (gy) => gy >= mid;
+
+  for (let y = 0; y < data.map.height; y++) {
+    if (!isOffLimitsY(y)) continue;
+    for (let x = 0; x < data.map.width; x++) {
+      const left = OX + x * CELL;
+      const top = tileTop(y);
+      // Fog enemy build area during build phase so structures/units are obscured.
+      ctx.fillStyle = 'rgba(32, 32, 32, 0.82)';
+      ctx.fillRect(left, top, CELL - 1, CELL - 1);
+      ctx.fillStyle = 'rgba(190, 20, 20, 0.11)';
+      ctx.fillRect(left, top, CELL - 1, CELL - 1);
+      ctx.strokeStyle = 'rgba(240, 50, 50, 0.38)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(left + 1, top + 1);
+      ctx.lineTo(left + CELL - 2, top + CELL - 2);
+      ctx.moveTo(left + CELL - 2, top + 1);
+      ctx.lineTo(left + 1, top + CELL - 2);
+      ctx.stroke();
+    }
+  }
+
+  const seconds = Math.ceil(remaining);
+  const mm = Math.floor(seconds / 60);
+  const ss = String(seconds % 60).padStart(2, '0');
+  const timerLabel = `BUILD PHASE ${mm}:${ss}`;
+  ctx.save();
+  ctx.font = 'bold 18px system-ui';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = 'rgba(30, 0, 0, 0.85)';
+  const textY = OY + 6;
+  const textX = board.width / 2;
+  const textWidth = ctx.measureText(timerLabel).width;
+  ctx.fillRect(textX - textWidth / 2 - 10, textY - 2, textWidth + 20, 24);
+  ctx.fillStyle = '#ff4a4a';
+  ctx.fillText(timerLabel, textX, textY);
+  ctx.restore();
+}
+
 function draw() {
   const data = tw();
   if (!data) return;
@@ -1166,6 +1214,9 @@ function draw() {
     ctx.lineWidth = 1;
     ctx.globalAlpha = 1;
   }
+
+  // Draw build-phase fog/hatching late so enemy-side units/structures are obscured.
+  drawBuildPhaseOverlay(data);
 
   // Game-over overlay
   if (state && state.winner !== null && state.winner !== undefined) {
