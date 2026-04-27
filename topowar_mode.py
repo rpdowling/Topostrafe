@@ -903,27 +903,21 @@ class TopowarGameState:
             s = self.soldiers.get(sid)
             if not s or s.owner != owner or s.hp <= 0:
                 raise ValueError("Invalid soldier.")
-            plan = [tuple(map(int, c)) for c in action.get("plan", [])]
-            if not plan:
-                raise ValueError("No wire plan.")
-            occupied = self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set() | self._wire_structure_tile_set()
-            for p in plan:
-                if not self.map.in_bounds(p):
-                    raise ValueError("Wire target out of bounds.")
-                if p in self.map.trenches:
-                    raise ValueError("Cannot place wire in a trench.")
-                if p in occupied:
-                    raise ValueError("Tile already occupied.")
-            wire_ids = []
-            for p in plan:
-                wid = self.next_structure_id
-                self.next_structure_id += 1
-                self.barbed_wire[wid] = BarbedWire(wid, owner, p)
-                wire_ids.append(wid)
-            occ = set(self._occupied_tiles().keys()) - {s.tile}
-            s.current_task = {"type": "build_wire", "wire_ids": wire_ids, "current_idx": 0, "progress": 0.0}
-            s.path = self.path.find_path(s.tile, tuple(plan[0]), trench_only=False, blocked=occ)
-            return "Wire placement assigned."
+            tile = tuple(map(int, action.get("tile", [])))
+            if len(tile) != 2 or not self.map.in_bounds(tile):
+                raise ValueError("Invalid wire tile.")
+            if max(abs(tile[0] - s.tile[0]), abs(tile[1] - s.tile[1])) != 1:
+                raise ValueError("Wire must be placed on a tile adjacent to the soldier.")
+            if tile in self.map.trenches:
+                raise ValueError("Cannot place wire in a trench.")
+            occupied = self._structure_tile_set() | self._wire_structure_tile_set()
+            if tile in occupied:
+                raise ValueError("Tile already occupied.")
+            wid = self.next_structure_id
+            self.next_structure_id += 1
+            self.barbed_wire[wid] = BarbedWire(wid, owner, tile)
+            s.current_task = {"type": "build_wire", "wire_id": wid, "progress": 0.0}
+            return "Wire placement started."
         if t == "tw_move_unit":
             sid = int(action.get("unit_id", -1))
             s = self.soldiers.get(sid)
@@ -1163,28 +1157,14 @@ class TopowarGameState:
                     sb.built = True
                     s.current_task = None
             elif task["type"] == "build_wire":
-                wire_ids = task.get("wire_ids", [])
-                idx = task.get("current_idx", 0)
-                if idx >= len(wire_ids):
-                    s.current_task = None
-                    continue
-                wid = wire_ids[idx]
-                w = self.barbed_wire.get(wid)
+                w = self.barbed_wire.get(task.get("wire_id"))
                 if not w or w.hp <= 0 or w.built:
-                    task["current_idx"] = idx + 1
-                    task["progress"] = 0.0
-                    s.path = []
-                    continue
-                if s.tile != w.tile:
-                    if not s.path or s.path[-1] != w.tile:
-                        s.path = self.path.find_path(s.tile, w.tile, trench_only=False, blocked=blocked_keys - {s.tile, w.tile})
+                    s.current_task = None
                     continue
                 task["progress"] = task.get("progress", 0.0) + dt
                 if task["progress"] >= w.build_required:
                     w.built = True
-                    task["current_idx"] = idx + 1
-                    task["progress"] = 0.0
-                    s.path = []
+                    s.current_task = None
 
     def _update_mortar_construction(self, dt: float):
         """Advance all unfinished mortars when at least two adjacent friendly soldiers are present.
@@ -1596,7 +1576,7 @@ class TopowarGameState:
                     continue
             task = None
             if s.current_task:
-                task = {k: v for k, v in s.current_task.items() if k not in ("plan", "component", "wire_ids")}
+                task = {k: v for k, v in s.current_task.items() if k not in ("plan", "component")}
                 if "plan" in s.current_task:
                     task["plan"] = [list(p) for p in s.current_task["plan"]]
             soldiers.append({

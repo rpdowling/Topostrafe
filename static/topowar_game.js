@@ -19,7 +19,6 @@ let pendingMortarTile = null;
 let pendingMortarTarget = null;
 let pendingMortarDispatch = false;
 let attackTargetTile = null;
-let wirePlan = [];
 let mouseCanvas = { x: 0, y: 0 };
 
 const CELL = 24;
@@ -126,7 +125,6 @@ function setMode(m) {
   if (mode === m) {
     mode = 'select';
     plan = [];
-    wirePlan = [];
     pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false;
     pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false;
     attackTargetTile = null;
@@ -134,11 +132,10 @@ function setMode(m) {
   } else {
     mode = m;
     if (m !== 'plan') plan = [];
-    if (m !== 'wire') wirePlan = [];
     if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false; }
     if (m !== 'mortar') { pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false; }
     if (m !== 'attack') attackTargetTile = null;
-    if (m === 'build' || m === 'mortar' || m === 'sandbag') selectedUnits = new Set();
+    if (m === 'build' || m === 'mortar' || m === 'sandbag' || m === 'wire') selectedUnits = new Set();
   }
   updateModeButtons();
   updateModeLabel();
@@ -467,17 +464,23 @@ board.addEventListener('click', (evt) => {
 
   } else if (mode === 'wire') {
     if (myS.length) {
-      const uid = myS[0].unit_id;
-      selectedUnits = new Set([uid]);
-      if (wirePlan.length) {
-        send({ type: 'tw_assign_wire', unit_id: uid, plan: wirePlan.map(t => [...t]) });
-        wirePlan = [];
-        setStatus('Wire placement assigned.');
-      }
+      selectedUnits = new Set([myS[0].unit_id]);
     } else {
-      const idx = wirePlan.findIndex(t => t[0] === tile[0] && t[1] === tile[1]);
-      if (idx >= 0) wirePlan.splice(idx, 1);
-      else wirePlan.push(tile);
+      const uid = firstSelected();
+      if (uid !== null) {
+        const sol = (tw().soldiers || []).find(s => s.unit_id === uid);
+        if (sol) {
+          const dx = Math.abs(tile[0] - sol.tile[0]);
+          const dy = Math.abs(tile[1] - sol.tile[1]);
+          const trenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
+          const wireSet = new Set((tw().barbed_wire || []).filter(w => w.hp > 0).map(w => `${w.tile[0]},${w.tile[1]}`));
+          if (Math.max(dx, dy) === 1 && !trenchSet.has(`${tile[0]},${tile[1]}`) && !wireSet.has(`${tile[0]},${tile[1]}`)) {
+            send({ type: 'tw_assign_wire', unit_id: uid, tile });
+          } else {
+            setStatus('Wire must be placed on an open adjacent tile.', true);
+          }
+        }
+      }
     }
 
   }
@@ -955,16 +958,31 @@ function draw() {
     ctx.restore();
   }
 
-  // Wire plan overlay (wire mode)
-  for (const wt of wirePlan) {
-    const [wx, wy] = wt;
-    ctx.fillStyle = 'rgba(120,120,120,0.25)';
-    ctx.fillRect(OX + wx * CELL, tileTop(wy), CELL - 1, CELL - 1);
-    ctx.strokeStyle = 'rgba(160,160,160,0.8)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3, 2]);
-    ctx.strokeRect(OX + wx * CELL + 1, tileTop(wy) + 1, CELL - 3, CELL - 3);
-    ctx.setLineDash([]);
+  // Wire mode: highlight valid adjacent tiles for selected soldier
+  if (mode === 'wire') {
+    const selW = getSelectedSoldier();
+    if (selW) {
+      const trenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
+      const blockedSet = new Set([
+        ...(tw().barbed_wire || []).filter(w => w.hp > 0).map(w => `${w.tile[0]},${w.tile[1]}`),
+        ...(tw().sandbags || []).filter(s => s.hp > 0).map(s => `${s.tile[0]},${s.tile[1]}`),
+        ...(tw().machine_guns || []).filter(m => m.hp > 0).map(m => `${m.tile[0]},${m.tile[1]}`),
+        ...(tw().mortars || []).filter(m => m.hp > 0).map(m => `${m.tile[0]},${m.tile[1]}`),
+      ]);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          if (dx === 0 && dy === 0) continue;
+          const ax = selW.tile[0] + dx, ay = selW.tile[1] + dy;
+          if (ax < 0 || ay < 0 || ax >= tw().map.width || ay >= tw().map.height) continue;
+          if (trenchSet.has(`${ax},${ay}`) || blockedSet.has(`${ax},${ay}`)) continue;
+          ctx.fillStyle = 'rgba(100,100,100,0.28)';
+          ctx.fillRect(OX + ax * CELL, tileTop(ay), CELL - 1, CELL - 1);
+          ctx.strokeStyle = 'rgba(160,160,160,0.7)';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(OX + ax * CELL + 0.5, tileTop(ay) + 0.5, CELL - 2, CELL - 2);
+        }
+      }
+    }
   }
 
   // Soldiers
@@ -1405,8 +1423,8 @@ function render() {
   } else if (mode === 'grenade') {
     setStatus('Grenade — click tiles to toggle grenade targets (range 7 from grenadiers).');
   } else if (mode === 'wire') {
-    if (!wirePlan.length) setStatus('Wire — click open ground tiles to plan wire, then click a soldier to assign.');
-    else setStatus(`Wire — ${wirePlan.length} tile${wirePlan.length > 1 ? 's' : ''} planned. Click a soldier to assign or keep adding tiles.`);
+    if (!selectedUnits.size) setStatus('Wire — click a soldier, then click an adjacent open tile to place wire.');
+    else setStatus('Wire — click an adjacent open tile to place wire (2 s build).');
   } else {
     const bpr = tw()?.build_phase_remaining || 0;
     if (bpr > 0) setStatus(`Build phase: ${Math.ceil(bpr)}s (no firing / no crossing midline).`);
