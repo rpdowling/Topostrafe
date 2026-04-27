@@ -815,21 +815,17 @@ class TopowarGameState:
             tile = tuple(map(int, action.get("tile", [])))
             if len(tile) != 2 or not self.map.in_bounds(tile):
                 raise ValueError("Invalid sandbag tile.")
+            if max(abs(tile[0] - s.tile[0]), abs(tile[1] - s.tile[1])) != 1:
+                raise ValueError("Sandbag must be placed in a tile adjacent to the soldier.")
             if tile in self.map.trenches:
                 raise ValueError("Sandbags can only be built on open ground.")
             if tile in self._structure_tile_set():
-                raise ValueError("Tile already occupied by structure.")
+                raise ValueError("Tile already occupied by a structure.")
             mid = self.next_structure_id
             self.next_structure_id += 1
             sb = Sandbag(mid, owner, tile, build_required=5.0, base_ground_is_trench=False)
             self.sandbags[mid] = sb
-            occ = set(self._occupied_tiles().keys()) | self._mg_tile_set() | self._mortar_tile_set()
-            s.current_task = {"type": "build_sandbag", "sandbag_id": mid, "build_tile": list(tile)}
-            s.path = self.path.find_path(s.tile, tile, trench_only=False, blocked=occ - {s.tile})
-            if not s.path:
-                del self.sandbags[mid]
-                s.current_task = None
-                raise ValueError("Selected soldier cannot reach sandbag tile.")
+            s.current_task = {"type": "build_sandbag", "sandbag_id": mid}
             return "Sandbag construction started."
         if t == "tw_move_unit":
             sid = int(action.get("unit_id", -1))
@@ -1082,13 +1078,11 @@ class TopowarGameState:
                 if not sb or sb.hp <= 0 or sb.built:
                     s.current_task = None
                     continue
-                build_tile = tuple(task.get("build_tile", s.tile))
-                if s.tile != build_tile:
-                    s.path = self.path.find_path(s.tile, build_tile, trench_only=False, blocked=blocked_keys - {s.tile})
-                else:
-                    sb.build_progress += dt
-                    if sb.build_progress >= sb.build_required:
-                        sb.built = True
+                # Soldier stays in place and builds from current position.
+                sb.build_progress += dt
+                if sb.build_progress >= sb.build_required:
+                    sb.built = True
+                    s.current_task = None
 
     def _update_mgs(self, dt: float):
         for mg in self.mgs.values():
