@@ -1406,6 +1406,8 @@ class TopowarGameState:
         for mortar in self.mortars.values():
             if mortar.hp <= 0:
                 continue
+            if viewer is not None and mortar.owner != viewer and mortar.tile in self.map.trenches:
+                continue
             mortars_out.append({
                 "structure_id": mortar.structure_id,
                 "owner": mortar.owner,
