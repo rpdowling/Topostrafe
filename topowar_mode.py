@@ -23,7 +23,8 @@ class RulesConfig:
     tick_rate: int = 20
     dig_seconds_per_tile: float = 5.0
     mg_build_seconds: float = 30.0
-    match_time_seconds: int = 600
+    match_time_seconds: int = 1200
+    build_phase_seconds: int = 180
     # Soldiers move discretely: one tile per (1 / soldier_move_speed) seconds.
     soldier_move_speed: float = 1.0
     projectile_speed: float = 8.0
@@ -77,6 +78,9 @@ class Soldier(Unit):
     move_cooldown: float = 0.0
     name: str = ""
     combat_halt: bool = False
+    is_grenadier: bool = False
+    grenade_target: tuple[int, int] | None = None
+    grenade_windup: float = 0.0
 
 
 @dataclass
@@ -147,6 +151,17 @@ class MortarShell:
     y: float
     sx: float   # start x (for arc progress)
     sy: float   # start y
+    target: tuple[int, int]
+    speed: float = 5.0
+
+
+@dataclass
+class GrenadeShell:
+    owner: int
+    x: float
+    y: float
+    sx: float
+    sy: float
     target: tuple[int, int]
     speed: float = 5.0
 
@@ -230,10 +245,12 @@ class TopowarGameState:
         self.mortars: dict[int, Mortar] = {}
         self.sandbags: dict[int, Sandbag] = {}
         self.mortar_shells: list[MortarShell] = []
+        self.grenade_shells: list[GrenadeShell] = []
         self.projectiles: list[Projectile] = []
         self.explosions: list[Explosion] = []
         self.death_marks: list[DeathMark] = []
         self.last_tick_monotonic = 0.0
+        self.grenade_tiles: dict[int, set[tuple[int, int]]] = {0: set(), 1: set()}
         self._name_pool: list[str] = []
         self.next_recruit_time: dict[int, float] = {0: 180.0, 1: 180.0}
         self._setup()
@@ -249,17 +266,17 @@ class TopowarGameState:
         for x in range(x0, x0 + length):
             self.map.trenches.add((x, y_red))
             self.map.trenches.add((x, y_blue))
-        for i in range(5):
-            rx = x0 + i * 2
-            bx = x0 + i * 2
-            self._spawn_soldier(0, (rx, y_red))
-            self._spawn_soldier(1, (bx, y_blue))
+        for i in range(7):
+            rx = x0 + i
+            bx = x0 + i
+            self._spawn_soldier(0, (rx, y_red), is_grenadier=(i < 2))
+            self._spawn_soldier(1, (bx, y_blue), is_grenadier=(i < 2))
 
-    def _spawn_soldier(self, owner: int, tile: tuple[int, int]):
+    def _spawn_soldier(self, owner: int, tile: tuple[int, int], is_grenadier: bool = False):
         sid = self.next_unit_id
         self.next_unit_id += 1
         name = self._name_pool.pop(0) if self._name_pool else f"Pvt.{sid}"
-        self.soldiers[sid] = Soldier(sid, owner, float(tile[0]), float(tile[1]), name=name)
+        self.soldiers[sid] = Soldier(sid, owner, float(tile[0]), float(tile[1]), name=name, is_grenadier=is_grenadier)
 
     def _spawn_recruit(self, owner: int):
         """Spawn a new soldier on the back row. Weighted toward the middle 10 columns."""
@@ -278,7 +295,8 @@ class TopowarGameState:
                 cx = (base_x + sign * delta) % self.map.width
                 tile = (cx, back_y)
                 if tile not in occ and self.map.in_bounds(tile):
-                    self._spawn_soldier(owner, tile)
+                    live_grenadiers = sum(1 for s in self.soldiers.values() if s.owner == owner and s.hp > 0 and s.is_grenadier)
+                    self._spawn_soldier(owner, tile, is_grenadier=(live_grenadiers < 2))
                     return
 
     def _try_spawn_recruits(self):
@@ -456,6 +474,10 @@ class TopowarGameState:
     def _friendly_trench_tiles(self, owner: int) -> list[tuple[int, int]]:
         mid = self.map.height // 2
         return [p for p in self.map.trenches if (owner == 0 and p[1] >= mid) or (owner == 1 and p[1] < mid)]
+
+    def _on_owner_side(self, owner: int, tile: tuple[int, int]) -> bool:
+        mid = self.map.height // 2
+        return tile[1] >= mid if owner == 0 else tile[1] < mid
 
     def _has_los_through_trenches(self, a: tuple[int, int], b: tuple[int, int]) -> bool:
         """Bresenham line-of-sight between two trench tiles.
@@ -756,6 +778,8 @@ class TopowarGameState:
                 s.path = path
             return "Mortar construction started."
         if t == "tw_fire_mortar":
+            if self.time_elapsed < self.rules.build_phase_seconds:
+                raise ValueError("Cannot fire during build phase.")
             mid = int(action.get("mortar_id", -1))
             mortar = self.mortars.get(mid)
             if not mortar or mortar.owner != owner:
@@ -863,7 +887,7 @@ class TopowarGameState:
 
     def _move_soldier(self, s: Soldier, dt: float):
         # Sentry soldiers and combat-halted soldiers hold position.
-        if s.sentry or s.combat_halt:
+        if s.sentry or s.combat_halt or s.grenade_windup > 0:
             s.move_cooldown = 0.0
             return
         # Drop any path step that points to the tile we're already on.
@@ -875,6 +899,10 @@ class TopowarGameState:
             s.move_cooldown = 0.0
             return
         target = s.path[0]
+        if self.time_elapsed < self.rules.build_phase_seconds and not self._on_owner_side(s.owner, target):
+            s.path = []
+            s.move_cooldown = 0.0
+            return
         # Reject non-rectilinear / non-adjacent steps (defensive guard).
         if abs(target[0] - s.tile[0]) + abs(target[1] - s.tile[1]) != 1:
             s.path = []
@@ -901,6 +929,8 @@ class TopowarGameState:
             s.move_cooldown = 0.0
 
     def _rifle_combat(self, dt: float):
+        if self.time_elapsed < self.rules.build_phase_seconds:
+            return
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
@@ -1072,6 +1102,8 @@ class TopowarGameState:
                     s.current_task = None
 
     def _update_mgs(self, dt: float):
+        if self.time_elapsed < self.rules.build_phase_seconds:
+            return
         for mg in self.mgs.values():
             if mg.hp <= 0 or not mg.built:
                 continue
@@ -1243,8 +1275,73 @@ class TopowarGameState:
             else:
                 shell.x += dx / dist * step
                 shell.y += dy / dist * step
-                remaining.append(shell)
+            remaining.append(shell)
         self.mortar_shells = remaining
+
+    def _grenade_impact(self, landing: tuple[int, int], owner: int):
+        target_in_trench = landing in self.map.trenches
+        kill_radius = 3.0
+        for s in self.soldiers.values():
+            if s.hp <= 0 or s.owner == owner:
+                continue
+            if math.dist(s.tile, landing) > kill_radius:
+                continue
+            s_in_trench = s.tile in self.map.trenches
+            if target_in_trench:
+                if s_in_trench:
+                    if self._has_los_through_trenches(landing, s.tile):
+                        self._register_kill(s, owner)
+                else:
+                    self._register_kill(s, owner)
+            else:
+                if not s_in_trench and not self._has_sandbag_cover_between(landing, s.tile):
+                    self._register_kill(s, owner)
+        self.explosions.append(Explosion(float(landing[0]), float(landing[1])))
+
+    def _update_grenade_shells(self, dt: float):
+        remaining: list[GrenadeShell] = []
+        for shell in self.grenade_shells:
+            tx, ty = shell.target
+            vx, vy = tx - shell.x, ty - shell.y
+            dist = math.hypot(vx, vy)
+            if dist <= 0.05:
+                self._grenade_impact(shell.target, shell.owner)
+                self.grenade_tiles[shell.owner].discard(shell.target)
+                continue
+            step = min(dist, shell.speed * dt)
+            shell.x += vx / dist * step
+            shell.y += vy / dist * step
+            remaining.append(shell)
+        self.grenade_shells = remaining
+
+    def _update_grenadiers(self, dt: float):
+        if self.time_elapsed < self.rules.build_phase_seconds:
+            return
+        for s in self.soldiers.values():
+            if s.hp <= 0 or not s.is_grenadier:
+                continue
+            targets = [t for t in self.grenade_tiles.get(s.owner, set()) if math.dist(s.tile, t) <= 7.0]
+            if not targets:
+                s.grenade_target = None
+                s.grenade_windup = 0.0
+                continue
+            target = min(targets, key=lambda t: math.dist(s.tile, t))
+            if s.grenade_target != target:
+                s.grenade_target = target
+                s.grenade_windup = 2.0
+            else:
+                s.grenade_windup = max(0.0, s.grenade_windup - dt)
+            s.path = []
+            if s.grenade_windup <= 0 and s.grenade_target:
+                tgt = s.grenade_target
+                self.grenade_shells.append(GrenadeShell(
+                    s.owner,
+                    float(s.tile[0]), float(s.tile[1]),
+                    float(s.tile[0]), float(s.tile[1]),
+                    tgt,
+                ))
+                s.grenade_target = None
+                s.grenade_windup = 0.0
 
     def _update_effects(self, dt: float):
         for e in self.explosions:
@@ -1323,6 +1420,7 @@ class TopowarGameState:
         self._update_mgs(dt)
         self._update_mortars(dt)
         self._update_mortar_shells(dt)
+        self._update_grenade_shells(dt)
         self._update_projectiles(dt)
         self._update_effects(dt)
         alive0 = sum(1 for s in self.soldiers.values() if s.owner == 0 and s.hp > 0)
@@ -1382,6 +1480,7 @@ class TopowarGameState:
                 "rifle_cooldown": s.rifle_cooldown,
                 "name": s.name,
                 "combat_halt": s.combat_halt,
+                "is_grenadier": s.is_grenadier,
             })
         mgs = []
         for mg in self.mgs.values():
@@ -1439,6 +1538,7 @@ class TopowarGameState:
             })
         return {
             "rules": self.rules.__dict__.copy(),
+            "build_phase_remaining": max(0.0, self.rules.build_phase_seconds - self.time_elapsed),
             "map": {
                 "width": self.map.width,
                 "height": self.map.height,
@@ -1450,6 +1550,7 @@ class TopowarGameState:
             "mortars": mortars_out,
             "sandbags": sandbags_out,
             "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "owner": ms.owner} for ms in self.mortar_shells],
+            "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
             "projectiles": [{"x": p.x, "y": p.y, "owner": p.owner, "source": p.source} for p in self.projectiles],
             "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration} for e in self.explosions],
             "death_marks": [{"x": dm.x, "y": dm.y, "age": dm.age, "duration": dm.duration} for dm in self.death_marks],

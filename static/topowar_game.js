@@ -1091,6 +1091,15 @@ function draw() {
     ctx.globalAlpha = 1;
   }
 
+  // Grenade shells
+  for (const gs of data.grenade_shells || []) {
+    const gx = cpx(gs.x), gy = cpy(gs.y);
+    ctx.fillStyle = '#9ad26d';
+    ctx.beginPath();
+    ctx.arc(gx, gy, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   // Projectiles
   for (const p of data.projectiles || []) {
     const pcx = cpx(p.x);
@@ -1247,7 +1256,9 @@ function render() {
     if (!selectedUnits.size) setStatus('Sandbag — click a soldier, then click an adjacent open tile.');
     else setStatus('Sandbag — click an adjacent open tile to build.');
   } else {
-    setStatus('Active.');
+    const bpr = tw()?.build_phase_remaining || 0;
+    if (bpr > 0) setStatus(`Build phase: ${Math.ceil(bpr)}s (no firing / no crossing midline).`);
+    else setStatus('Active.');
   }
 
   const shareEl = el('share-line');
