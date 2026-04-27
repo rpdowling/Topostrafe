@@ -951,6 +951,10 @@ class TopowarGameState:
             s = self.soldiers.get(sid)
             if not s or s.owner != owner or s.hp <= 0:
                 raise ValueError("Invalid soldier.")
+            if s.current_task and s.current_task.get("type") == "build_wire":
+                in_progress = self.barbed_wire.get(s.current_task.get("wire_id"))
+                if in_progress and in_progress.hp > 0 and not in_progress.built:
+                    raise ValueError("Soldier must finish the current wire before starting another.")
             tile = tuple(map(int, action.get("tile", [])))
             if len(tile) != 2 or not self.map.in_bounds(tile):
                 raise ValueError("Invalid wire tile.")
@@ -986,6 +990,36 @@ class TopowarGameState:
             s = self.soldiers.get(int(action.get("unit_id", -1)))
             if not s or s.owner != owner:
                 raise ValueError("Invalid soldier.")
+            task = s.current_task or {}
+            tt = task.get("type")
+            if tt == "build_mg":
+                mid = int(task.get("mg_id", -1))
+                mg = self.mgs.get(mid)
+                if mg and mg.hp > 0 and not mg.built:
+                    del self.mgs[mid]
+                    for u in self.soldiers.values():
+                        if u.current_task and u.current_task.get("type") == "build_mg" and int(u.current_task.get("mg_id", -1)) == mid:
+                            u.current_task = None
+                            u.path = []
+            elif tt == "build_mortar":
+                mid = int(task.get("mortar_id", -1))
+                mortar = self.mortars.get(mid)
+                if mortar and mortar.hp > 0 and not mortar.built:
+                    del self.mortars[mid]
+                    for u in self.soldiers.values():
+                        if u.current_task and u.current_task.get("type") == "build_mortar" and int(u.current_task.get("mortar_id", -1)) == mid:
+                            u.current_task = None
+                            u.path = []
+            elif tt == "build_sandbag":
+                sid = int(task.get("sandbag_id", -1))
+                sb = self.sandbags.get(sid)
+                if sb and sb.hp > 0 and not sb.built:
+                    del self.sandbags[sid]
+            elif tt == "build_wire":
+                wid = int(task.get("wire_id", -1))
+                w = self.barbed_wire.get(wid)
+                if w and w.hp > 0 and not w.built:
+                    del self.barbed_wire[wid]
             s.current_task = None
             s.path = []
             s.blocked = False
