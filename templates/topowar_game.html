@@ -81,6 +81,9 @@
             <button id="mode-wire" class="cmd-btn cmd-dig" title="Plan and place barbed wire on open ground (2 s/tile). Blocks movement; destroyed by mortar (5-tile) or grenade (1-tile).">
               <span class="cmd-key">W</span><span class="cmd-label">Wire</span>
             </button>
+            <button id="mode-flare" class="cmd-btn cmd-sentry" title="Fire a flare to illuminate an area for both sides (5 per game). Scatter increases with distance.">
+              <span class="cmd-key">F</span><span class="cmd-label">Flare</span>
+            </button>
             <button id="cancel-task" class="cmd-btn cmd-cancel" title="Cancel the selected soldier's current task">
               <span class="cmd-key">C</span><span class="cmd-label">Cancel</span>
             </button>
@@ -91,6 +94,20 @@
           <h2 class="section-title">Selection</h2>
           <div id="selection-panel" class="selection-panel">
             <div class="muted">Nothing selected.</div>
+          </div>
+        </div>
+
+        <div>
+          <h2 class="section-title">Flares</h2>
+          <div class="recruit-timers">
+            <div class="recruit-row recruit-row-red">
+              <span class="recruit-dot" style="background:#e83030"></span>
+              Red flares: <strong id="flares0">5</strong>
+            </div>
+            <div class="recruit-row recruit-row-blue">
+              <span class="recruit-dot" style="background:#3d6cdf"></span>
+              Blue flares: <strong id="flares1">5</strong>
+            </div>
           </div>
         </div>
 
@@ -129,6 +146,6 @@
     </section>
   </div>
   <script>window.TOPOS_GAME_ID = "{{ game_id }}";</script>
-  <script src="/static/topowar_game.js?v=17"></script>
+  <script src="/static/topowar_game.js?v=18"></script>
 </body>
 </html>
