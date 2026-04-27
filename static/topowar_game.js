@@ -25,6 +25,7 @@ const CELL = 24;
 const OX = 20;
 const OY = 20;
 const RIFLE_RANGE = 5;
+const GRENADIER_RANGE = 7;
 const MG_RANGE = 20;
 
 function el(id) { return document.getElementById(id); }
@@ -113,7 +114,7 @@ function getSelectedMortar() {
 // === MODE MANAGEMENT ===
 
 function updateModeButtons() {
-  const modes = ['select','attack','sentry','defend','dig','plan','build','operate','mortar','sandbag'];
+  const modes = ['select','attack','sentry','defend','dig','plan','build','operate','mortar','grenade','sandbag'];
   for (const m of modes) {
     const btn = el('mode-' + m);
     if (btn) btn.classList.toggle('active', mode === m);
@@ -144,7 +145,7 @@ function setMode(m) {
 function updateModeLabel() {
   const labels = {
     select: 'Select', attack: 'Attack', sentry: 'Sentry', defend: 'Defend',
-    dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew', mortar: 'Build Mortar', sandbag: 'Build Sandbag',
+    dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew', mortar: 'Build Mortar', grenade: 'Grenade', sandbag: 'Build Sandbag',
   };
   const e = el('mode-line');
   if (e) e.textContent = labels[mode] || 'Select';
@@ -245,7 +246,7 @@ document.addEventListener('keydown', (evt) => {
     return;
   }
 
-  const shortcutMap = { '1':'select','2':'attack','3':'sentry','4':'defend','D':'dig','P':'plan','B':'build','O':'operate','M':'mortar','G':'sandbag' };
+  const shortcutMap = { '1':'select','2':'attack','3':'sentry','4':'defend','D':'dig','P':'plan','B':'build','O':'operate','M':'mortar','N':'grenade','G':'sandbag' };
   if (shortcutMap[key]) {
     evt.preventDefault();
     if (['2','3','4'].includes(key) && mode === shortcutMap[key] && selectedUnits.size) {
@@ -457,6 +458,10 @@ board.addEventListener('click', (evt) => {
       }
     }
 
+  } else if (mode === 'grenade') {
+    send({ type: 'tw_set_grenade_tile', tile });
+    setStatus('Grenade target updated.');
+
   }
 
   render();
@@ -633,7 +638,11 @@ function draw() {
 
   // Range circle for selected soldier
   const selSoldier = getSelectedSoldier();
-  if (selSoldier) drawRangeCircle(cpx(selSoldier.x), cpy(selSoldier.y), RIFLE_RANGE * CELL, 'rgba(255,180,50,0.8)');
+  if (selSoldier) {
+    const grenRange = tw()?.rules?.grenade_range ?? GRENADIER_RANGE;
+    const effectiveRange = selSoldier.is_grenadier ? grenRange : RIFLE_RANGE;
+    drawRangeCircle(cpx(selSoldier.x), cpy(selSoldier.y), effectiveRange * CELL, 'rgba(255,180,50,0.8)');
+  }
 
   // Build mode: pending MG arc preview (before MG sprites so it renders underneath)
   if (mode === 'build' && pendingBuildTile) {
@@ -1101,6 +1110,18 @@ function draw() {
     ctx.fill();
   }
 
+  // Planned grenade targets
+  for (const gt of data.grenade_targets || []) {
+    const [gx, gy] = gt;
+    const gty = tileTop(gy);
+    ctx.strokeStyle = 'rgba(154,210,109,0.95)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([3, 2]);
+    ctx.strokeRect(OX + gx * CELL + 2, gty + 2, CELL - 4, CELL - 4);
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1;
+  }
+
   // Projectiles
   for (const p of data.projectiles || []) {
     const pcx = cpx(p.x);
@@ -1257,6 +1278,8 @@ function render() {
   } else if (mode === 'sandbag') {
     if (!selectedUnits.size) setStatus('Sandbag — click a soldier, then click an adjacent open tile.');
     else setStatus('Sandbag — click an adjacent open tile to build.');
+  } else if (mode === 'grenade') {
+    setStatus('Grenade — click tiles to toggle grenade targets (range 7 from grenadiers).');
   } else {
     const bpr = tw()?.build_phase_remaining || 0;
     if (bpr > 0) setStatus(`Build phase: ${Math.ceil(bpr)}s (no firing / no crossing midline).`);
@@ -1301,7 +1324,7 @@ function render() {
 
 [
   ['mode-select','select'], ['mode-attack','attack'], ['mode-sentry','sentry'], ['mode-defend','defend'],
-  ['mode-dig','dig'], ['mode-plan','plan'], ['mode-build','build'], ['mode-operate','operate'], ['mode-mortar','mortar'], ['mode-sandbag','sandbag'],
+  ['mode-dig','dig'], ['mode-plan','plan'], ['mode-build','build'], ['mode-operate','operate'], ['mode-mortar','mortar'], ['mode-grenade','grenade'], ['mode-sandbag','sandbag'],
 ].forEach(([id, m]) => {
   const btn = el(id);
   if (btn) btn.addEventListener('click', (evt) => { evt.stopPropagation(); setMode(m); render(); });
