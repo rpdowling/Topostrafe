@@ -23,7 +23,8 @@ class RulesConfig:
     tick_rate: int = 20
     dig_seconds_per_tile: float = 5.0
     mg_build_seconds: float = 30.0
-    match_time_seconds: int = 600
+    match_time_seconds: int = 1200
+    build_phase_seconds: int = 180
     # Soldiers move discretely: one tile per (1 / soldier_move_speed) seconds.
     soldier_move_speed: float = 1.0
     projectile_speed: float = 8.0
@@ -77,6 +78,9 @@ class Soldier(Unit):
     move_cooldown: float = 0.0
     name: str = ""
     combat_halt: bool = False
+    is_grenadier: bool = False
+    grenade_target: tuple[int, int] | None = None
+    grenade_windup: float = 0.0
 
 
 @dataclass
@@ -99,8 +103,10 @@ class MachineGun(Structure):
     burst_shot_cooldown: float = 0.0  # inter-shot delay within a burst
     operators: set[int] = field(default_factory=set)
     facing: float = 0.0        # current barrel angle in degrees (0=east, 90=south, clockwise)
-    arc_half: float = 45.0     # degrees either side of facing within which MG can fire
+    arc_center: float = 0.0    # fixed center angle chosen when the MG is placed
+    arc_half: float = 45.0     # degrees either side of arc_center within which MG can fire/swivel
     swivel_speed: float = 15.0 # degrees per second the barrel can rotate
+    base_ground_is_trench: bool = False
 
 
 @dataclass
@@ -124,8 +130,18 @@ class Mortar(Structure):
     target: tuple[int, int] | None = None
     ready: bool = False        # True when primed and crew can fire
     cooldown: float = 0.0      # shared reload / retarget cooldown (seconds remaining)
-    auto_fire: bool = False
     operators: set[int] = field(default_factory=set)
+    base_ground_is_trench: bool = False
+    operable: bool = True
+
+
+@dataclass
+class Sandbag(Structure):
+    hp: int = 3
+    built: bool = False
+    build_progress: float = 0.0
+    build_required: float = 5.0
+    base_ground_is_trench: bool = False
 
 
 @dataclass
@@ -135,6 +151,17 @@ class MortarShell:
     y: float
     sx: float   # start x (for arc progress)
     sy: float   # start y
+    target: tuple[int, int]
+    speed: float = 5.0
+
+
+@dataclass
+class GrenadeShell:
+    owner: int
+    x: float
+    y: float
+    sx: float
+    sy: float
     target: tuple[int, int]
     speed: float = 5.0
 
@@ -216,11 +243,14 @@ class TopowarGameState:
         self.soldiers: dict[int, Soldier] = {}
         self.mgs: dict[int, MachineGun] = {}
         self.mortars: dict[int, Mortar] = {}
+        self.sandbags: dict[int, Sandbag] = {}
         self.mortar_shells: list[MortarShell] = []
+        self.grenade_shells: list[GrenadeShell] = []
         self.projectiles: list[Projectile] = []
         self.explosions: list[Explosion] = []
         self.death_marks: list[DeathMark] = []
         self.last_tick_monotonic = 0.0
+        self.grenade_tiles: dict[int, set[tuple[int, int]]] = {0: set(), 1: set()}
         self._name_pool: list[str] = []
         self.next_recruit_time: dict[int, float] = {0: 180.0, 1: 180.0}
         self._setup()
@@ -236,17 +266,17 @@ class TopowarGameState:
         for x in range(x0, x0 + length):
             self.map.trenches.add((x, y_red))
             self.map.trenches.add((x, y_blue))
-        for i in range(5):
-            rx = x0 + i * 2
-            bx = x0 + i * 2
-            self._spawn_soldier(0, (rx, y_red))
-            self._spawn_soldier(1, (bx, y_blue))
+        for i in range(7):
+            rx = x0 + i
+            bx = x0 + i
+            self._spawn_soldier(0, (rx, y_red), is_grenadier=(i < 2))
+            self._spawn_soldier(1, (bx, y_blue), is_grenadier=(i < 2))
 
-    def _spawn_soldier(self, owner: int, tile: tuple[int, int]):
+    def _spawn_soldier(self, owner: int, tile: tuple[int, int], is_grenadier: bool = False):
         sid = self.next_unit_id
         self.next_unit_id += 1
         name = self._name_pool.pop(0) if self._name_pool else f"Pvt.{sid}"
-        self.soldiers[sid] = Soldier(sid, owner, float(tile[0]), float(tile[1]), name=name)
+        self.soldiers[sid] = Soldier(sid, owner, float(tile[0]), float(tile[1]), name=name, is_grenadier=is_grenadier)
 
     def _spawn_recruit(self, owner: int):
         """Spawn a new soldier on the back row. Weighted toward the middle 10 columns."""
@@ -265,7 +295,8 @@ class TopowarGameState:
                 cx = (base_x + sign * delta) % self.map.width
                 tile = (cx, back_y)
                 if tile not in occ and self.map.in_bounds(tile):
-                    self._spawn_soldier(owner, tile)
+                    live_grenadiers = sum(1 for s in self.soldiers.values() if s.owner == owner and s.hp > 0 and s.is_grenadier)
+                    self._spawn_soldier(owner, tile, is_grenadier=(live_grenadiers < 2))
                     return
 
     def _try_spawn_recruits(self):
@@ -284,6 +315,13 @@ class TopowarGameState:
     def _mortar_tile_set(self) -> set[tuple[int, int]]:
         return {m.tile for m in self.mortars.values() if m.hp > 0}
 
+    def _sandbag_tile_set(self) -> set[tuple[int, int]]:
+        sandbags = getattr(self, "sandbags", {})
+        return {sb.tile for sb in sandbags.values() if sb.hp > 0}
+
+    def _structure_tile_set(self) -> set[tuple[int, int]]:
+        return self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
+
     def _crew_positions_for_mortar(self, mortar: "Mortar") -> list[tuple[int, int]]:
         """Adjacent tiles of the same ground type as the mortar, usable as crew spots."""
         mx, my = mortar.tile
@@ -296,6 +334,116 @@ class TopowarGameState:
             and self.map.in_bounds((mx + dx, my + dy))
             and ((mx + dx, my + dy) in self.map.trenches) == in_trench
         ]
+
+    def _mortar_adjacent_ground_valid(self, mortar: "Mortar") -> bool:
+        """Mortar is operable only when all 8 neighbors match mortar tile ground type."""
+        mx, my = mortar.tile
+        tile_in_trench = mortar.tile in self.map.trenches
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                adj = (mx + dx, my + dy)
+                if not self.map.in_bounds(adj):
+                    return False
+                if (adj in self.map.trenches) != tile_in_trench:
+                    return False
+        return True
+
+    def _enforce_structure_ground_integrity(self):
+        """Destroy structures whose own tile ground type changed since placement."""
+        for mg in self.mgs.values():
+            if mg.hp <= 0:
+                continue
+            current = mg.tile in self.map.trenches
+            if current != mg.base_ground_is_trench:
+                mg.hp = 0
+                mg.operators.clear()
+        for mortar in self.mortars.values():
+            if mortar.hp <= 0:
+                continue
+            current = mortar.tile in self.map.trenches
+            if current != mortar.base_ground_is_trench:
+                mortar.hp = 0
+                mortar.operators.clear()
+        for sb in getattr(self, "sandbags", {}).values():
+            if sb.hp <= 0:
+                continue
+            current = sb.tile in self.map.trenches
+            if current != sb.base_ground_is_trench:
+                sb.hp = 0
+
+    def _ensure_runtime_compat(self):
+        """Backfill fields when loading older saved Topowar states."""
+        if not hasattr(self, "soldiers"):
+            self.soldiers = {}
+        if not hasattr(self, "mgs"):
+            self.mgs = {}
+        if not hasattr(self, "mortars"):
+            self.mortars = {}
+        if not hasattr(self, "sandbags"):
+            self.sandbags = {}
+        if not hasattr(self, "mortar_shells"):
+            self.mortar_shells = []
+        if not hasattr(self, "grenade_shells"):
+            self.grenade_shells = []
+        if not hasattr(self, "grenade_tiles"):
+            self.grenade_tiles = {0: set(), 1: set()}
+        if not hasattr(self.rules, "build_phase_seconds"):
+            self.rules.build_phase_seconds = 180
+        if not hasattr(self, "projectiles"):
+            self.projectiles = []
+        if not hasattr(self, "explosions"):
+            self.explosions = []
+        if not hasattr(self, "death_marks"):
+            self.death_marks = []
+        for s in self.soldiers.values():
+            if not hasattr(s, "mode"):
+                s.mode = "defend"
+            if not hasattr(s, "sentry"):
+                s.sentry = False
+            if not hasattr(s, "blocked"):
+                s.blocked = False
+            if not hasattr(s, "blocked_for"):
+                s.blocked_for = 0.0
+            if not hasattr(s, "current_task"):
+                s.current_task = None
+            if not hasattr(s, "path"):
+                s.path = []
+            if not hasattr(s, "attack_target_id"):
+                s.attack_target_id = None
+            if not hasattr(s, "rifle_cooldown"):
+                s.rifle_cooldown = 0.0
+            if not hasattr(s, "move_cooldown"):
+                s.move_cooldown = 0.0
+            if not hasattr(s, "name"):
+                s.name = f"Pvt.{s.unit_id}"
+            if not hasattr(s, "combat_halt"):
+                s.combat_halt = False
+            if not hasattr(s, "is_grenadier"):
+                s.is_grenadier = False
+            if not hasattr(s, "grenade_target"):
+                s.grenade_target = None
+            if not hasattr(s, "grenade_windup"):
+                s.grenade_windup = 0.0
+        for mg in self.mgs.values():
+            if not hasattr(mg, "operators"):
+                mg.operators = set()
+            if not hasattr(mg, "arc_center"):
+                mg.arc_center = getattr(mg, "facing", 0.0)
+            if not hasattr(mg, "arc_half"):
+                mg.arc_half = 45.0
+            if not hasattr(mg, "swivel_speed"):
+                mg.swivel_speed = 15.0
+            if not hasattr(mg, "base_ground_is_trench"):
+                mg.base_ground_is_trench = (mg.tile in self.map.trenches)
+        for mortar in self.mortars.values():
+            if not hasattr(mortar, "operators"):
+                mortar.operators = set()
+            if not hasattr(mortar, "base_ground_is_trench"):
+                mortar.base_ground_is_trench = (mortar.tile in self.map.trenches)
+            if not hasattr(mortar, "operable"):
+                mortar.operable = True
 
     def _crew_positions_for_mg(self, mg: "MachineGun") -> list[tuple[int, int]]:
         """Adjacent trench tiles a crew member can stand at to operate this MG."""
@@ -363,9 +511,21 @@ class TopowarGameState:
             d -= 360.0
         return d
 
+    def _is_angle_within_arc(self, angle: float, arc_center: float, arc_half: float) -> bool:
+        return abs(self._angle_diff_deg(arc_center, angle)) <= arc_half
+
+    def _clamp_angle_to_arc(self, angle: float, arc_center: float, arc_half: float) -> float:
+        rel = self._angle_diff_deg(arc_center, angle)
+        rel = max(-arc_half, min(arc_half, rel))
+        return (arc_center + rel) % 360.0
+
     def _friendly_trench_tiles(self, owner: int) -> list[tuple[int, int]]:
         mid = self.map.height // 2
         return [p for p in self.map.trenches if (owner == 0 and p[1] >= mid) or (owner == 1 and p[1] < mid)]
+
+    def _on_owner_side(self, owner: int, tile: tuple[int, int]) -> bool:
+        mid = self.map.height // 2
+        return tile[1] >= mid if owner == 0 else tile[1] < mid
 
     def _has_los_through_trenches(self, a: tuple[int, int], b: tuple[int, int]) -> bool:
         """Bresenham line-of-sight between two trench tiles.
@@ -383,6 +543,30 @@ class TopowarGameState:
                 return True
             if (cx, cy) != a and (cx, cy) not in self.map.trenches:
                 return False
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                cx += sx
+            if e2 < dx:
+                err += dx
+                cy += sy
+
+    def _has_sandbag_cover_between(self, a: tuple[int, int], b: tuple[int, int]) -> bool:
+        """True if a built sandbag lies strictly between endpoints on Bresenham path."""
+        x0, y0 = a
+        x1, y1 = b
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x1 >= x0 else -1
+        sy = 1 if y1 >= y0 else -1
+        err = dx - dy
+        cx, cy = x0, y0
+        sandbags = self._sandbag_tile_set()
+        while True:
+            if (cx, cy) == (x1, y1):
+                return False
+            if (cx, cy) != a and (cx, cy) in sandbags:
+                return True
             e2 = 2 * err
             if e2 > -dy:
                 err -= dy
@@ -409,6 +593,7 @@ class TopowarGameState:
         return False
 
     def command(self, owner: int, action: dict[str, Any]) -> str:
+        self._ensure_runtime_compat()
         t = action.get("type")
         if t == "tw_order_mode":
             mode = str(action.get("mode", "defend"))
@@ -481,6 +666,10 @@ class TopowarGameState:
             tile = tuple(map(int, action.get("tile", [])))
             if len(tile) != 2 or not self.map.in_bounds(tile):
                 raise ValueError("Invalid MG tile.")
+            if tile in self.map.trenches:
+                raise ValueError("MG cannot be placed in a trench tile.")
+            if tile in self._structure_tile_set():
+                raise ValueError("Only one equipment structure can occupy a tile.")
             # MG must be placed on or adjacent to a friendly trench tile
             friendly = set(self._friendly_trench_tiles(owner))
             tile_and_adj = [tile] + [
@@ -494,7 +683,15 @@ class TopowarGameState:
             mid = self.next_structure_id
             self.next_structure_id += 1
             facing = float(action.get("facing", 0.0)) % 360.0
-            mg = MachineGun(mid, owner, tile, build_required=self.rules.mg_build_seconds, facing=facing)
+            mg = MachineGun(
+                mid,
+                owner,
+                tile,
+                build_required=self.rules.mg_build_seconds,
+                facing=facing,
+                arc_center=facing,
+                base_ground_is_trench=(tile in self.map.trenches),
+            )
             self.mgs[mid] = mg
             build_positions = self._build_positions_for_mg(tile)
             if len(build_positions) < 2:
@@ -513,7 +710,7 @@ class TopowarGameState:
                 del self.mgs[mid]
                 raise ValueError("Select exactly two friendly soldiers to build the MG.")
 
-            occ = set(self._occupied_tiles().keys()) | self._mg_tile_set()
+            occ = (set(self._occupied_tiles().keys()) - {self.soldiers[sid].tile for sid in chosen_ids}) | self._mg_tile_set()
             best_assignment: list[tuple[int, tuple[int, int], list[tuple[int, int]]]] | None = None
             for spots in itertools.permutations(build_positions, 2):
                 candidate: list[tuple[int, tuple[int, int], list[tuple[int, int]]]] = []
@@ -568,6 +765,8 @@ class TopowarGameState:
             target_raw = action.get("target", [])
             if len(tile) != 2 or not self.map.in_bounds(tile):
                 raise ValueError("Invalid mortar tile.")
+            if tile in self._structure_tile_set():
+                raise ValueError("Only one equipment structure can occupy a tile.")
             if len(target_raw) != 2:
                 raise ValueError("Invalid target tile.")
             target = tuple(map(int, target_raw))
@@ -586,24 +785,30 @@ class TopowarGameState:
                         raise ValueError("All 8 adjacent tiles must match the mortar tile's ground type.")
             mid = self.next_structure_id
             self.next_structure_id += 1
-            mortar = Mortar(mid, owner, tile, target=target)
+            mortar = Mortar(mid, owner, tile, target=target, base_ground_is_trench=(tile in self.map.trenches))
             self.mortars[mid] = mortar
             crew_spots = self._crew_positions_for_mortar(mortar)
             if len(crew_spots) < 2:
                 del self.mortars[mid]
                 raise ValueError("Not enough valid crew positions adjacent to mortar.")
-            unit_ids = [int(x) for x in action.get("unit_ids", [])]
-            if len(unit_ids) < 2:
+            chosen_ids: list[int] = []
+            for sid in action.get("unit_ids", []):
+                sid = int(sid)
+                if sid in chosen_ids:
+                    continue
+                soldier = self.soldiers.get(sid)
+                if soldier and soldier.owner == owner and soldier.hp > 0:
+                    chosen_ids.append(sid)
+            if len(chosen_ids) != 2:
                 del self.mortars[mid]
                 raise ValueError("Select exactly 2 soldiers to build the mortar.")
-            unit_ids = unit_ids[:2]
-            occ = set(self._occupied_tiles().keys()) | self._mg_tile_set() | self._mortar_tile_set()
+            occ = (set(self._occupied_tiles().keys()) - {self.soldiers[sid].tile for sid in chosen_ids}) | self._mg_tile_set() | self._mortar_tile_set()
             best_assignment = None
             for spots in itertools.permutations(crew_spots, 2):
                 candidate: list[tuple[int, tuple[int, int], list[tuple[int, int]]]] = []
                 total_len = 0
                 valid = True
-                for sid, spot in zip(unit_ids, spots):
+                for sid, spot in zip(chosen_ids, spots):
                     soldier = self.soldiers.get(sid)
                     if not soldier or soldier.owner != owner:
                         valid = False
@@ -627,10 +832,14 @@ class TopowarGameState:
                 s.path = path
             return "Mortar construction started."
         if t == "tw_fire_mortar":
+            if self.time_elapsed < self.rules.build_phase_seconds:
+                raise ValueError("Cannot fire during build phase.")
             mid = int(action.get("mortar_id", -1))
             mortar = self.mortars.get(mid)
             if not mortar or mortar.owner != owner:
                 raise ValueError("Mortar not found.")
+            if not mortar.operable:
+                raise ValueError("Mortar is inoperable: rebuild matching adjacent ground first.")
             if not mortar.built or not mortar.ready:
                 raise ValueError("Mortar is not ready.")
             if not mortar.target:
@@ -647,6 +856,8 @@ class TopowarGameState:
             mortar = self.mortars.get(mid)
             if not mortar or mortar.owner != owner:
                 raise ValueError("Mortar not found.")
+            if not mortar.operable:
+                raise ValueError("Mortar is inoperable: rebuild matching adjacent ground first.")
             target_raw = action.get("target", [])
             if len(target_raw) != 2:
                 raise ValueError("Invalid target.")
@@ -657,29 +868,98 @@ class TopowarGameState:
             mortar.ready = False
             mortar.cooldown = 20.0
             return "Mortar retargeted (20 s cooldown)."
-        if t == "tw_toggle_mortar_autofire":
+        if t == "tw_toggle_operate_mortar":
             mid = int(action.get("mortar_id", -1))
             mortar = self.mortars.get(mid)
             if not mortar or mortar.owner != owner:
                 raise ValueError("Mortar not found.")
-            mortar.auto_fire = not mortar.auto_fire
-            return f"Auto-fire {'enabled' if mortar.auto_fire else 'disabled'}."
-        if t == "tw_toggle_operate_mortar":
-            mid = int(action.get("mortar_id", -1))
-            mortar = self.mortars.get(mid)
-            if not mortar or mortar.owner != owner or not mortar.built:
-                raise ValueError("Mortar not operable.")
-            mortar.operators = {int(x) for x in action.get("unit_ids", [])}
-            occ = set(self._occupied_tiles().keys()) | self._mg_tile_set() | self._mortar_tile_set()
+            if mortar.built:
+                if not mortar.operable:
+                    raise ValueError("Mortar is inoperable: rebuild matching adjacent ground first.")
+                mortar.operators = {int(x) for x in action.get("unit_ids", [])}
+                occ = set(self._occupied_tiles().keys()) | self._mg_tile_set() | self._mortar_tile_set()
+                crew_spots = self._crew_positions_for_mortar(mortar)
+                for uid in mortar.operators:
+                    s = self.soldiers.get(uid)
+                    if s and s.owner == owner and s.hp > 0:
+                        s.current_task = {"type": "operate_mortar", "mortar_id": mortar.structure_id}
+                        if crew_spots and s.tile not in crew_spots:
+                            goal = min(crew_spots, key=lambda tp: math.dist(s.tile, tp))
+                            s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=occ - {s.tile})
+                return "Mortar crew updated."
+            # Under-construction mortar: allow reassignment of builders so construction can resume.
+            chosen_ids: list[int] = []
+            for sid in action.get("unit_ids", []):
+                sid = int(sid)
+                if sid in chosen_ids:
+                    continue
+                soldier = self.soldiers.get(sid)
+                if soldier and soldier.owner == owner and soldier.hp > 0:
+                    chosen_ids.append(sid)
+            if len(chosen_ids) != 2:
+                raise ValueError("Select exactly 2 soldiers to continue building the mortar.")
             crew_spots = self._crew_positions_for_mortar(mortar)
-            for uid in mortar.operators:
-                s = self.soldiers.get(uid)
-                if s and s.owner == owner and s.hp > 0:
-                    s.current_task = {"type": "operate_mortar", "mortar_id": mortar.structure_id}
-                    if crew_spots and s.tile not in crew_spots:
-                        goal = min(crew_spots, key=lambda tp: math.dist(s.tile, tp))
-                        s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=occ - {s.tile})
-            return "Mortar crew updated."
+            if len(crew_spots) < 2:
+                raise ValueError("Not enough valid crew positions adjacent to mortar.")
+            occ = (set(self._occupied_tiles().keys()) - {self.soldiers[sid].tile for sid in chosen_ids}) | self._mg_tile_set() | self._mortar_tile_set()
+            best_assignment: list[tuple[int, tuple[int, int], list[tuple[int, int]]]] | None = None
+            for spots in itertools.permutations(crew_spots, 2):
+                candidate: list[tuple[int, tuple[int, int], list[tuple[int, int]]]] = []
+                total_len = 0
+                valid = True
+                for sid, spot in zip(chosen_ids, spots):
+                    soldier = self.soldiers[sid]
+                    path = self.path.find_path(soldier.tile, spot, trench_only=False, blocked=occ - {soldier.tile})
+                    if not path:
+                        valid = False
+                        break
+                    total_len += len(path)
+                    candidate.append((sid, spot, path))
+                if not valid:
+                    continue
+                if best_assignment is None or total_len < sum(len(p) for _, _, p in best_assignment):
+                    best_assignment = candidate
+            if best_assignment is None:
+                raise ValueError("Selected soldiers cannot reach mortar build positions.")
+            for sid, build_tile, path in best_assignment:
+                s = self.soldiers[sid]
+                s.current_task = {"type": "build_mortar", "mortar_id": mortar.structure_id, "build_tile": list(build_tile)}
+                s.path = path
+            return "Mortar builders updated."
+        if t == "tw_assign_build_sandbag":
+            sid = int(action.get("unit_id", -1))
+            s = self.soldiers.get(sid)
+            if not s or s.owner != owner or s.hp <= 0:
+                raise ValueError("Invalid soldier.")
+            tile = tuple(map(int, action.get("tile", [])))
+            if len(tile) != 2 or not self.map.in_bounds(tile):
+                raise ValueError("Invalid sandbag tile.")
+            if tile in self.map.trenches:
+                raise ValueError("Sandbags can only be built on open ground.")
+            if tile in self._structure_tile_set():
+                raise ValueError("Tile already occupied by structure.")
+            mid = self.next_structure_id
+            self.next_structure_id += 1
+            sb = Sandbag(mid, owner, tile, build_required=5.0, base_ground_is_trench=False)
+            self.sandbags[mid] = sb
+            occ = set(self._occupied_tiles().keys()) | self._mg_tile_set() | self._mortar_tile_set()
+            s.current_task = {"type": "build_sandbag", "sandbag_id": mid, "build_tile": list(tile)}
+            s.path = self.path.find_path(s.tile, tile, trench_only=False, blocked=occ - {s.tile})
+            if not s.path:
+                del self.sandbags[mid]
+                s.current_task = None
+                raise ValueError("Selected soldier cannot reach sandbag tile.")
+            return "Sandbag construction started."
+        if t == "tw_set_grenade_tile":
+            tile = tuple(map(int, action.get("tile", [])))
+            if len(tile) != 2 or not self.map.in_bounds(tile):
+                raise ValueError("Invalid grenade target tile.")
+            gset = self.grenade_tiles[owner]
+            if tile in gset:
+                gset.remove(tile)
+                return "Grenade tile removed."
+            gset.add(tile)
+            return "Grenade tile added."
         if t == "tw_move_unit":
             sid = int(action.get("unit_id", -1))
             s = self.soldiers.get(sid)
@@ -711,7 +991,7 @@ class TopowarGameState:
 
     def _move_soldier(self, s: Soldier, dt: float):
         # Sentry soldiers and combat-halted soldiers hold position.
-        if s.sentry or s.combat_halt:
+        if s.sentry or s.combat_halt or s.grenade_windup > 0:
             s.move_cooldown = 0.0
             return
         # Drop any path step that points to the tile we're already on.
@@ -723,14 +1003,18 @@ class TopowarGameState:
             s.move_cooldown = 0.0
             return
         target = s.path[0]
+        if self.time_elapsed < self.rules.build_phase_seconds and not self._on_owner_side(s.owner, target):
+            s.path = []
+            s.move_cooldown = 0.0
+            return
         # Reject non-rectilinear / non-adjacent steps (defensive guard).
         if abs(target[0] - s.tile[0]) + abs(target[1] - s.tile[1]) != 1:
             s.path = []
             s.move_cooldown = 0.0
             return
         occ = self._occupied_tiles()
-        mg_tiles = self._mg_tile_set()
-        if target in mg_tiles or (target in occ and occ[target] != s.unit_id):
+        structure_tiles = self._structure_tile_set()
+        if target in structure_tiles or (target in occ and occ[target] != s.unit_id):
             s.blocked = True
             s.blocked_for += dt
             s.move_cooldown = 0.0
@@ -749,6 +1033,8 @@ class TopowarGameState:
             s.move_cooldown = 0.0
 
     def _rifle_combat(self, dt: float):
+        if self.time_elapsed < self.rules.build_phase_seconds:
+            return
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
@@ -816,7 +1102,7 @@ class TopowarGameState:
 
     def _update_tasks(self, dt: float):
         occ = self._occupied_tiles()
-        blocked_keys = set(occ.keys()) | self._mg_tile_set() | self._mortar_tile_set()
+        blocked_keys = set(occ.keys()) | self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
@@ -915,11 +1201,26 @@ class TopowarGameState:
                 if crew_spots and s.tile not in crew_spots:
                     goal = min(crew_spots, key=lambda t: math.dist(s.tile, t))
                     s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
+            elif task["type"] == "build_sandbag":
+                sb = self.sandbags.get(task["sandbag_id"])
+                if not sb or sb.hp <= 0 or sb.built:
+                    s.current_task = None
+                    continue
+                build_tile = tuple(task.get("build_tile", s.tile))
+                if s.tile != build_tile:
+                    s.path = self.path.find_path(s.tile, build_tile, trench_only=False, blocked=blocked_keys - {s.tile})
+                else:
+                    sb.build_progress += dt
+                    if sb.build_progress >= sb.build_required:
+                        sb.built = True
 
     def _update_mgs(self, dt: float):
+        if self.time_elapsed < self.rules.build_phase_seconds:
+            return
         for mg in self.mgs.values():
             if mg.hp <= 0 or not mg.built:
                 continue
+            mg.facing = self._clamp_angle_to_arc(mg.facing, mg.arc_center, mg.arc_half)
             mg.cooldown = max(0.0, mg.cooldown - dt)
             mg.burst_shot_cooldown = max(0.0, mg.burst_shot_cooldown - dt)
             # Crew must be adjacent (not on the MG tile itself).
@@ -935,7 +1236,12 @@ class TopowarGameState:
                     if not self._soldier_visible_to(sv, mg.owner):
                         continue
                     d = math.dist(sv.tile, mg.tile)
-                    if d <= 20 and (nearest is None or d < nearest[0]):
+                    if d > 20:
+                        continue
+                    target_angle = math.degrees(math.atan2(sv.tile[1] - mg.tile[1], sv.tile[0] - mg.tile[0])) % 360.0
+                    if not self._is_angle_within_arc(target_angle, mg.arc_center, mg.arc_half):
+                        continue
+                    if nearest is None or d < nearest[0]:
                         nearest = (d, sv.tile)
                 if nearest:
                     target = nearest[1]
@@ -943,16 +1249,16 @@ class TopowarGameState:
                 continue
             # Swivel barrel toward target at swivel_speed deg/s.
             sx, sy = mg.tile
-            target_angle = math.degrees(math.atan2(target[1] - sy, target[0] - sx))
+            target_angle = math.degrees(math.atan2(target[1] - sy, target[0] - sx)) % 360.0
+            if not self._is_angle_within_arc(target_angle, mg.arc_center, mg.arc_half):
+                continue
             diff = self._angle_diff_deg(mg.facing, target_angle)
             max_turn = mg.swivel_speed * dt
             if abs(diff) <= max_turn:
                 mg.facing = target_angle % 360.0
             else:
                 mg.facing = (mg.facing + math.copysign(max_turn, diff)) % 360.0
-            # Only fire when barrel is within the firing arc.
-            if abs(self._angle_diff_deg(mg.facing, target_angle)) > mg.arc_half:
-                continue
+            mg.facing = self._clamp_angle_to_arc(mg.facing, mg.arc_center, mg.arc_half)
             # Start a new burst cycle when cooldown expires
             if mg.cooldown <= 0 and mg.burst_left <= 0:
                 mg.burst_left = 3
@@ -976,8 +1282,10 @@ class TopowarGameState:
     def _fire_mortar(self, mortar: "Mortar"):
         if not mortar.target or not mortar.ready:
             return
+        dist = math.dist(mortar.tile, mortar.target)
+        scatter_radius = 3.0 + max(0.0, math.floor(max(0.0, dist - 10.0) / 5.0))
         angle = self.random.uniform(0.0, 2.0 * math.pi)
-        scatter = self.random.uniform(0.0, 4.0)
+        scatter = self.random.uniform(0.0, scatter_radius)
         lx = int(round(mortar.target[0] + math.cos(angle) * scatter))
         ly = int(round(mortar.target[1] + math.sin(angle) * scatter))
         lx = max(0, min(self.map.width - 1, lx))
@@ -993,6 +1301,22 @@ class TopowarGameState:
 
     def _mortar_impact(self, landing: tuple[int, int], owner: int):
         lx, ly = landing
+        impact_cross = {landing, (lx + 1, ly), (lx - 1, ly), (lx, ly + 1), (lx, ly - 1)}
+        for mortar in self.mortars.values():
+            if mortar.hp <= 0:
+                continue
+            if mortar.tile in impact_cross:
+                mortar.hp = 0
+                mortar.operators.clear()
+        for mg in self.mgs.values():
+            if mg.hp <= 0:
+                continue
+            if mg.tile in impact_cross:
+                mg.hp = 0
+                mg.operators.clear()
+        direct_sandbag = next((sb for sb in self.sandbags.values() if sb.hp > 0 and sb.built and sb.tile == landing), None)
+        if direct_sandbag:
+            direct_sandbag.hp -= 1
         target_in_trench = landing in self.map.trenches
         kill_radius = 3.0
         for s in self.soldiers.values():
@@ -1008,35 +1332,36 @@ class TopowarGameState:
                 else:
                     self._register_kill(s, owner)
             else:
-                if not s_in_trench:
+                if not s_in_trench and not self._has_sandbag_cover_between(landing, s.tile):
                     self._register_kill(s, owner)
+        if direct_sandbag and direct_sandbag.hp <= 0:
+            direct_sandbag.hp = 0
         # Terrain: impact tile → trench; 4 ortho adjacent → flip type
-        if landing not in self.map.trenches:
-            self.map.trenches.add(landing)
-        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            adj = (lx + dx, ly + dy)
-            if not self.map.in_bounds(adj):
-                continue
-            if adj in self.map.trenches:
-                self.map.trenches.discard(adj)
-            else:
-                self.map.trenches.add(adj)
+        if not direct_sandbag:
+            if landing not in self.map.trenches:
+                self.map.trenches.add(landing)
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                adj = (lx + dx, ly + dy)
+                if not self.map.in_bounds(adj):
+                    continue
+                if adj in self.map.trenches:
+                    self.map.trenches.discard(adj)
+                else:
+                    self.map.trenches.add(adj)
+        self._enforce_structure_ground_integrity()
         self.explosions.append(Explosion(float(lx), float(ly)))
 
     def _update_mortars(self, dt: float):
         for mortar in self.mortars.values():
             if mortar.hp <= 0 or not mortar.built:
                 continue
+            mortar.operable = self._mortar_adjacent_ground_valid(mortar)
+            if not mortar.operable:
+                mortar.ready = False
+                continue
             mortar.cooldown = max(0.0, mortar.cooldown - dt)
             if mortar.cooldown <= 0.0 and not mortar.ready:
                 mortar.ready = True
-            if not mortar.ready or not mortar.target:
-                continue
-            live_crew = [s for s in self.soldiers.values()
-                         if s.hp > 0 and s.owner == mortar.owner
-                         and 0 < math.dist(s.tile, mortar.tile) <= 1.5]
-            if mortar.auto_fire and len(live_crew) >= 2:
-                self._fire_mortar(mortar)
 
     def _update_mortar_shells(self, dt: float):
         remaining: list[MortarShell] = []
@@ -1051,8 +1376,73 @@ class TopowarGameState:
             else:
                 shell.x += dx / dist * step
                 shell.y += dy / dist * step
-                remaining.append(shell)
+            remaining.append(shell)
         self.mortar_shells = remaining
+
+    def _grenade_impact(self, landing: tuple[int, int], owner: int):
+        target_in_trench = landing in self.map.trenches
+        kill_radius = 3.0
+        for s in self.soldiers.values():
+            if s.hp <= 0 or s.owner == owner:
+                continue
+            if math.dist(s.tile, landing) > kill_radius:
+                continue
+            s_in_trench = s.tile in self.map.trenches
+            if target_in_trench:
+                if s_in_trench:
+                    if self._has_los_through_trenches(landing, s.tile):
+                        self._register_kill(s, owner)
+                else:
+                    self._register_kill(s, owner)
+            else:
+                if not s_in_trench and not self._has_sandbag_cover_between(landing, s.tile):
+                    self._register_kill(s, owner)
+        self.explosions.append(Explosion(float(landing[0]), float(landing[1])))
+
+    def _update_grenade_shells(self, dt: float):
+        remaining: list[GrenadeShell] = []
+        for shell in self.grenade_shells:
+            tx, ty = shell.target
+            vx, vy = tx - shell.x, ty - shell.y
+            dist = math.hypot(vx, vy)
+            if dist <= 0.05:
+                self._grenade_impact(shell.target, shell.owner)
+                self.grenade_tiles[shell.owner].discard(shell.target)
+                continue
+            step = min(dist, shell.speed * dt)
+            shell.x += vx / dist * step
+            shell.y += vy / dist * step
+            remaining.append(shell)
+        self.grenade_shells = remaining
+
+    def _update_grenadiers(self, dt: float):
+        if self.time_elapsed < self.rules.build_phase_seconds:
+            return
+        for s in self.soldiers.values():
+            if s.hp <= 0 or not s.is_grenadier:
+                continue
+            targets = [t for t in self.grenade_tiles.get(s.owner, set()) if math.dist(s.tile, t) <= 7.0]
+            if not targets:
+                s.grenade_target = None
+                s.grenade_windup = 0.0
+                continue
+            target = min(targets, key=lambda t: math.dist(s.tile, t))
+            if s.grenade_target != target:
+                s.grenade_target = target
+                s.grenade_windup = 2.0
+            else:
+                s.grenade_windup = max(0.0, s.grenade_windup - dt)
+            s.path = []
+            if s.grenade_windup <= 0 and s.grenade_target:
+                tgt = s.grenade_target
+                self.grenade_shells.append(GrenadeShell(
+                    s.owner,
+                    float(s.tile[0]), float(s.tile[1]),
+                    float(s.tile[0]), float(s.tile[1]),
+                    tgt,
+                ))
+                s.grenade_target = None
+                s.grenade_windup = 0.0
 
     def _update_effects(self, dt: float):
         for e in self.explosions:
@@ -1073,6 +1463,15 @@ class TopowarGameState:
             p.y += p.dy / norm * speed * dt
             p.remaining -= speed * dt
             hit = False
+            if p.source == "mg":
+                for sb in self.sandbags.values():
+                    if sb.hp <= 0 or not sb.built:
+                        continue
+                    if math.dist((p.x, p.y), sb.tile) <= 0.45:
+                        hit = True
+                        break
+            if hit:
+                continue
             for s in self.soldiers.values():
                 if s.hp <= 0 or s.owner == p.owner:
                     continue
@@ -1108,11 +1507,14 @@ class TopowarGameState:
         self.projectiles = remaining
 
     def tick(self, dt: float):
+        self._ensure_runtime_compat()
         if self.winner is not None:
             return
         self.time_elapsed += dt
         self._try_spawn_recruits()
         self._update_tasks(dt)
+        self._enforce_structure_ground_integrity()
+        self._update_grenadiers(dt)
         for s in self.soldiers.values():
             if s.hp > 0:
                 self._move_soldier(s, dt)
@@ -1120,6 +1522,7 @@ class TopowarGameState:
         self._update_mgs(dt)
         self._update_mortars(dt)
         self._update_mortar_shells(dt)
+        self._update_grenade_shells(dt)
         self._update_projectiles(dt)
         self._update_effects(dt)
         alive0 = sum(1 for s in self.soldiers.values() if s.owner == 0 and s.hp > 0)
@@ -1152,6 +1555,7 @@ class TopowarGameState:
         self.last_tick_monotonic = now_monotonic - dt_total
 
     def serialize(self, viewer: int | None = None) -> dict[str, Any]:
+        self._ensure_runtime_compat()
         soldiers = []
         for s in self.soldiers.values():
             if s.hp <= 0:
@@ -1178,6 +1582,7 @@ class TopowarGameState:
                 "rifle_cooldown": s.rifle_cooldown,
                 "name": s.name,
                 "combat_halt": s.combat_halt,
+                "is_grenadier": s.is_grenadier,
             })
         mgs = []
         for mg in self.mgs.values():
@@ -1195,11 +1600,14 @@ class TopowarGameState:
                 "operators": sorted(list(mg.operators)),
                 "force_target": list(mg.force_target) if mg.force_target else None,
                 "facing": mg.facing,
+                "arc_center": mg.arc_center,
                 "arc_half": mg.arc_half,
             })
         mortars_out = []
         for mortar in self.mortars.values():
             if mortar.hp <= 0:
+                continue
+            if viewer is not None and mortar.owner != viewer and mortar.tile in self.map.trenches:
                 continue
             mortars_out.append({
                 "structure_id": mortar.structure_id,
@@ -1212,12 +1620,27 @@ class TopowarGameState:
                 "build_required": mortar.build_required,
                 "target": list(mortar.target) if mortar.target else None,
                 "ready": mortar.ready,
+                "operable": mortar.operable,
                 "cooldown": mortar.cooldown,
-                "auto_fire": mortar.auto_fire,
                 "operators": sorted(list(mortar.operators)),
+            })
+        sandbags_out = []
+        for sb in self.sandbags.values():
+            if sb.hp <= 0:
+                continue
+            sandbags_out.append({
+                "structure_id": sb.structure_id,
+                "owner": sb.owner,
+                "tile": list(sb.tile),
+                "hp": sb.hp,
+                "hp_max": 3,
+                "built": sb.built,
+                "build_progress": sb.build_progress,
+                "build_required": sb.build_required,
             })
         return {
             "rules": self.rules.__dict__.copy(),
+            "build_phase_remaining": max(0.0, self.rules.build_phase_seconds - self.time_elapsed),
             "map": {
                 "width": self.map.width,
                 "height": self.map.height,
@@ -1227,7 +1650,13 @@ class TopowarGameState:
             "soldiers": soldiers,
             "machine_guns": mgs,
             "mortars": mortars_out,
+            "sandbags": sandbags_out,
+            "grenade_tiles": {
+                "0": [list(t) for t in sorted(self.grenade_tiles[0])],
+                "1": [list(t) for t in sorted(self.grenade_tiles[1])],
+            },
             "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "owner": ms.owner} for ms in self.mortar_shells],
+            "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
             "projectiles": [{"x": p.x, "y": p.y, "owner": p.owner, "source": p.source} for p in self.projectiles],
             "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration} for e in self.explosions],
             "death_marks": [{"x": dm.x, "y": dm.y, "age": dm.age, "duration": dm.duration} for dm in self.death_marks],
