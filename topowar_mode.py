@@ -815,6 +815,10 @@ class TopowarGameState:
                 raise ValueError("Invalid sandbag tile.")
             if max(abs(tile[0] - s.tile[0]), abs(tile[1] - s.tile[1])) != 1:
                 raise ValueError("Sandbag must be placed in a tile adjacent to the soldier.")
+            if s.current_task and s.current_task.get("type") == "build_sandbag":
+                in_progress = self.sandbags.get(s.current_task.get("sandbag_id"))
+                if in_progress and in_progress.hp > 0 and not in_progress.built:
+                    raise ValueError("Soldier must finish the current sandbag before starting another.")
             if tile in self.map.trenches:
                 raise ValueError("Sandbags can only be built on open ground.")
             if tile in self._structure_tile_set():
@@ -1149,9 +1153,18 @@ class TopowarGameState:
 
     def _mortar_impact(self, landing: tuple[int, int], owner: int):
         lx, ly = landing
-        direct_sandbag = next((sb for sb in self.sandbags.values() if sb.hp > 0 and sb.built and sb.tile == landing), None)
+        direct_sandbag = next(
+            (sb for sb in self.sandbags.values() if sb.hp > 0 and sb.built and sb.tile == landing), None
+        )
         if direct_sandbag:
+            # Sandbag absorbs the hit: damage it, suppress all terrain deformation.
             direct_sandbag.hp -= 1
+            if direct_sandbag.hp <= 0:
+                direct_sandbag.hp = 0
+            self.explosions.append(Explosion(float(lx), float(ly)))
+            return
+
+        # Blast kill radius
         target_in_trench = landing in self.map.trenches
         kill_radius = 3.0
         for s in self.soldiers.values():
@@ -1169,19 +1182,26 @@ class TopowarGameState:
             else:
                 if not s_in_trench and not self._has_sandbag_cover_between(landing, s.tile):
                     self._register_kill(s, owner)
-        if direct_sandbag and direct_sandbag.hp <= 0:
-            direct_sandbag.hp = 0
-        # Terrain: impact tile → trench; 4 ortho adjacent → flip type
+
+        # Terrain deformation: landing → trench; 4 ortho adjacent flip type.
         if landing not in self.map.trenches:
             self.map.trenches.add(landing)
+        collapsing: set[tuple[int, int]] = set()
         for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
             adj = (lx + dx, ly + dy)
             if not self.map.in_bounds(adj):
                 continue
             if adj in self.map.trenches:
+                collapsing.add(adj)
                 self.map.trenches.discard(adj)
             else:
                 self.map.trenches.add(adj)
+
+        # Soldiers on a tile that just flipped trench→open are crushed.
+        for s in self.soldiers.values():
+            if s.hp > 0 and s.tile in collapsing:
+                self._register_kill(s, owner)
+
         self._enforce_structure_ground_integrity()
         self.explosions.append(Explosion(float(lx), float(ly)))
 
