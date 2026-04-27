@@ -955,7 +955,7 @@ class TopowarGameState:
         if self.time_elapsed < self.rules.build_phase_seconds:
             return
         for s in self.soldiers.values():
-            if s.hp <= 0:
+            if s.hp <= 0 or s.is_grenadier:
                 continue
 
             # Halt to engage an open-ground enemy when crossing open ground.
@@ -1306,7 +1306,7 @@ class TopowarGameState:
 
     def _grenade_impact(self, landing: tuple[int, int], owner: int):
         target_in_trench = landing in self.map.trenches
-        kill_radius = 3.0
+        kill_radius = 2.0
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
