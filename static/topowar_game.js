@@ -19,6 +19,7 @@ let pendingMortarTile = null;
 let pendingMortarTarget = null;
 let pendingMortarDispatch = false;
 let attackTargetTile = null;
+let wirePlan = [];
 let mouseCanvas = { x: 0, y: 0 };
 
 const CELL = 24;
@@ -114,7 +115,7 @@ function getSelectedMortar() {
 // === MODE MANAGEMENT ===
 
 function updateModeButtons() {
-  const modes = ['select','attack','sentry','defend','dig','plan','build','operate','mortar','grenade','sandbag'];
+  const modes = ['select','attack','sentry','defend','dig','plan','build','operate','mortar','grenade','sandbag','wire'];
   for (const m of modes) {
     const btn = el('mode-' + m);
     if (btn) btn.classList.toggle('active', mode === m);
@@ -125,6 +126,7 @@ function setMode(m) {
   if (mode === m) {
     mode = 'select';
     plan = [];
+    wirePlan = [];
     pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false;
     pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false;
     attackTargetTile = null;
@@ -132,6 +134,7 @@ function setMode(m) {
   } else {
     mode = m;
     if (m !== 'plan') plan = [];
+    if (m !== 'wire') wirePlan = [];
     if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false; }
     if (m !== 'mortar') { pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false; }
     if (m !== 'attack') attackTargetTile = null;
@@ -145,7 +148,7 @@ function setMode(m) {
 function updateModeLabel() {
   const labels = {
     select: 'Select', attack: 'Attack', sentry: 'Sentry', defend: 'Defend',
-    dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew', mortar: 'Build Mortar', grenade: 'Grenade', sandbag: 'Build Sandbag',
+    dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew', mortar: 'Build Mortar', grenade: 'Grenade', sandbag: 'Build Sandbag', wire: 'Wire',
   };
   const e = el('mode-line');
   if (e) e.textContent = labels[mode] || 'Select';
@@ -246,7 +249,7 @@ document.addEventListener('keydown', (evt) => {
     return;
   }
 
-  const shortcutMap = { '1':'select','2':'attack','3':'sentry','4':'defend','D':'dig','P':'plan','B':'build','O':'operate','M':'mortar','N':'grenade','G':'sandbag' };
+  const shortcutMap = { '1':'select','2':'attack','3':'sentry','4':'defend','D':'dig','P':'plan','B':'build','O':'operate','M':'mortar','N':'grenade','G':'sandbag','W':'wire' };
   if (shortcutMap[key]) {
     evt.preventDefault();
     if (['2','3','4'].includes(key) && mode === shortcutMap[key] && selectedUnits.size) {
@@ -461,6 +464,21 @@ board.addEventListener('click', (evt) => {
   } else if (mode === 'grenade') {
     send({ type: 'tw_set_grenade_tile', tile });
     setStatus('Grenade target updated.');
+
+  } else if (mode === 'wire') {
+    if (myS.length) {
+      const uid = myS[0].unit_id;
+      selectedUnits = new Set([uid]);
+      if (wirePlan.length) {
+        send({ type: 'tw_assign_wire', unit_id: uid, plan: wirePlan.map(t => [...t]) });
+        wirePlan = [];
+        setStatus('Wire placement assigned.');
+      }
+    } else {
+      const idx = wirePlan.findIndex(t => t[0] === tile[0] && t[1] === tile[1]);
+      if (idx >= 0) wirePlan.splice(idx, 1);
+      else wirePlan.push(tile);
+    }
 
   }
 
@@ -891,6 +909,62 @@ function draw() {
       ctx.fillStyle = '#d8c07a';
       ctx.fillRect(tlx + 2, tly + CELL + 1, (CELL - 4) * bpFrac, 3);
     }
+  }
+
+  // Barbed wire
+  for (const w of data.barbed_wire || []) {
+    const [wx, wy] = w.tile;
+    const tlx = OX + wx * CELL, tly = tileTop(wy);
+    const alpha = w.built ? 1.0 : 0.35 + 0.55 * (w.build_progress / (w.build_required || 2));
+    const seed = w.structure_id;
+    const rng = (n) => (((seed * 1664525 + n * 22695477 + 1013904223) >>> 0) & 0x7fff) / 0x7fff;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#4e4e4e';
+    ctx.lineWidth = 1.5;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 4; i++) {
+      const x0 = tlx + 2 + rng(i * 8 + 0) * (CELL - 4);
+      const y0 = tly + 2 + rng(i * 8 + 1) * (CELL - 4);
+      const x1 = tlx + 2 + rng(i * 8 + 2) * (CELL - 4);
+      const y1 = tly + 2 + rng(i * 8 + 3) * (CELL - 4);
+      const cx1 = tlx + 2 + rng(i * 8 + 4) * (CELL - 4);
+      const cy1 = tly + 2 + rng(i * 8 + 5) * (CELL - 4);
+      const cx2 = tlx + 2 + rng(i * 8 + 6) * (CELL - 4);
+      const cy2 = tly + 2 + rng(i * 8 + 7) * (CELL - 4);
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.bezierCurveTo(cx1, cy1, cx2, cy2, x1, y1);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#3a3a3a';
+    for (let i = 0; i < 5; i++) {
+      const bx = tlx + 3 + rng(i * 2 + 33) * (CELL - 6);
+      const by = tly + 3 + rng(i * 2 + 34) * (CELL - 6);
+      ctx.beginPath();
+      ctx.arc(bx, by, 1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (!w.built) {
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#111';
+      ctx.fillRect(tlx + 2, tly + CELL + 1, CELL - 4, 3);
+      ctx.fillStyle = '#888';
+      ctx.fillRect(tlx + 2, tly + CELL + 1, (CELL - 4) * (w.build_progress / (w.build_required || 2)), 3);
+    }
+    ctx.restore();
+  }
+
+  // Wire plan overlay (wire mode)
+  for (const wt of wirePlan) {
+    const [wx, wy] = wt;
+    ctx.fillStyle = 'rgba(120,120,120,0.25)';
+    ctx.fillRect(OX + wx * CELL, tileTop(wy), CELL - 1, CELL - 1);
+    ctx.strokeStyle = 'rgba(160,160,160,0.8)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 2]);
+    ctx.strokeRect(OX + wx * CELL + 1, tileTop(wy) + 1, CELL - 3, CELL - 3);
+    ctx.setLineDash([]);
   }
 
   // Soldiers
@@ -1330,6 +1404,9 @@ function render() {
     else setStatus('Sandbag — click an adjacent open tile to build.');
   } else if (mode === 'grenade') {
     setStatus('Grenade — click tiles to toggle grenade targets (range 7 from grenadiers).');
+  } else if (mode === 'wire') {
+    if (!wirePlan.length) setStatus('Wire — click open ground tiles to plan wire, then click a soldier to assign.');
+    else setStatus(`Wire — ${wirePlan.length} tile${wirePlan.length > 1 ? 's' : ''} planned. Click a soldier to assign or keep adding tiles.`);
   } else {
     const bpr = tw()?.build_phase_remaining || 0;
     if (bpr > 0) setStatus(`Build phase: ${Math.ceil(bpr)}s (no firing / no crossing midline).`);
@@ -1374,7 +1451,7 @@ function render() {
 
 [
   ['mode-select','select'], ['mode-attack','attack'], ['mode-sentry','sentry'], ['mode-defend','defend'],
-  ['mode-dig','dig'], ['mode-plan','plan'], ['mode-build','build'], ['mode-operate','operate'], ['mode-mortar','mortar'], ['mode-grenade','grenade'], ['mode-sandbag','sandbag'],
+  ['mode-dig','dig'], ['mode-plan','plan'], ['mode-build','build'], ['mode-operate','operate'], ['mode-mortar','mortar'], ['mode-grenade','grenade'], ['mode-sandbag','sandbag'], ['mode-wire','wire'],
 ].forEach(([id, m]) => {
   const btn = el(id);
   if (btn) btn.addEventListener('click', (evt) => { evt.stopPropagation(); setMode(m); render(); });

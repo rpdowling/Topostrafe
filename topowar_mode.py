@@ -147,6 +147,14 @@ class Sandbag(Structure):
 
 
 @dataclass
+class BarbedWire(Structure):
+    hp: int = 1
+    built: bool = False
+    build_progress: float = 0.0
+    build_required: float = 2.0
+
+
+@dataclass
 class MortarShell:
     owner: int
     x: float
@@ -246,6 +254,7 @@ class TopowarGameState:
         self.mgs: dict[int, MachineGun] = {}
         self.mortars: dict[int, Mortar] = {}
         self.sandbags: dict[int, Sandbag] = {}
+        self.barbed_wire: dict[int, BarbedWire] = {}
         self.mortar_shells: list[MortarShell] = []
         self.grenade_shells: list[GrenadeShell] = []
         self.projectiles: list[Projectile] = []
@@ -320,6 +329,14 @@ class TopowarGameState:
     def _sandbag_tile_set(self) -> set[tuple[int, int]]:
         return {sb.tile for sb in self.sandbags.values() if sb.hp > 0}
 
+    def _wire_tile_set(self) -> set[tuple[int, int]]:
+        """Built wire tiles that block soldier movement."""
+        return {w.tile for w in self.barbed_wire.values() if w.hp > 0 and w.built}
+
+    def _wire_structure_tile_set(self) -> set[tuple[int, int]]:
+        """All wire tiles including under-construction (for placement checks)."""
+        return {w.tile for w in self.barbed_wire.values() if w.hp > 0}
+
     def _structure_tile_set(self) -> set[tuple[int, int]]:
         return self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
 
@@ -372,6 +389,8 @@ class TopowarGameState:
         """Backfill fields when loading older saved Topowar states."""
         if not hasattr(self, "sandbags"):
             self.sandbags = {}
+        if not hasattr(self, "barbed_wire"):
+            self.barbed_wire = {}
         if not hasattr(self.rules, "grenade_range"):
             self.rules.grenade_range = 7.0
         if not hasattr(self.rules, "grenade_windup_seconds"):
@@ -879,6 +898,32 @@ class TopowarGameState:
                 raise ValueError("Maximum 8 grenade targets.")
             targets.add(tile)
             return "Grenade target added."
+        if t == "tw_assign_wire":
+            sid = int(action.get("unit_id", -1))
+            s = self.soldiers.get(sid)
+            if not s or s.owner != owner or s.hp <= 0:
+                raise ValueError("Invalid soldier.")
+            plan = [tuple(map(int, c)) for c in action.get("plan", [])]
+            if not plan:
+                raise ValueError("No wire plan.")
+            occupied = self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set() | self._wire_structure_tile_set()
+            for p in plan:
+                if not self.map.in_bounds(p):
+                    raise ValueError("Wire target out of bounds.")
+                if p in self.map.trenches:
+                    raise ValueError("Cannot place wire in a trench.")
+                if p in occupied:
+                    raise ValueError("Tile already occupied.")
+            wire_ids = []
+            for p in plan:
+                wid = self.next_structure_id
+                self.next_structure_id += 1
+                self.barbed_wire[wid] = BarbedWire(wid, owner, p)
+                wire_ids.append(wid)
+            occ = set(self._occupied_tiles().keys()) - {s.tile}
+            s.current_task = {"type": "build_wire", "wire_ids": wire_ids, "current_idx": 0, "progress": 0.0}
+            s.path = self.path.find_path(s.tile, tuple(plan[0]), trench_only=False, blocked=occ)
+            return "Wire placement assigned."
         if t == "tw_move_unit":
             sid = int(action.get("unit_id", -1))
             s = self.soldiers.get(sid)
@@ -932,7 +977,7 @@ class TopowarGameState:
             s.move_cooldown = 0.0
             return
         occ = self._occupied_tiles()
-        structure_tiles = self._structure_tile_set()
+        structure_tiles = self._structure_tile_set() | self._wire_tile_set()
         if target in structure_tiles or (target in occ and occ[target] != s.unit_id):
             s.blocked = True
             s.blocked_for += dt
@@ -1020,7 +1065,7 @@ class TopowarGameState:
 
     def _update_tasks(self, dt: float):
         occ = self._occupied_tiles()
-        blocked_keys = set(occ.keys()) | self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
+        blocked_keys = set(occ.keys()) | self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set() | self._wire_tile_set()
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
@@ -1117,6 +1162,29 @@ class TopowarGameState:
                 if sb.build_progress >= sb.build_required:
                     sb.built = True
                     s.current_task = None
+            elif task["type"] == "build_wire":
+                wire_ids = task.get("wire_ids", [])
+                idx = task.get("current_idx", 0)
+                if idx >= len(wire_ids):
+                    s.current_task = None
+                    continue
+                wid = wire_ids[idx]
+                w = self.barbed_wire.get(wid)
+                if not w or w.hp <= 0 or w.built:
+                    task["current_idx"] = idx + 1
+                    task["progress"] = 0.0
+                    s.path = []
+                    continue
+                if s.tile != w.tile:
+                    if not s.path or s.path[-1] != w.tile:
+                        s.path = self.path.find_path(s.tile, w.tile, trench_only=False, blocked=blocked_keys - {s.tile, w.tile})
+                    continue
+                task["progress"] = task.get("progress", 0.0) + dt
+                if task["progress"] >= w.build_required:
+                    w.built = True
+                    task["current_idx"] = idx + 1
+                    task["progress"] = 0.0
+                    s.path = []
 
     def _update_mortar_construction(self, dt: float):
         """Advance all unfinished mortars when at least two adjacent friendly soldiers are present.
@@ -1235,6 +1303,11 @@ class TopowarGameState:
 
     def _mortar_impact(self, landing: tuple[int, int], owner: int):
         lx, ly = landing
+        wire_by_tile = {w.tile: w for w in self.barbed_wire.values() if w.hp > 0}
+        for tx, ty in [(lx, ly), (lx+1, ly), (lx-1, ly), (lx, ly+1), (lx, ly-1)]:
+            w = wire_by_tile.get((tx, ty))
+            if w:
+                w.hp = 0
         direct_sandbag = next(
             (sb for sb in self.sandbags.values() if sb.hp > 0 and sb.built and sb.tile == landing), None
         )
@@ -1327,6 +1400,9 @@ class TopowarGameState:
         self.mortar_shells = remaining
 
     def _grenade_impact(self, landing: tuple[int, int], owner: int):
+        for w in self.barbed_wire.values():
+            if w.hp > 0 and w.tile == landing:
+                w.hp = 0
         target_in_trench = landing in self.map.trenches
         kill_radius = 2.0
         for s in self.soldiers.values():
@@ -1507,16 +1583,20 @@ class TopowarGameState:
 
     def serialize(self, viewer: int | None = None) -> dict[str, Any]:
         self._ensure_runtime_compat()
+        in_build_phase = self.time_elapsed < self.rules.build_phase_seconds
         soldiers = []
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
-            # Filter out enemy soldiers that are hidden in trenches
-            if viewer is not None and s.owner != viewer and not self._soldier_visible_to(s, viewer):
-                continue
+            if viewer is not None and s.owner != viewer:
+                # Hide all enemy data on their half during build phase
+                if in_build_phase and not self._on_owner_side(viewer, s.tile):
+                    continue
+                if not self._soldier_visible_to(s, viewer):
+                    continue
             task = None
             if s.current_task:
-                task = {k: v for k, v in s.current_task.items() if k not in ("plan", "component")}
+                task = {k: v for k, v in s.current_task.items() if k not in ("plan", "component", "wire_ids")}
                 if "plan" in s.current_task:
                     task["plan"] = [list(p) for p in s.current_task["plan"]]
             soldiers.append({
@@ -1539,6 +1619,8 @@ class TopowarGameState:
         for mg in self.mgs.values():
             if mg.hp <= 0:
                 continue
+            if viewer is not None and mg.owner != viewer and in_build_phase and not self._on_owner_side(viewer, mg.tile):
+                continue
             mgs.append({
                 "structure_id": mg.structure_id,
                 "owner": mg.owner,
@@ -1558,8 +1640,11 @@ class TopowarGameState:
         for mortar in self.mortars.values():
             if mortar.hp <= 0:
                 continue
-            if viewer is not None and mortar.owner != viewer and mortar.tile in self.map.trenches:
-                continue
+            if viewer is not None and mortar.owner != viewer:
+                if in_build_phase and not self._on_owner_side(viewer, mortar.tile):
+                    continue
+                if mortar.tile in self.map.trenches:
+                    continue
             mortars_out.append({
                 "structure_id": mortar.structure_id,
                 "owner": mortar.owner,
@@ -1579,6 +1664,8 @@ class TopowarGameState:
         for sb in self.sandbags.values():
             if sb.hp <= 0:
                 continue
+            if viewer is not None and sb.owner != viewer and in_build_phase and not self._on_owner_side(viewer, sb.tile):
+                continue
             sandbags_out.append({
                 "structure_id": sb.structure_id,
                 "owner": sb.owner,
@@ -1589,6 +1676,24 @@ class TopowarGameState:
                 "build_progress": sb.build_progress,
                 "build_required": sb.build_required,
             })
+        wire_out = []
+        for w in self.barbed_wire.values():
+            if w.hp <= 0:
+                continue
+            if viewer is not None and w.owner != viewer and in_build_phase and not self._on_owner_side(viewer, w.tile):
+                continue
+            wire_out.append({
+                "structure_id": w.structure_id,
+                "owner": w.owner,
+                "tile": list(w.tile),
+                "hp": w.hp,
+                "built": w.built,
+                "build_progress": w.build_progress,
+                "build_required": w.build_required,
+            })
+        visible_trenches = self.map.trenches
+        if in_build_phase and viewer is not None:
+            visible_trenches = {t for t in self.map.trenches if self._on_owner_side(viewer, t)}
         return {
             "rules": self.rules.__dict__.copy(),
             "build_phase_remaining": max(0.0, self.rules.build_phase_seconds - self.time_elapsed),
@@ -1596,12 +1701,13 @@ class TopowarGameState:
                 "width": self.map.width,
                 "height": self.map.height,
                 "default_elevation": self.map.default_elevation,
-                "trenches": [list(t) for t in sorted(self.map.trenches)],
+                "trenches": [list(t) for t in sorted(visible_trenches)],
             },
             "soldiers": soldiers,
             "machine_guns": mgs,
             "mortars": mortars_out,
             "sandbags": sandbags_out,
+            "barbed_wire": wire_out,
             "grenade_targets": [list(t) for t in sorted(self.grenade_tiles.get(viewer, set()))] if viewer is not None else [],
             "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "owner": ms.owner} for ms in self.mortar_shells],
             "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
