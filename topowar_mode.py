@@ -856,6 +856,18 @@ class TopowarGameState:
             self.sandbags[mid] = sb
             s.current_task = {"type": "build_sandbag", "sandbag_id": mid}
             return "Sandbag construction started."
+        if t == "tw_set_grenade_tile":
+            tile = tuple(map(int, action.get("tile", [])))
+            if len(tile) != 2 or not self.map.in_bounds(tile):
+                raise ValueError("Invalid grenade target tile.")
+            targets = self.grenade_tiles.setdefault(owner, set())
+            if tile in targets:
+                targets.remove(tile)
+                return "Grenade target removed."
+            if len(targets) >= 8:
+                raise ValueError("Maximum 8 grenade targets.")
+            targets.add(tile)
+            return "Grenade target added."
         if t == "tw_move_unit":
             sid = int(action.get("unit_id", -1))
             s = self.soldiers.get(sid)
@@ -1549,6 +1561,7 @@ class TopowarGameState:
             "machine_guns": mgs,
             "mortars": mortars_out,
             "sandbags": sandbags_out,
+            "grenade_targets": [list(t) for t in sorted(self.grenade_tiles.get(viewer, set()))] if viewer is not None else [],
             "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "owner": ms.owner} for ms in self.mortar_shells],
             "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
             "projectiles": [{"x": p.x, "y": p.y, "owner": p.owner, "source": p.source} for p in self.projectiles],
