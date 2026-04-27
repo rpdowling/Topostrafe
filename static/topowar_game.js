@@ -1122,8 +1122,8 @@ function draw() {
   // Death crosses
   for (const dm of data.death_marks || []) {
     const alpha = 1 - dm.age / dm.duration;
-    const dcx = OX + dm.x * CELL + CELL / 2;
-    const dcy = OY + dm.y * CELL + CELL / 2;
+    const dcx = cpx(dm.x);
+    const dcy = cpy(dm.y);
     ctx.globalAlpha = alpha;
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 1.5;

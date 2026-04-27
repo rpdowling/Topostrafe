@@ -570,11 +570,14 @@ class TopowarGameState:
             plan = [tuple(map(int, c)) for c in action.get("plan", [])]
             if not plan:
                 raise ValueError("No dig plan.")
+            sandbag_tiles = self._sandbag_tile_set()
             for p in plan:
                 if not self.map.in_bounds(p):
                     raise ValueError("Dig target out of bounds.")
                 if p in self.map.trenches:
                     raise ValueError("Tile is already a trench.")
+                if p in sandbag_tiles:
+                    raise ValueError("Cannot dig under a sandbag.")
             # First tile in the plan must be adjacent to an existing trench
             first = plan[0]
             adj4 = [(first[0]+dx, first[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
@@ -1184,12 +1187,22 @@ class TopowarGameState:
                     self._register_kill(s, owner)
 
         # Terrain deformation: landing → trench; 4 ortho adjacent flip type.
+        # If a sandbag occupies an adjacent tile it absorbs the flip (takes damage, ground unchanged).
         if landing not in self.map.trenches:
             self.map.trenches.add(landing)
         collapsing: set[tuple[int, int]] = set()
         for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
             adj = (lx + dx, ly + dy)
             if not self.map.in_bounds(adj):
+                continue
+            adj_sandbag = next(
+                (sb for sb in self.sandbags.values() if sb.hp > 0 and sb.built and sb.tile == adj), None
+            )
+            if adj_sandbag:
+                adj_sandbag.hp -= 1
+                if adj_sandbag.hp <= 0:
+                    adj_sandbag.hp = 0
+                # Ground under sandbag is protected — skip terrain flip for this tile.
                 continue
             if adj in self.map.trenches:
                 collapsing.add(adj)
