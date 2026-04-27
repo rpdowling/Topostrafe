@@ -233,6 +233,7 @@
           <label><span>Map Height</span><input id="tw_map_height" type="number" min="12" max="80" value="30" /></label>
           <label><span>Tick Rate</span><input id="tw_tick_rate" type="number" min="5" max="60" value="20" /></label>
           <label><span>Match Minutes</span><input id="tw_match_minutes" type="number" min="1" max="60" value="10" /></label>
+          <label><span>Build Phase Minutes</span><input id="tw_build_phase_minutes" type="number" min="0" max="15" step="0.5" value="3" /></label>
           <label><span>Dig Seconds / Tile</span><input id="tw_dig_seconds" type="number" min="1" max="30" step="0.5" value="5" /></label>
           <label><span>MG Build Seconds</span><input id="tw_mg_build_seconds" type="number" min="5" max="120" step="1" value="30" /></label>
           <label class="check"><input id="tw_is_private" type="checkbox" /><span>Private Game</span></label>
@@ -310,6 +311,6 @@
   <script>
     window.TOPOS_DEFAULTS = {{ defaults_json | safe }};
   </script>
-  <script src="/static/lobby.js?v=20"></script>
+  <script src="/static/lobby.js?v=21"></script>
 </body>
 </html>
