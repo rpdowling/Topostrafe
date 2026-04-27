@@ -815,9 +815,33 @@ class GameStore:
         if game_mode == "topowar":
             if t == "resign":
                 return {"type": "resign"}
-            if t in {"tw_order_mode", "tw_assign_dig", "tw_assign_build_mg", "tw_toggle_operate_mg", "tw_force_fire", "tw_cancel_task", "tw_move_unit"}:
+            if t in {
+                "tw_order_mode",
+                "tw_assign_dig",
+                "tw_assign_build_mg",
+                "tw_toggle_operate_mg",
+                "tw_force_fire",
+                "tw_cancel_task",
+                "tw_move_unit",
+                "tw_assign_build_mortar",
+                "tw_fire_mortar",
+                "tw_set_mortar_target",
+                "tw_toggle_operate_mortar",
+                "tw_assign_build_sandbag",
+            }:
                 out = {"type": t}
-                for key in ("mode", "unit_ids", "unit_id", "plan", "tile", "mg_id"):
+                for key in (
+                    "mode",
+                    "unit_ids",
+                    "unit_id",
+                    "plan",
+                    "tile",
+                    "target",
+                    "target_tile",
+                    "facing",
+                    "mg_id",
+                    "mortar_id",
+                ):
                     if key in action:
                         out[key] = action[key]
                 return out
