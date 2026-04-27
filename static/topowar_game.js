@@ -85,6 +85,11 @@ function soldiersAt(tile) {
   return (tw()?.soldiers || []).filter(s => s.tile[0] === tile[0] && s.tile[1] === tile[1]);
 }
 function mySoldiersAt(tile) { return soldiersAt(tile).filter(s => s.owner === mySeat()); }
+function myOfficer() {
+  const seat = mySeat();
+  if (seat === null) return null;
+  return (tw()?.soldiers || []).find(s => s.owner === seat && s.is_officer) || null;
+}
 function mgAt(tile) {
   return (tw()?.machine_guns || []).find(m => m.tile[0] === tile[0] && m.tile[1] === tile[1]) || null;
 }
@@ -470,7 +475,9 @@ board.addEventListener('click', (evt) => {
   } else if (mode === 'flare') {
     const fr = tw()?.flares_remaining;
     const remaining = fr ? (fr[String(mySeat())] ?? 0) : 0;
-    if (remaining > 0) {
+    if (!myOfficer()) {
+      setStatus('No living officer available to fire flares.', true);
+    } else if (remaining > 0) {
       send({ type: 'tw_fire_flare', tile });
       setStatus('Flare request sent…');
     } else {
@@ -1512,7 +1519,8 @@ function render() {
   } else if (mode === 'flare') {
     const fr = tw()?.flares_remaining;
     const rem = fr ? (fr[String(mySeat())] ?? 0) : 0;
-    setStatus(`Flare — click any tile to illuminate it (${rem} remaining). Reveals all units in radius.`);
+    if (!myOfficer()) setStatus('Flare — unavailable (no living officer).', true);
+    else setStatus(`Flare — click any tile to illuminate it (${rem} remaining). Reveals all units in radius.`);
   } else {
     const bpr = tw()?.build_phase_remaining || 0;
     if (bpr > 0) setStatus(`Build phase: ${Math.ceil(bpr)}s (no firing / no crossing midline).`);

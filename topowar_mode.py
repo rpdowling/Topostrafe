@@ -925,12 +925,16 @@ class TopowarGameState:
         if t == "tw_fire_flare":
             if self.flares_remaining.get(owner, 0) <= 0:
                 raise ValueError("No flares remaining.")
+            officer = next(
+                (s for s in self.soldiers.values() if s.owner == owner and s.hp > 0 and s.is_officer),
+                None,
+            )
+            if officer is None:
+                raise ValueError("No living officer available to fire flares.")
             target = tuple(map(int, action.get("tile", [])))
             if len(target) != 2 or not self.map.in_bounds(target):
                 raise ValueError("Invalid flare target.")
-            mid_x = self.map.width // 2
-            src_y = float(self.map.height - 1) if owner == 0 else 0.0
-            src = (float(mid_x), src_y)
+            src = (float(officer.tile[0]), float(officer.tile[1]))
             dist = math.dist(src, target)
             scatter_radius = 3.0 + max(0.0, math.floor(max(0.0, dist - 10.0) / 5.0))
             angle = self.random.uniform(0.0, 2.0 * math.pi)
