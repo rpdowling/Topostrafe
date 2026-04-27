@@ -1191,6 +1191,12 @@ class TopowarGameState:
         victim.hp = 0
         self.kill_counts[killer_owner] += 1
         self.death_marks.append(DeathMark(victim.x, victim.y))
+        if victim.is_grenadier and victim.grenade_target is not None and victim.grenade_windup > 0.0:
+            # Grenadier dies mid-prep: dropped grenade detonates at current tile.
+            # Mark dead/clear grenade state first to avoid recursive self-kill loops.
+            victim.grenade_target = None
+            victim.grenade_windup = 0.0
+            self._grenade_impact(victim.tile, victim.owner)
 
     def _fire_mortar(self, mortar: "Mortar"):
         if not mortar.target or not mortar.ready:
