@@ -557,12 +557,10 @@ class TopowarGameState:
                     target_tile = action.get("target_tile")
                     if target_tile:
                         goal = tuple(map(int, target_tile))
-                        if self.map.in_bounds(goal) and goal in self.map.trenches:
-                            component = self._trench_component(goal)
-                            s.current_task = {"type": "storm_trench", "goal": list(goal)}
+                        if self.map.in_bounds(goal):
+                            s.current_task = {"type": "advance", "goal": list(goal)}
                             s.combat_halt = False
-                            nearest = min(component, key=lambda t: math.dist(s.tile, t))
-                            s.path = self.path.find_path(s.tile, nearest, trench_only=False, blocked=occ - {s.tile})
+                            s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=occ - {s.tile})
             return "Mode updated."
         if t == "tw_assign_dig":
             sid = int(action.get("unit_id", -1))
@@ -900,11 +898,11 @@ class TopowarGameState:
             if s.hp <= 0:
                 continue
 
-            # Halt to engage when crossing open ground toward target trench.
+            # Halt to engage an open-ground enemy when crossing open ground.
             advancing = (
                 s.mode == "attack"
                 and s.current_task is not None
-                and s.current_task.get("type") == "storm_trench"
+                and s.current_task.get("type") == "advance"
                 and s.tile not in self.map.trenches
             )
             if advancing:
@@ -963,7 +961,6 @@ class TopowarGameState:
     def _update_tasks(self, dt: float):
         occ = self._occupied_tiles()
         blocked_keys = set(occ.keys()) | self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
-        component_cache: dict[tuple[int, int], set[tuple[int, int]]] = {}
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
@@ -971,32 +968,15 @@ class TopowarGameState:
             if not task:
                 # defend + sentry + attack-idle: stay put, no automatic pathing
                 continue
-            if task["type"] == "storm_trench":
+            if task["type"] == "advance":
                 goal = tuple(task["goal"])
-                if goal not in self.map.trenches:
-                    # Target tile deformed away (mortar impact), cancel
+                if s.tile == goal:
+                    # Arrived — clear task; soldier idles in place (still fires at visible enemies)
                     s.current_task = None
                     s.path = []
                     continue
-                if goal not in component_cache:
-                    component_cache[goal] = self._trench_component(goal)
-                component = component_cache[goal]
-                if s.tile in component:
-                    # In target trench — hold and fight; stop when cleared of visible enemies
-                    enemies_visible = any(
-                        s2.hp > 0 and s2.owner != s.owner
-                        and s2.tile in component
-                        and self._soldier_visible_to(s2, s.owner)
-                        for s2 in self.soldiers.values()
-                    )
-                    if not enemies_visible:
-                        s.current_task = None
-                    s.path = []
-                    continue
-                # Not yet in component — path toward nearest tile in it
-                if not s.path or s.path[-1] not in component:
-                    nearest = min(component, key=lambda t: math.dist(s.tile, t))
-                    s.path = self.path.find_path(s.tile, nearest, trench_only=False, blocked=blocked_keys - {s.tile})
+                if not s.path or s.path[-1] != goal:
+                    s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
             elif task["type"] == "dig":
                 tgt = tuple(task["target"])
                 adj4_tgt = [(tgt[0]+dx, tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
