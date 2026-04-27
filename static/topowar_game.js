@@ -451,7 +451,19 @@ board.addEventListener('click', (evt) => {
       selectedUnits = new Set([myS[0].unit_id]);
     } else {
       const uid = firstSelected();
-      if (uid !== null) send({ type: 'tw_assign_build_sandbag', unit_id: uid, tile });
+      if (uid !== null) {
+        const sol = (tw().soldiers || []).find(s => s.unit_id === uid);
+        if (sol) {
+          const dx = Math.abs(tile[0] - sol.tile[0]);
+          const dy = Math.abs(tile[1] - sol.tile[1]);
+          const trenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
+          if (Math.max(dx, dy) === 1 && !trenchSet.has(`${tile[0]},${tile[1]}`)) {
+            send({ type: 'tw_assign_build_sandbag', unit_id: uid, tile });
+          } else {
+            setStatus('Sandbag must be placed on an open tile adjacent to the soldier.', true);
+          }
+        }
+      }
     }
 
   }
@@ -605,6 +617,27 @@ function draw() {
     ctx.lineTo(OX + ax * CELL + 3, aty + CELL - 4);
     ctx.stroke();
     ctx.lineWidth = 1;
+  }
+
+  // Sandbag mode: highlight valid adjacent open tiles for selected soldier
+  if (mode === 'sandbag') {
+    const selSb = getSelectedSoldier();
+    if (selSb) {
+      const trenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          if (dx === 0 && dy === 0) continue;
+          const ax = selSb.tile[0] + dx, ay = selSb.tile[1] + dy;
+          if (ax < 0 || ay < 0 || ax >= tw().map.width || ay >= tw().map.height) continue;
+          if (trenchSet.has(`${ax},${ay}`)) continue;
+          ctx.fillStyle = 'rgba(180,160,100,0.30)';
+          ctx.fillRect(OX + ax * CELL, tileTop(ay), CELL - 1, CELL - 1);
+          ctx.strokeStyle = 'rgba(200,180,120,0.7)';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(OX + ax * CELL + 0.5, tileTop(ay) + 0.5, CELL - 2, CELL - 2);
+        }
+      }
+    }
   }
 
   // Range circle for selected soldier
@@ -778,19 +811,35 @@ function draw() {
   for (const sb of data.sandbags || []) {
     const [sx, sy] = sb.tile;
     const tlx = OX + sx * CELL, tly = tileTop(sy);
-    ctx.fillStyle = '#8d7f66';
-    ctx.fillRect(tlx + 3, tly + 6, CELL - 6, CELL - 12);
+    const hitsReceived = (sb.hp_max || 3) - sb.hp;
+
+    // Body — darkens with damage
+    const bodyColors = ['#8d7f66', '#7a6e57', '#68604c'];
+    ctx.fillStyle = bodyColors[Math.min(hitsReceived, 2)];
+    ctx.fillRect(tlx + 3, tly + 5, CELL - 6, CELL - 10);
     ctx.strokeStyle = '#c9bca5';
     ctx.lineWidth = 1;
-    ctx.strokeRect(tlx + 3, tly + 6, CELL - 6, CELL - 12);
-    const hpFrac = sb.hp / (sb.hp_max || 3);
-    ctx.fillStyle = '#111';
-    ctx.fillRect(tlx + 2, tly - 5, CELL - 4, 3);
-    ctx.fillStyle = hpFrac > 0.5 ? '#65e06f' : (hpFrac > 0.25 ? '#f4c84e' : '#e04040');
-    ctx.fillRect(tlx + 2, tly - 5, (CELL - 4) * hpFrac, 3);
+    ctx.strokeRect(tlx + 3, tly + 5, CELL - 6, CELL - 10);
+
+    // Damage spots — seeded by structure_id for stable positions
+    if (hitsReceived > 0) {
+      const spotCounts = [0, 3, 7];
+      const numSpots = spotCounts[Math.min(hitsReceived, 2)];
+      const seed = sb.structure_id;
+      const rng = (n) => (((seed * 1664525 + n * 22695477 + 1013904223) >>> 0) & 0x7fff) / 0x7fff;
+      ctx.fillStyle = 'rgba(20,10,0,0.55)';
+      for (let i = 0; i < numSpots; i++) {
+        const px = tlx + 5 + rng(i * 3) * (CELL - 10);
+        const py = tly + 7 + rng(i * 3 + 1) * (CELL - 14);
+        const r = 1 + rng(i * 3 + 2);
+        ctx.fillRect(px, py, r, r);
+      }
+    }
+
+    // Build progress bar (only while under construction)
     if (!sb.built) {
       const bpFrac = sb.build_progress / (sb.build_required || 5);
-      ctx.fillStyle = '#222';
+      ctx.fillStyle = '#1a1a1a';
       ctx.fillRect(tlx + 2, tly + CELL + 1, CELL - 4, 3);
       ctx.fillStyle = '#d8c07a';
       ctx.fillRect(tlx + 2, tly + CELL + 1, (CELL - 4) * bpFrac, 3);
@@ -1203,6 +1252,9 @@ function render() {
   } else if (mode === 'attack') {
     if (!selectedUnits.size) setStatus('Attack — click a soldier to select, then click an enemy trench.');
     else setStatus(`Attack — ${selectedUnits.size} selected. Click an enemy trench tile.`);
+  } else if (mode === 'sandbag') {
+    if (!selectedUnits.size) setStatus('Sandbag — click a soldier, then click an adjacent open tile.');
+    else setStatus('Sandbag — click an adjacent open tile to build.');
   } else {
     setStatus('Active.');
   }
