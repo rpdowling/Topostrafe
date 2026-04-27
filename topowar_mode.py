@@ -1098,12 +1098,6 @@ class TopowarGameState:
                 build_tile = tuple(task.get("build_tile", s.tile))
                 if s.tile != build_tile:
                     s.path = self.path.find_path(s.tile, build_tile, trench_only=False, blocked=blocked_keys - {s.tile})
-                adj = [u for u in self.soldiers.values() if u.hp > 0 and u.owner == mortar.owner and 0 < math.dist(u.tile, mortar.tile) <= 1.5]
-                if len(adj) >= 2:
-                    mortar.build_progress += dt
-                    if mortar.build_progress >= mortar.build_required:
-                        mortar.built = True
-                        mortar.ready = True
             elif task["type"] == "operate_mortar":
                 mortar = self.mortars.get(task["mortar_id"])
                 if not mortar or mortar.hp <= 0 or not mortar.built:
@@ -1123,6 +1117,27 @@ class TopowarGameState:
                 if sb.build_progress >= sb.build_required:
                     sb.built = True
                     s.current_task = None
+
+    def _update_mortar_construction(self, dt: float):
+        """Advance all unfinished mortars when at least two adjacent friendly soldiers are present.
+
+        This is intentionally independent from individual soldier tasks, so starting
+        another mortar with the same crew does not cancel progress on existing mortar
+        builds.
+        """
+        for mortar in self.mortars.values():
+            if mortar.hp <= 0 or mortar.built:
+                continue
+            adjacent_crew = [
+                s for s in self.soldiers.values()
+                if s.hp > 0 and s.owner == mortar.owner and 0 < math.dist(s.tile, mortar.tile) <= 1.5
+            ]
+            if len(adjacent_crew) < 2:
+                continue
+            mortar.build_progress += dt
+            if mortar.build_progress >= mortar.build_required:
+                mortar.built = True
+                mortar.ready = True
 
     def _update_mgs(self, dt: float):
         if self.time_elapsed < self.rules.build_phase_seconds:
@@ -1304,6 +1319,7 @@ class TopowarGameState:
             step = shell.speed * dt
             if dist <= step:
                 self._mortar_impact(shell.target, shell.owner)
+                continue
             else:
                 shell.x += dx / dist * step
                 shell.y += dy / dist * step
@@ -1451,6 +1467,7 @@ class TopowarGameState:
         for s in self.soldiers.values():
             if s.hp > 0:
                 self._move_soldier(s, dt)
+        self._update_mortar_construction(dt)
         self._rifle_combat(dt)
         self._update_mgs(dt)
         self._update_mortars(dt)

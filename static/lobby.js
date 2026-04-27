@@ -102,6 +102,7 @@ function buildForm() {
   if (el('tw_map_height')) el('tw_map_height').value = String(topowarDefaults.map_height ?? 30);
   if (el('tw_tick_rate')) el('tw_tick_rate').value = String(topowarDefaults.tick_rate ?? 20);
   if (el('tw_match_minutes')) el('tw_match_minutes').value = String(((topowarDefaults.match_time_seconds ?? 600) / 60));
+  if (el('tw_build_phase_minutes')) el('tw_build_phase_minutes').value = String(((topowarDefaults.build_phase_seconds ?? 180) / 60));
   if (el('tw_dig_seconds')) el('tw_dig_seconds').value = String(topowarDefaults.dig_seconds_per_tile ?? 5);
   if (el('tw_mg_build_seconds')) el('tw_mg_build_seconds').value = String(topowarDefaults.mg_build_seconds ?? 30);
 }
@@ -314,6 +315,7 @@ function collectTopowarPayload() {
       map_height: Number(el('tw_map_height')?.value || 30),
       tick_rate: Number(el('tw_tick_rate')?.value || 20),
       match_minutes: Number(el('tw_match_minutes')?.value || 10),
+      build_phase_minutes: Number(el('tw_build_phase_minutes')?.value || 3),
       dig_seconds_per_tile: Number(el('tw_dig_seconds')?.value || 5),
       mg_build_seconds: Number(el('tw_mg_build_seconds')?.value || 30),
     },
