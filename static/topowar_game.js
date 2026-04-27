@@ -527,9 +527,6 @@ function drawBuildPhaseOverlay(data) {
     for (let x = 0; x < data.map.width; x++) {
       const left = OX + x * CELL;
       const top = tileTop(y);
-      // Fog enemy build area during build phase so structures/units are obscured.
-      ctx.fillStyle = 'rgba(40, 40, 40, 0.62)';
-      ctx.fillRect(left, top, CELL - 1, CELL - 1);
       ctx.fillStyle = 'rgba(190, 20, 20, 0.11)';
       ctx.fillRect(left, top, CELL - 1, CELL - 1);
       ctx.strokeStyle = 'rgba(240, 50, 50, 0.38)';
