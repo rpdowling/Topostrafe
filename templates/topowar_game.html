@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=59" />
+  <link rel="stylesheet" href="/static/app.css?v=60" />
 </head>
 <body>
   <div class="page game-layout topowar-layout">
@@ -26,6 +26,13 @@
       </div>
       <div id="board-scroll" class="board-scroll um-board-scroll topowar-board-scroll">
         <canvas id="board" width="1200" height="900"></canvas>
+      </div>
+      <div class="topowar-zoom-dock" id="topowar-zoom-dock" aria-label="Board zoom">
+        <span class="zoom-mark">−</span>
+        <div class="topowar-zoom-track" id="topowar-zoom-track" role="slider" aria-valuemin="60" aria-valuemax="180" aria-valuenow="100" tabindex="0">
+          <div class="topowar-zoom-thumb" id="topowar-zoom-thumb" title="Drag to resize board"></div>
+        </div>
+        <span class="zoom-mark">+</span>
       </div>
     </section>
 
@@ -140,6 +147,6 @@
     </section>
   </div>
   <script>window.TOPOS_GAME_ID = "{{ game_id }}";</script>
-  <script src="/static/topowar_game.js?v=18"></script>
+  <script src="/static/topowar_game.js?v=19"></script>
 </body>
 </html>

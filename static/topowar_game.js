@@ -2,6 +2,7 @@
 const gameId = window.TOPOS_GAME_ID;
 const playerKey = new URLSearchParams(window.location.search).get('player') || '';
 const board = document.getElementById('board');
+const boardScroll = document.getElementById('board-scroll');
 const ctx = board.getContext('2d');
 
 let ws = null;
@@ -18,6 +19,7 @@ let pendingMgDispatch = false;
 let pendingMortarTile = null;
 let pendingMortarTarget = null;
 let pendingMortarDispatch = false;
+let boardZoom = 1;
 
 let mouseCanvas = { x: 0, y: 0 };
 
@@ -27,6 +29,8 @@ const OY = 20;
 const RIFLE_RANGE = 5;
 const GRENADIER_RANGE = 7;
 const MG_RANGE = 20;
+const MIN_BOARD_ZOOM = 0.6;
+const MAX_BOARD_ZOOM = 1.8;
 
 function el(id) { return document.getElementById(id); }
 function wsUrl() {
@@ -39,6 +43,87 @@ function setStatus(msg, bad = false) {
   if (!e) return;
   e.textContent = msg || '';
   e.style.color = bad ? '#ff9a9a' : '';
+}
+
+function clampZoom(z) {
+  return Math.max(MIN_BOARD_ZOOM, Math.min(MAX_BOARD_ZOOM, z));
+}
+
+function applyBoardZoom() {
+  if (!board || !boardScroll) return;
+  boardZoom = clampZoom(boardZoom);
+  board.style.width = `${Math.round(board.width * boardZoom)}px`;
+  board.style.height = `${Math.round(board.height * boardZoom)}px`;
+}
+
+function setupBoardZoomControl() {
+  const dock = el('topowar-zoom-dock');
+  const track = el('topowar-zoom-track');
+  const thumb = el('topowar-zoom-thumb');
+  if (!dock || !track || !thumb) return;
+
+  let dragging = false;
+  const toZoom = (evt) => {
+    const rect = track.getBoundingClientRect();
+    const y = Math.max(0, Math.min(rect.height, evt.clientY - rect.top));
+    const ratio = 1 - (y / rect.height);
+    return MIN_BOARD_ZOOM + ratio * (MAX_BOARD_ZOOM - MIN_BOARD_ZOOM);
+  };
+  const syncControl = () => {
+    const ratio = (boardZoom - MIN_BOARD_ZOOM) / (MAX_BOARD_ZOOM - MIN_BOARD_ZOOM);
+    const y = (1 - Math.max(0, Math.min(1, ratio))) * track.clientHeight;
+    thumb.style.top = `${y}px`;
+    track.setAttribute('aria-valuenow', String(Math.round(boardZoom * 100)));
+  };
+  const setFromEvent = (evt) => {
+    boardZoom = toZoom(evt);
+    applyBoardZoom();
+    syncControl();
+  };
+
+  const onMove = (evt) => {
+    if (!dragging) return;
+    setFromEvent(evt);
+  };
+  const stopDragging = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.cursor = '';
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', stopDragging);
+  };
+
+  const startDragging = (evt) => {
+    dragging = true;
+    document.body.style.cursor = 'ns-resize';
+    thumb.setPointerCapture(evt.pointerId);
+    setFromEvent(evt);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', stopDragging);
+  };
+
+  thumb.addEventListener('pointerdown', (evt) => {
+    evt.preventDefault();
+    startDragging(evt);
+  });
+  track.addEventListener('pointerdown', (evt) => {
+    evt.preventDefault();
+    startDragging(evt);
+  });
+  track.addEventListener('keydown', (evt) => {
+    if (evt.key === 'ArrowUp' || evt.key === 'ArrowRight') {
+      boardZoom = clampZoom(boardZoom + 0.05);
+    } else if (evt.key === 'ArrowDown' || evt.key === 'ArrowLeft') {
+      boardZoom = clampZoom(boardZoom - 0.05);
+    } else {
+      return;
+    }
+    evt.preventDefault();
+    applyBoardZoom();
+    syncControl();
+  });
+
+  syncControl();
 }
 
 function connect() {
@@ -596,6 +681,7 @@ function draw() {
 
   board.width  = OX * 2 + data.map.width  * CELL;
   board.height = OY * 2 + data.map.height * CELL;
+  applyBoardZoom();
 
   ctx.fillStyle = '#1a1e28';
   ctx.fillRect(0, 0, board.width, board.height);
@@ -1550,6 +1636,8 @@ el('resign').addEventListener('click', () => {
 // === INIT ===
 
 connect();
+setupBoardZoomControl();
+applyBoardZoom();
 setInterval(() => send({ type: 'ping' }), 200);
 setInterval(render, 100);
 updateModeButtons();
