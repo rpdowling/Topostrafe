@@ -18,7 +18,7 @@ let pendingMgDispatch = false;
 let pendingMortarTile = null;
 let pendingMortarTarget = null;
 let pendingMortarDispatch = false;
-let attackTargetTile = null;
+
 let mouseCanvas = { x: 0, y: 0 };
 
 const CELL = 24;
@@ -124,7 +124,7 @@ function getSelectedMortar() {
 // === MODE MANAGEMENT ===
 
 function updateModeButtons() {
-  const modes = ['select','attack','sentry','defend','dig','plan','build','operate','mortar','grenade','sandbag','wire','flare'];
+  const modes = ['select','move','dig','plan','build','operate','mortar','grenade','sandbag','wire','flare'];
   for (const m of modes) {
     const btn = el('mode-' + m);
     if (btn) btn.classList.toggle('active', mode === m);
@@ -137,14 +137,12 @@ function setMode(m) {
     plan = [];
     pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false;
     pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false;
-    attackTargetTile = null;
     retargetMortarId = null;
   } else {
     mode = m;
     if (m !== 'plan') plan = [];
     if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false; }
     if (m !== 'mortar') { pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false; }
-    if (m !== 'attack') attackTargetTile = null;
     if (m === 'build' || m === 'mortar' || m === 'sandbag' || m === 'wire') selectedUnits = new Set();
   }
   updateModeButtons();
@@ -154,7 +152,7 @@ function setMode(m) {
 
 function updateModeLabel() {
   const labels = {
-    select: 'Select', attack: 'Attack', sentry: 'Sentry', defend: 'Defend',
+    select: 'Select', move: 'Move',
     dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew', mortar: 'Build Mortar', grenade: 'Grenade', sandbag: 'Build Sandbag', wire: 'Wire', flare: 'Flare',
   };
   const e = el('mode-line');
@@ -248,7 +246,7 @@ document.addEventListener('keydown', (evt) => {
     plan = [];
     pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false;
     pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false;
-    attackTargetTile = null; retargetMortarId = null;
+    retargetMortarId = null;
     selectedUnits = new Set();
     selectedMg = null;
     setMode('select');
@@ -256,12 +254,9 @@ document.addEventListener('keydown', (evt) => {
     return;
   }
 
-  const shortcutMap = { '1':'select','2':'attack','3':'sentry','4':'defend','D':'dig','P':'plan','B':'build','O':'operate','M':'mortar','N':'grenade','G':'sandbag','W':'wire','F':'flare' };
+  const shortcutMap = { '1':'select','2':'move','D':'dig','P':'plan','B':'build','O':'operate','M':'mortar','N':'grenade','G':'sandbag','W':'wire','F':'flare' };
   if (shortcutMap[key]) {
     evt.preventDefault();
-    if (['2','3','4'].includes(key) && mode === shortcutMap[key] && selectedUnits.size) {
-      send({ type: 'tw_order_mode', unit_ids: [...selectedUnits], mode });
-    }
     setMode(shortcutMap[key]);
     render();
     return;
@@ -313,17 +308,10 @@ board.addEventListener('click', (evt) => {
     } else if (myMg) {
       selectedMg = myMg.structure_id; selectedMortar = null; selectedUnits = new Set();
     } else {
-      const uid = firstSelected();
-      const selected = uid ? (tw().soldiers || []).find(s => s.unit_id === uid && s.owner === mySeat()) : null;
-      const trenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
-      if (selected && selected.mode === 'defend' && trenchSet.has(`${tile[0]},${tile[1]}`)) {
-        send({ type: 'tw_move_unit', unit_id: selected.unit_id, tile });
-      } else {
-        selectedUnits = new Set(); selectedMg = null; selectedMortar = null;
-      }
+      selectedUnits = new Set(); selectedMg = null; selectedMortar = null;
     }
 
-  } else if (mode === 'attack') {
+  } else if (mode === 'move') {
     if (myS.length) {
       // Each click on a friendly soldier toggles them in/out of the selection
       const uid = myS[0].unit_id;
@@ -331,17 +319,8 @@ board.addEventListener('click', (evt) => {
       else selectedUnits.add(uid);
     } else if (selectedUnits.size) {
       // Click any destination tile → send all selected soldiers there
-      send({ type: 'tw_order_mode', unit_ids: [...selectedUnits], mode: 'attack', target_tile: tile });
-      attackTargetTile = tile;
+      for (const uid of selectedUnits) send({ type: 'tw_move_unit', unit_id: uid, tile });
     }
-
-  } else if (mode === 'sentry' || mode === 'defend') {
-    if (myS.length) {
-      const uid = myS[0].unit_id;
-      if (evt.ctrlKey || evt.shiftKey) selectedUnits.add(uid);
-      else selectedUnits = new Set([uid]);
-    }
-    if (selectedUnits.size) send({ type: 'tw_order_mode', unit_ids: [...selectedUnits], mode });
 
   } else if (mode === 'dig') {
     if (myS.length) {
@@ -698,23 +677,6 @@ function draw() {
     ctx.lineWidth = 1;
   }
 
-  if (mode === 'attack' && attackTargetTile) {
-    const [ax, ay] = attackTargetTile;
-    const aty = tileTop(ay);
-    ctx.strokeStyle = 'rgba(255,70,70,0.9)';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([4, 2]);
-    ctx.strokeRect(OX + ax * CELL + 1, aty + 1, CELL - 2, CELL - 2);
-    ctx.setLineDash([]);
-    ctx.beginPath();
-    ctx.moveTo(OX + ax * CELL + 3, aty + 3);
-    ctx.lineTo(OX + ax * CELL + CELL - 4, aty + CELL - 4);
-    ctx.moveTo(OX + ax * CELL + CELL - 4, aty + 3);
-    ctx.lineTo(OX + ax * CELL + 3, aty + CELL - 4);
-    ctx.stroke();
-    ctx.lineWidth = 1;
-  }
-
   // Sandbag mode: highlight valid adjacent open tiles for selected soldier
   if (mode === 'sandbag') {
     const selSb = getSelectedSoldier();
@@ -1055,15 +1017,16 @@ function draw() {
       ctx.fill();
     }
 
-    // Mode ring
-    const modeRingColor = { attack: '#ffb020', sentry: '#60dfff', defend: '#50d080' };
-    if (modeRingColor[s.mode]) {
-      ctx.strokeStyle = modeRingColor[s.mode];
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(scx, scy, 8, 0, Math.PI * 2);
-      ctx.stroke();
+    // Thin dashed path preview for moving soldiers.
+    if (s.path && s.path.length) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
       ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(scx, scy);
+      for (const p of s.path) ctx.lineTo(cpx(p[0]), cpy(p[1]));
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
     // Selection box
@@ -1099,7 +1062,7 @@ function draw() {
       if (s.combat_halt) {
         lbl = '■';  // halted to engage open enemy
       } else if (s.task) {
-        const taskLabels = { dig: 'DIG', build_mg: 'BLD', operate_mg: 'CREW', advance: '→' };
+        const taskLabels = { dig: 'DIG', build_mg: 'BLD', operate_mg: 'CREW', move: '→' };
         lbl = taskLabels[s.task.type] || null;
       }
       if (lbl) {
@@ -1439,8 +1402,8 @@ function updateSelectionPanel() {
   }
 
   if (soldier) {
-    const modeLabel = { select: '—', attack: 'Attack', sentry: 'Sentry', defend: 'Defend' };
-    const taskLabel = { dig: 'Digging', build_mg: 'Building MG', operate_mg: 'Crewing MG', advance: 'Advancing' };
+    const modeLabel = { select: '—', move: 'Move' };
+    const taskLabel = { dig: 'Digging', build_mg: 'Building MG', operate_mg: 'Crewing MG', move: 'Moving' };
     const side = soldier.owner === 0 ? 'Red' : 'Blue';
     const hp = Math.round((soldier.hp / (soldier.hp_max || 5)) * 100);
     const tsk = soldier.combat_halt ? 'Engaging' : (soldier.task ? (taskLabel[soldier.task.type] || soldier.task.type) : '—');
@@ -1505,9 +1468,9 @@ function render() {
       ? `${state.winner_name} wins — ${state.win_reason || ''}`
       : (state.win_reason || 'Game over.');
     setStatus(msg);
-  } else if (mode === 'attack') {
-    if (!selectedUnits.size) setStatus('Attack — click soldiers to select, then click a destination tile.');
-    else setStatus(`Attack — ${selectedUnits.size} selected. Click any tile to advance.`);
+  } else if (mode === 'move') {
+    if (!selectedUnits.size) setStatus('Move — click soldiers to select, then click a destination tile.');
+    else setStatus(`Move — ${selectedUnits.size} selected. Click any tile to move.`);
   } else if (mode === 'sandbag') {
     if (!selectedUnits.size) setStatus('Sandbag — click a soldier, then click an adjacent open tile.');
     else setStatus('Sandbag — click an adjacent open tile to build.');
@@ -1569,7 +1532,7 @@ function render() {
 // === BUTTON WIRING ===
 
 [
-  ['mode-select','select'], ['mode-attack','attack'], ['mode-sentry','sentry'], ['mode-defend','defend'],
+  ['mode-select','select'], ['mode-move','move'],
   ['mode-dig','dig'], ['mode-plan','plan'], ['mode-build','build'], ['mode-operate','operate'], ['mode-mortar','mortar'], ['mode-grenade','grenade'], ['mode-sandbag','sandbag'], ['mode-wire','wire'], ['mode-flare','flare'],
 ].forEach(([id, m]) => {
   const btn = el(id);

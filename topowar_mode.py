@@ -67,8 +67,7 @@ class Unit:
 
 @dataclass
 class Soldier(Unit):
-    mode: str = "defend"
-    sentry: bool = False
+    mode: str = "move"
     blocked: bool = False
     blocked_for: float = 0.0
     current_task: dict[str, Any] | None = None
@@ -84,6 +83,7 @@ class Soldier(Unit):
     is_officer: bool = False
     grenade_target: tuple[int, int] | None = None
     grenade_windup: float = 0.0
+    sandbag_queue: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -220,11 +220,17 @@ class PathfindingService:
         if start == goal:
             return [start]
         blocked = (blocked or set()) - {goal}
+
+        direct = self._preferred_zigzag_path(start, goal, blocked=blocked, trench_only=trench_only)
+        if direct:
+            out = direct[:-1] if (stop_adjacent and len(direct) >= 2) else direct
+            return out
+
         q = deque([start])
         prev: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
         while q:
             cx, cy = q.popleft()
-            for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+            for nx, ny in self._ordered_neighbors((cx, cy), goal):
                 nt = (nx, ny)
                 if nt in prev or nt in blocked:
                     continue
@@ -248,6 +254,69 @@ class PathfindingService:
         if stop_adjacent and len(out) >= 2:
             out = out[:-1]
         return out
+
+    def _ordered_neighbors(self, cur: tuple[int, int], goal: tuple[int, int]) -> list[tuple[int, int]]:
+        cx, cy = cur
+        gx, gy = goal
+        dx = gx - cx
+        dy = gy - cy
+        sx = 1 if dx > 0 else -1
+        sy = 1 if dy > 0 else -1
+        abs_dx = abs(dx)
+        abs_dy = abs(dy)
+        if abs_dx >= abs_dy:
+            primary = [(cx + sx, cy), (cx, cy + sy), (cx, cy - sy), (cx - sx, cy)]
+        else:
+            primary = [(cx, cy + sy), (cx + sx, cy), (cx - sx, cy), (cx, cy - sy)]
+        # Deduplicate while preserving order.
+        out: list[tuple[int, int]] = []
+        seen: set[tuple[int, int]] = set()
+        for n in primary:
+            if n not in seen:
+                seen.add(n)
+                out.append(n)
+        return out
+
+    def _preferred_zigzag_path(self, start: tuple[int, int], goal: tuple[int, int], blocked: set[tuple[int, int]], trench_only: bool) -> list[tuple[int, int]] | None:
+        if start == goal:
+            return [start]
+        x, y = start
+        gx, gy = goal
+        dx = gx - x
+        dy = gy - y
+        sx = 1 if dx > 0 else -1
+        sy = 1 if dy > 0 else -1
+        rem_x = abs(dx)
+        rem_y = abs(dy)
+        path = [start]
+        prefer_x = rem_x >= rem_y
+        while rem_x > 0 or rem_y > 0:
+            took_step = False
+            if prefer_x and rem_x > 0:
+                nx, ny = x + sx, y
+                took_step = True
+            elif (not prefer_x) and rem_y > 0:
+                nx, ny = x, y + sy
+                took_step = True
+            elif rem_x > 0:
+                nx, ny = x + sx, y
+                took_step = True
+            elif rem_y > 0:
+                nx, ny = x, y + sy
+                took_step = True
+            if not took_step:
+                break
+            nt = (nx, ny)
+            if (not self.grid.in_bounds(nt)) or (nt in blocked) or (trench_only and nt not in self.grid.trenches and nt != goal):
+                return None
+            path.append(nt)
+            x, y = nx, ny
+            rem_x = abs(gx - x)
+            rem_y = abs(gy - y)
+            prefer_x = not prefer_x
+        if path[-1] != goal:
+            return None
+        return path
 
 
 class TopowarGameState:
@@ -601,43 +670,6 @@ class TopowarGameState:
     def command(self, owner: int, action: dict[str, Any]) -> str:
         self._ensure_runtime_compat()
         t = action.get("type")
-        if t == "tw_order_mode":
-            mode = str(action.get("mode", "defend"))
-            if mode not in {"defend", "attack", "sentry"}:
-                raise ValueError("Unknown mode.")
-            occ = set(self._occupied_tiles().keys())
-            for sid in action.get("unit_ids", []):
-                s = self.soldiers.get(int(sid))
-                if not s or s.owner != owner or s.hp <= 0:
-                    continue
-                s.mode = mode
-                s.sentry = mode == "sentry"
-                s.current_task = None
-                s.path = []
-                if mode == "defend":
-                    # Prefer retreating to nearest trench occupied by a friendly soldier
-                    sid_int = int(sid)
-                    friendly_occupied = [
-                        s2.tile for s2 in self.soldiers.values()
-                        if s2.hp > 0 and s2.owner == owner and s2.unit_id != sid_int
-                        and s2.tile in self.map.trenches
-                    ]
-                    if friendly_occupied:
-                        target = min(friendly_occupied, key=lambda p: math.dist(p, s.tile))
-                    else:
-                        trench_targets = self._friendly_trench_tiles(owner)
-                        target = min(trench_targets, key=lambda p: math.dist(p, s.tile)) if trench_targets else None
-                    if target:
-                        s.path = self.path.find_path(s.tile, target, trench_only=False, blocked=occ - {s.tile})
-                elif mode == "attack":
-                    target_tile = action.get("target_tile")
-                    if target_tile:
-                        goal = tuple(map(int, target_tile))
-                        if self.map.in_bounds(goal):
-                            s.current_task = {"type": "advance", "goal": list(goal)}
-                            s.combat_halt = False
-                            s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=occ - {s.tile})
-            return "Mode updated."
         if t == "tw_assign_dig":
             sid = int(action.get("unit_id", -1))
             s = self.soldiers.get(sid)
@@ -896,10 +928,6 @@ class TopowarGameState:
                 raise ValueError("Invalid sandbag tile.")
             if max(abs(tile[0] - s.tile[0]), abs(tile[1] - s.tile[1])) != 1:
                 raise ValueError("Sandbag must be placed in a tile adjacent to the soldier.")
-            if s.current_task and s.current_task.get("type") == "build_sandbag":
-                in_progress = self.sandbags.get(s.current_task.get("sandbag_id"))
-                if in_progress and in_progress.hp > 0 and not in_progress.built:
-                    raise ValueError("Soldier must finish the current sandbag before starting another.")
             if tile in self.map.trenches:
                 raise ValueError("Sandbags can only be built on open ground.")
             if tile in self._structure_tile_set():
@@ -908,6 +936,9 @@ class TopowarGameState:
             self.next_structure_id += 1
             sb = Sandbag(mid, owner, tile, build_required=5.0, base_ground_is_trench=False)
             self.sandbags[mid] = sb
+            if s.current_task and s.current_task.get("type") == "build_sandbag":
+                s.sandbag_queue.append(mid)
+                return "Sandbag queued."
             s.current_task = {"type": "build_sandbag", "sandbag_id": mid}
             return "Sandbag construction started."
         if t == "tw_set_grenade_tile":
@@ -978,14 +1009,11 @@ class TopowarGameState:
             target = tuple(map(int, action.get("tile", [])))
             if len(target) != 2 or not self.map.in_bounds(target):
                 raise ValueError("Invalid move target.")
-            if s.mode != "defend":
-                raise ValueError("Only defending soldiers can be redirected from select mode.")
-            if target not in self.map.trenches:
-                raise ValueError("Move target must be a trench tile.")
-            occ = set(self._occupied_tiles().keys()) | self._mg_tile_set()
-            s.current_task = None
+            occ = set(self._occupied_tiles().keys()) | self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set() | self._wire_tile_set()
+            s.current_task = {"type": "move", "goal": list(target)}
+            s.combat_halt = False
             s.path = self.path.find_path(s.tile, target, trench_only=False, blocked=occ - {s.tile})
-            return "Unit rerouted."
+            return "Unit moving."
         if t == "tw_cancel_task":
             s = self.soldiers.get(int(action.get("unit_id", -1)))
             if not s or s.owner != owner:
@@ -1011,10 +1039,15 @@ class TopowarGameState:
                             u.current_task = None
                             u.path = []
             elif tt == "build_sandbag":
-                sid = int(task.get("sandbag_id", -1))
-                sb = self.sandbags.get(sid)
+                active_sid = int(task.get("sandbag_id", -1))
+                sb = self.sandbags.get(active_sid)
                 if sb and sb.hp > 0 and not sb.built:
-                    del self.sandbags[sid]
+                    del self.sandbags[active_sid]
+                for queued_id in s.sandbag_queue:
+                    queued = self.sandbags.get(queued_id)
+                    if queued and queued.hp > 0 and not queued.built:
+                        del self.sandbags[queued_id]
+                s.sandbag_queue.clear()
             elif tt == "build_wire":
                 wid = int(task.get("wire_id", -1))
                 w = self.barbed_wire.get(wid)
@@ -1030,8 +1063,8 @@ class TopowarGameState:
         raise ValueError("Unknown Topowar action.")
 
     def _move_soldier(self, s: Soldier, dt: float):
-        # Sentry soldiers and combat-halted soldiers hold position.
-        if s.sentry or s.combat_halt or s.grenade_windup > 0:
+        # Combat-halted soldiers hold position.
+        if s.combat_halt or s.grenade_windup > 0:
             s.move_cooldown = 0.0
             return
         # Drop any path step that points to the tile we're already on.
@@ -1081,9 +1114,8 @@ class TopowarGameState:
 
             # Halt to engage an open-ground enemy when crossing open ground.
             advancing = (
-                s.mode == "attack"
-                and s.current_task is not None
-                and s.current_task.get("type") == "advance"
+                s.current_task is not None
+                and s.current_task.get("type") == "move"
                 and s.tile not in self.map.trenches
             )
             if advancing:
@@ -1102,35 +1134,17 @@ class TopowarGameState:
             if s.rifle_cooldown > 0:
                 continue
 
-            # Sentry mode: stick to current attack target if still alive, visible, and in range
-            picked: tuple[str, int] | None = None
-            if s.sentry and s.attack_target_id is not None:
-                typ_hint = "soldier" if s.attack_target_id in self.soldiers else "mg"
-                target_obj = self.soldiers.get(s.attack_target_id) or self.mgs.get(s.attack_target_id)
-                visible = (not isinstance(target_obj, Soldier)) or self._soldier_visible_to(target_obj, s.owner)
-                if target_obj and getattr(target_obj, "hp", 0) > 0 and math.dist(s.tile, target_obj.tile) <= 5.0 and visible:
-                    picked = (typ_hint, s.attack_target_id)
-                else:
-                    s.attack_target_id = None
-
-            if picked is None:
-                t = self._nearest_enemy(s.owner, s.tile, visible_only=True)
-                if not t:
-                    continue
-                picked = t
-                if s.sentry:
-                    s.attack_target_id = picked[1]
-
+            picked = self._nearest_enemy(s.owner, s.tile, visible_only=True)
+            if not picked:
+                continue
             typ, tid = picked
             target_tile = self.soldiers[tid].tile if typ == "soldier" else self.mgs[tid].tile
             d = math.dist(s.tile, target_tile)
             if d > 5.0:
-                if s.sentry:
-                    s.attack_target_id = None
                 continue
 
             # Hit chance: 25% when moving through open ground toward a trench enemy;
-            # 50% when stationary (halted, sentry, or already in a trench).
+            # 50% when stationary (halted or already in a trench).
             is_moving = advancing and not s.combat_halt
             target_in_trench = typ == "soldier" and target_tile in self.map.trenches
             chance = 0.25 if (is_moving and target_in_trench) else 0.5
@@ -1147,9 +1161,9 @@ class TopowarGameState:
                 continue
             task = s.current_task
             if not task:
-                # defend + sentry + attack-idle: stay put, no automatic pathing
+                # No active task: stay put.
                 continue
-            if task["type"] == "advance":
+            if task["type"] == "move":
                 goal = tuple(task["goal"])
                 if s.tile == goal:
                     # Arrived — clear task; soldier idles in place (still fires at visible enemies)
@@ -1231,13 +1245,19 @@ class TopowarGameState:
             elif task["type"] == "build_sandbag":
                 sb = self.sandbags.get(task["sandbag_id"])
                 if not sb or sb.hp <= 0 or sb.built:
-                    s.current_task = None
+                    if s.sandbag_queue:
+                        s.current_task = {"type": "build_sandbag", "sandbag_id": s.sandbag_queue.pop(0)}
+                    else:
+                        s.current_task = None
                     continue
                 # Soldier stays in place and builds from current position.
                 sb.build_progress += dt
                 if sb.build_progress >= sb.build_required:
                     sb.built = True
-                    s.current_task = None
+                    if s.sandbag_queue:
+                        s.current_task = {"type": "build_sandbag", "sandbag_id": s.sandbag_queue.pop(0)}
+                    else:
+                        s.current_task = None
             elif task["type"] == "build_wire":
                 w = self.barbed_wire.get(task.get("wire_id"))
                 if not w or w.hp <= 0 or w.built:
@@ -1700,10 +1720,10 @@ class TopowarGameState:
                 "y": s.y,
                 "tile": list(s.tile),
                 "mode": s.mode,
-                "sentry": s.sentry,
                 "blocked": s.blocked,
                 "task": task,
                 "path": [list(p) for p in s.path],
+                "sandbag_queue": list(s.sandbag_queue),
                 "rifle_cooldown": s.rifle_cooldown,
                 "name": s.name,
                 "combat_halt": s.combat_halt,
