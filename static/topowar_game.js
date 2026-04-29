@@ -228,7 +228,7 @@ function setMode(m) {
     if (m !== 'plan') plan = [];
     if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false; }
     if (m !== 'mortar') { pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false; }
-    if (m === 'build' || m === 'mortar' || m === 'sandbag' || m === 'wire') selectedUnits = new Set();
+    if (m === 'build' || m === 'mortar' || m === 'sandbag' || m === 'wire' || m === 'move') selectedUnits = new Set();
   }
   updateModeButtons();
   updateModeLabel();
