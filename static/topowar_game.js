@@ -798,12 +798,12 @@ function draw() {
     ctx.lineWidth = 1;
   }
 
-  // Hill tiles (green-grey)
+  // Hill tiles (midpoint between ground #445a48 and mountain #8c8c8c)
   for (const t of data.map.hills || []) {
     const tty = tileTop(t[1]);
-    ctx.fillStyle = '#8a9e7a';
+    ctx.fillStyle = '#68736a';
     ctx.fillRect(OX + t[0] * CELL, tty, CELL - 1, CELL - 1);
-    ctx.strokeStyle = 'rgba(120,150,90,0.3)';
+    ctx.strokeStyle = 'rgba(90,105,92,0.3)';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(OX + t[0] * CELL + 0.5, tty + 0.5, CELL - 2, CELL - 2);
     ctx.lineWidth = 1;
