@@ -402,38 +402,73 @@ class TopowarGameState:
     def _generate_terrain(self):
         """Procedurally generate symmetric hills and mountains in no-man's land.
 
-        Mountains form horizontal ridges concentrated in the centre of the map.
-        Hills appear as small scattered clumps independent of mountains.
-        Terrain is 180°-rotationally symmetric for fairness.
+        Two or three coherent elliptical mountain bodies are placed in the top
+        half of NML, then 180°-mirrored for fairness.  A 1-tile BFS border
+        around each mountain mass becomes hills, giving a natural elevation
+        gradient.  Body sizes are scaled to target ~15% mountain coverage of NML.
         """
         W, H = self.map.width, self.map.height
         rng = self.random
 
-        # No-man's land rows: centre ~56% of map height.
         nml_y_min = int(H * 0.22)
         nml_y_max = int(H * 0.78)
-        # Only seed the top portion of NML; mirror 180° to fill the bottom half.
         nml_mid_y = (nml_y_min + nml_y_max) // 2
-        cx = W // 2
+        nml_area = W * (nml_y_max - nml_y_min)
 
-        # ── Horizontal ridge seeds ────────────────────────────────────────
-        # Two ridges per half-map at fixed y positions (±1 jitter) using an
-        # anisotropic Gaussian: wide in x (ridge shape), narrow in y.
-        # Two ridges map to 4 after mirroring, forming symmetric horizontal
-        # bands across no-man's land.
+        # ── Elliptical mountain body placement ────────────────────────────
+        # Scale body radii so that n_bodies × ellipse_area ≈ 15% of NML/2
+        # (the other half comes from the 180° mirror).
+        n_bodies = rng.randint(2, 3)
+        target_half = 0.15 * nml_area / (2 * n_bodies)
+        aspect = 1.5  # rx/ry ratio — wider than tall for a natural ridge feel
+        ry_f = math.sqrt(max(1.0, target_half) / (math.pi * aspect))
+        rx_f = aspect * ry_f
+
+        section_w = W / n_bodies
         alive: set[tuple[int, int]] = set()
-        cx_f = float(cx)
-        sigma_x = cx * 0.30       # ~6 tiles for W=40 — narrow ridge
-        sigma_y = 1.5             # vertical profile (FWHM ≈ 3.5 rows)
-        ridge_y_spacing = 6
-        for i in range(2):
-            ry = max(nml_y_min, nml_mid_y - i * ridge_y_spacing + rng.randint(-1, 1))
-            for x in range(W):
-                for y in range(nml_y_min, nml_mid_y + 1):
-                    p_x = math.exp(-0.5 * ((x - cx_f) / sigma_x) ** 2)
-                    p_y = math.exp(-0.5 * ((y - ry) / sigma_y) ** 2)
-                    if rng.random() < 0.70 * p_x * p_y:
+        for i in range(n_bodies):
+            # Spread bodies across the x-axis with per-body jitter.
+            jitter_x = int(section_w * 0.20)
+            bx = int(section_w * (i + 0.5)) + rng.randint(-jitter_x, jitter_x)
+            bx = max(int(rx_f) + 1, min(W - int(rx_f) - 2, bx))
+            by = rng.randint(nml_y_min + max(2, int(ry_f)), nml_mid_y - 1)
+
+            # Per-body size jitter ±15%.
+            scale = rng.uniform(0.85, 1.15)
+            rx = max(2, round(rx_f * scale))
+            ry = max(2, round(ry_f * scale))
+
+            # Fill ellipse: solid interior + thin fuzzy fringe.
+            # d2 threshold 1.2 keeps the fringe narrow so density stays
+            # proportionate regardless of blob size.
+            for dx in range(-(rx + 2), rx + 3):
+                for dy in range(-(ry + 2), ry + 3):
+                    x, y = bx + dx, by + dy
+                    if not (0 <= x < W and nml_y_min <= y <= nml_mid_y):
+                        continue
+                    d2 = (dx / rx) ** 2 + (dy / ry) ** 2
+                    if d2 <= 1.0:
                         alive.add((x, y))
+                    elif d2 <= 1.2 and rng.random() < 0.30:
+                        alive.add((x, y))
+
+        # One CA smoothing pass: fill interior holes, trim isolated outliers.
+        candidates: set[tuple[int, int]] = set()
+        neighbours8 = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
+        for (x, y) in alive:
+            candidates.add((x, y))
+            for dx, dy in neighbours8:
+                nb = (x + dx, y + dy)
+                if 0 <= nb[0] < W and nml_y_min <= nb[1] <= nml_mid_y:
+                    candidates.add(nb)
+        new_alive: set[tuple[int, int]] = set()
+        for (x, y) in candidates:
+            n = sum(1 for dx, dy in neighbours8 if (x + dx, y + dy) in alive)
+            if (x, y) in alive and n >= 3:
+                new_alive.add((x, y))
+            elif (x, y) not in alive and n >= 6:
+                new_alive.add((x, y))
+        alive = new_alive
 
         # ── 180° rotational symmetry ──────────────────────────────────────
         all_mountains: set[tuple[int, int]] = set(alive)
@@ -442,30 +477,15 @@ class TopowarGameState:
             if self.map.in_bounds(mirror):
                 all_mountains.add(mirror)
 
-        # ── Scattered small hill clumps (independent of mountains) ────────
-        # No BFS border around mountains — hills come exclusively from these
-        # clumps so that thin ridge perimeters don't inflate hill density.
-        # n_clumps=4-6 with r=1 squares (max 9 tiles each, ~6 expected at 70%
-        # fill) → ~25-38 hill tiles per half → ~50-75 total ≈ 10-15% of NML.
-        extra_hills: set[tuple[int, int]] = set()
-        n_clumps = rng.randint(4, 6)
-        for _ in range(n_clumps):
-            clump_x = rng.randint(int(W * 0.10), int(W * 0.90))
-            clump_y = rng.randint(nml_y_min + 1, nml_mid_y)
-            r = 1
-            for dx in range(-r, r + 1):
-                for dy in range(-r, r + 1):
-                    t = (clump_x + dx, clump_y + dy)
-                    if self.map.in_bounds(t) and nml_y_min <= t[1] <= nml_mid_y:
-                        if t not in all_mountains and rng.random() < 0.70:
-                            extra_hills.add(t)
-        mirrored_clumps: set[tuple[int, int]] = set(extra_hills)
-        for (x, y) in extra_hills:
-            mirror = (W - 1 - x, H - 1 - y)
-            if self.map.in_bounds(mirror) and mirror not in all_mountains:
-                mirrored_clumps.add(mirror)
-
-        all_hills: set[tuple[int, int]] = set(mirrored_clumps)
+        # ── 1-tile BFS hill border around mountain masses ─────────────────
+        all_hills: set[tuple[int, int]] = set()
+        visited = set(all_mountains)
+        for (mx, my) in all_mountains:
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nb = (mx + dx, my + dy)
+                if nb not in visited and self.map.in_bounds(nb):
+                    all_hills.add(nb)
+                    visited.add(nb)
 
         # Strip any terrain that overlaps the starting trench tiles.
         existing_trenches = set(self.map.trenches)
