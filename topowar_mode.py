@@ -726,9 +726,9 @@ class TopowarGameState:
             mg = MachineGun(mid, owner, tile, build_required=self.rules.mg_build_seconds, facing=facing, arc_center=facing)
             self.mgs[mid] = mg
             build_positions = self._build_positions_for_mg(tile)
-            if len(build_positions) < 2:
+            if len(build_positions) < 1:
                 del self.mgs[mid]
-                raise ValueError("MG must have at least two adjacent trench tiles for builders.")
+                raise ValueError("MG must have at least one adjacent trench tile for builders.")
 
             chosen_ids: list[int] = []
             for sid in action.get("unit_ids", []):
@@ -738,13 +738,13 @@ class TopowarGameState:
                 s = self.soldiers.get(sid)
                 if s and s.owner == owner and s.hp > 0:
                     chosen_ids.append(sid)
-            if len(chosen_ids) != 2:
+            if len(chosen_ids) != 1:
                 del self.mgs[mid]
-                raise ValueError("Select exactly two friendly soldiers to build the MG.")
+                raise ValueError("Select exactly one friendly soldier to build the MG.")
 
             occ = (set(self._occupied_tiles().keys()) - {self.soldiers[sid].tile for sid in chosen_ids}) | self._mg_tile_set()
             best_assignment: list[tuple[int, tuple[int, int], list[tuple[int, int]]]] | None = None
-            for spots in itertools.permutations(build_positions, 2):
+            for spots in itertools.permutations(build_positions, 1):
                 candidate: list[tuple[int, tuple[int, int], list[tuple[int, int]]]] = []
                 total_len = 0
                 valid = True
@@ -799,6 +799,9 @@ class TopowarGameState:
                 raise ValueError("Invalid mortar tile.")
             if tile in self._structure_tile_set():
                 raise ValueError("Only one equipment structure can occupy a tile.")
+            for other in self.mortars.values():
+                if other.hp > 0 and max(abs(other.tile[0] - tile[0]), abs(other.tile[1] - tile[1])) <= 1:
+                    raise ValueError("Mortar cannot be placed adjacent to another mortar.")
             if len(target_raw) != 2:
                 raise ValueError("Invalid target tile.")
             target = tuple(map(int, target_raw))
@@ -1300,7 +1303,7 @@ class TopowarGameState:
             mg.burst_shot_cooldown = max(0.0, mg.burst_shot_cooldown - dt)
             # Crew must be adjacent (not on the MG tile itself).
             live_ops = [sv for sv in self.soldiers.values() if sv.hp > 0 and sv.owner == mg.owner and 0 < math.dist(sv.tile, mg.tile) <= 1.5]
-            if len(live_ops) < 2:
+            if len(live_ops) < 1:
                 continue
             target = mg.force_target
             if target is None:
@@ -1722,7 +1725,7 @@ class TopowarGameState:
                 "mode": s.mode,
                 "blocked": s.blocked,
                 "task": task,
-                "path": [list(p) for p in s.path],
+                "path": [list(p) for p in s.path] if (viewer is None or s.owner == viewer) else [],
                 "sandbag_queue": list(s.sandbag_queue),
                 "rifle_cooldown": s.rifle_cooldown,
                 "name": s.name,
