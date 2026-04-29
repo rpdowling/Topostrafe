@@ -608,7 +608,7 @@ class TopowarGameState:
         ]
 
     def _mortar_adjacent_ground_valid(self, mortar: "Mortar") -> bool:
-        """Mortar is operable only when all 8 neighbors are at the same elevation as the mortar tile."""
+        """Mortar is operable only when all 8 neighbours are at the same elevation or lower."""
         mx, my = mortar.tile
         mortar_elev = self.map.elevation_at(mortar.tile)
         for dx in (-1, 0, 1):
@@ -618,7 +618,7 @@ class TopowarGameState:
                 adj = (mx + dx, my + dy)
                 if not self.map.in_bounds(adj):
                     return False
-                if self.map.elevation_at(adj) != mortar_elev:
+                if self.map.elevation_at(adj) > mortar_elev:
                     return False
         return True
 
@@ -793,7 +793,11 @@ class TopowarGameState:
                 cy += sy
 
     def _has_mortar_los(self, mortar_tile: tuple[int, int], target: tuple[int, int]) -> bool:
-        """Mortar LOS: blocked only by intermediate mountain tiles (not hills)."""
+        """True if no mountain tile lies between mortar and target on the Bresenham line.
+
+        Used only for ground/hill/trench targets from a non-mountain mortar.
+        Mountain-top targets are always visible; mountain mortars have no LOS limit.
+        """
         x0, y0 = mortar_tile
         x1, y1 = target
         dx = abs(x1 - x0)
@@ -1083,8 +1087,14 @@ class TopowarGameState:
             target = tuple(map(int, target_raw))
             if not self.map.in_bounds(target):
                 raise ValueError("Target out of bounds.")
-            if not self._has_mortar_los(tile, target):
-                raise ValueError("Target is blocked by a mountain.")
+            # Mountain tops are always targetable (visible from any elevation).
+            # Mortars sitting on a mountain can target anything freely.
+            # Only ground/hill/trench targets from a non-mountain mortar need LOS.
+            mortar_on_mountain = self.map.elevation_at(tile) == ELEV_MOUNTAIN
+            target_is_mountain = self.map.elevation_at(target) == ELEV_MOUNTAIN
+            if not mortar_on_mountain and not target_is_mountain:
+                if not self._has_mortar_los(tile, target):
+                    raise ValueError("Target is blocked by a mountain.")
             tile_elev = self.map.elevation_at(tile)
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
@@ -1093,8 +1103,8 @@ class TopowarGameState:
                     adj = (tile[0] + dx, tile[1] + dy)
                     if not self.map.in_bounds(adj):
                         raise ValueError("Mortar tile too close to map edge.")
-                    if self.map.elevation_at(adj) != tile_elev:
-                        raise ValueError("All 8 adjacent tiles must match the mortar tile's elevation.")
+                    if self.map.elevation_at(adj) > tile_elev:
+                        raise ValueError("All 8 adjacent tiles must be at the same elevation or lower.")
             mid = self.next_structure_id
             self.next_structure_id += 1
             mortar = Mortar(mid, owner, tile, target=target, base_elevation=self.map.elevation_at(tile))
@@ -1176,8 +1186,11 @@ class TopowarGameState:
             new_target = tuple(map(int, target_raw))
             if not self.map.in_bounds(new_target):
                 raise ValueError("Target out of bounds.")
-            if not self._has_mortar_los(mortar.tile, new_target):
-                raise ValueError("Target is blocked by a mountain.")
+            mortar_on_mountain = self.map.elevation_at(mortar.tile) == ELEV_MOUNTAIN
+            target_is_mountain = self.map.elevation_at(new_target) == ELEV_MOUNTAIN
+            if not mortar_on_mountain and not target_is_mountain:
+                if not self._has_mortar_los(mortar.tile, new_target):
+                    raise ValueError("Target is blocked by a mountain.")
             mortar.target = new_target
             mortar.ready = False
             mortar.cooldown = 20.0
@@ -1748,6 +1761,17 @@ class TopowarGameState:
         victim.hp = 0
         self.kill_counts[killer_owner] += 1
         self.death_marks.append(DeathMark(victim.x, victim.y))
+        # Remove any in-progress (unbuilt) sandbag this soldier was working on.
+        task = victim.current_task or {}
+        if task.get("type") == "build_sandbag":
+            sb = self.sandbags.get(int(task.get("sandbag_id", -1)))
+            if sb and not sb.built:
+                self.sandbags.pop(sb.structure_id, None)
+        for qid in list(victim.sandbag_queue):
+            sb = self.sandbags.get(qid)
+            if sb and not sb.built:
+                self.sandbags.pop(qid, None)
+        victim.sandbag_queue.clear()
         if victim.is_grenadier and victim.grenade_target is not None and victim.grenade_windup > 0.0:
             # Grenadier dies mid-prep: dropped grenade detonates at current tile.
             # Mark dead/clear grenade state first to avoid recursive self-kill loops.
@@ -1782,6 +1806,11 @@ class TopowarGameState:
             w = wire_by_tile.get((tx, ty))
             if w:
                 w.hp = 0
+        # Destroy any mortar hit directly by the shell.
+        for mortar in self.mortars.values():
+            if mortar.hp > 0 and mortar.tile == landing:
+                mortar.hp = 0
+                mortar.operators.clear()
         direct_sandbag = next(
             (sb for sb in self.sandbags.values() if sb.hp > 0 and sb.built and sb.tile == landing), None
         )
@@ -1866,9 +1895,15 @@ class TopowarGameState:
                 continue
             shell.x += dx / dist * step
             shell.y += dy / dist * step
-            # Intercept: if the shell passes over a mountain tile (not start, not target)
+            # Intercept: shell hits an intermediate mountain tile.
+            # Exception: shells fired FROM a mountain fly over terrain below them.
             curr_tile = (int(round(shell.x)), int(round(shell.y)))
-            if curr_tile != start_tile(shell) and curr_tile != shell.target and curr_tile in self.map.mountains:
+            origin_tile = start_tile(shell)
+            fired_from_mountain = origin_tile in self.map.mountains
+            if (not fired_from_mountain
+                    and curr_tile != origin_tile
+                    and curr_tile != shell.target
+                    and curr_tile in self.map.mountains):
                 self._mortar_impact(curr_tile, shell.owner)
                 continue
             remaining.append(shell)
