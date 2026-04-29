@@ -378,7 +378,7 @@ board.addEventListener('click', (evt) => {
   if (mode === 'select') {
     if (myS.length) {
       const uid = myS[0].unit_id;
-      if (evt.ctrlKey || evt.shiftKey) {
+      if (evt.ctrlKey) {
         if (selectedUnits.has(uid)) selectedUnits.delete(uid);
         else selectedUnits.add(uid);
       } else {
@@ -399,7 +399,7 @@ board.addEventListener('click', (evt) => {
   } else if (mode === 'move') {
     if (myS.length) {
       const uid = myS[0].unit_id;
-      if (evt.ctrlKey || evt.shiftKey) {
+      if (evt.ctrlKey) {
         if (selectedUnits.has(uid)) selectedUnits.delete(uid);
         else selectedUnits.add(uid);
       } else {
@@ -480,7 +480,7 @@ board.addEventListener('click', (evt) => {
       const ops = (tw().soldiers || [])
         .filter(s => s.owner === mySeat())
         .sort((a, b) => Math.hypot(a.tile[0]-myMg.tile[0],a.tile[1]-myMg.tile[1]) - Math.hypot(b.tile[0]-myMg.tile[0],b.tile[1]-myMg.tile[1]))
-        .slice(0, 2).map(s => s.unit_id);
+        .slice(0, 1).map(s => s.unit_id);
       send({ type: 'tw_toggle_operate_mg', mg_id: selectedMg, unit_ids: ops });
     } else if (myMortar) {
       selectedMortar = myMortar.structure_id; selectedMg = null;
@@ -494,10 +494,13 @@ board.addEventListener('click', (evt) => {
       if (mg) {
         const ops = new Set((mg.operators || []).map(x => Number(x)));
         const uid = myS[0].unit_id;
-        if (ops.size < 2 || ops.has(uid)) {
+        if (ops.has(uid)) {
+          ops.delete(uid);
+        } else {
+          ops.clear();
           ops.add(uid);
-          send({ type: 'tw_toggle_operate_mg', mg_id: selectedMg, unit_ids: [...ops].slice(0, 2) });
         }
+        send({ type: 'tw_toggle_operate_mg', mg_id: selectedMg, unit_ids: [...ops] });
       }
     } else if (selectedMg !== null) {
       send({ type: 'tw_force_fire', mg_id: selectedMg, tile });
@@ -1185,18 +1188,24 @@ function draw() {
     }
   }
 
-  // Mortars
+  // Mortars – retarget preview: snap to hovered tile, show line + crosshair + scatter ring
   if (retargetMortarId !== null) {
     const retargetMortar = (data.mortars || []).find(m => m.structure_id === retargetMortarId && m.owner === mySeat());
     if (retargetMortar) {
-      const tcx = mouseCanvas.x;
-      const tcy = mouseCanvas.y;
-      const dx = tcx - cpx(retargetMortar.tile[0]);
-      const dy = tcy - cpy(retargetMortar.tile[1]);
-      const dPixels = Math.hypot(dx, dy);
-      const previewScatterR = 3 + Math.max(0, Math.floor(Math.max(0, dPixels / CELL - 10) / 5));
-      ctx.strokeStyle = 'rgba(244,160,32,0.8)';
+      const hoverTile = tileFromCanvas(mouseCanvas.x, mouseCanvas.y);
+      const tcx = hoverTile ? cpx(hoverTile[0]) : mouseCanvas.x;
+      const tcy = hoverTile ? cpy(hoverTile[1]) : mouseCanvas.y;
+      const mcx = cpx(retargetMortar.tile[0]);
+      const mcy = cpy(retargetMortar.tile[1]);
+      const dTiles = Math.hypot(tcx - mcx, tcy - mcy) / CELL;
+      const previewScatterR = 3 + Math.max(0, Math.floor(Math.max(0, dTiles - 10) / 5));
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = 'rgba(244,160,32,0.7)';
       ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(mcx, mcy); ctx.lineTo(tcx, tcy);
+      ctx.stroke();
+      ctx.setLineDash([]);
       ctx.beginPath();
       ctx.moveTo(tcx - CELL * 0.6, tcy); ctx.lineTo(tcx + CELL * 0.6, tcy);
       ctx.moveTo(tcx, tcy - CELL * 0.6); ctx.lineTo(tcx, tcy + CELL * 0.6);
