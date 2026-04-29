@@ -291,14 +291,17 @@ function refreshBuildStatus() {
     setStatus('Build MG — Step 1: click a tile next to your trench (not in trench).');
     return;
   }
-  if (pendingBuildFacing === null) {
-    setStatus('Build MG — Step 2: click anywhere to aim the barrel direction.');
-    return;
+  const needFacing = pendingBuildFacing === null;
+  const needBuilder = selectedUnits.size < 1;
+  if (needFacing && needBuilder) {
+    setStatus('Build MG — Step 2: click to aim barrel direction, then click a soldier to assign as builder.');
+  } else if (needFacing) {
+    setStatus('Build MG — Click to aim the barrel direction.');
+  } else if (needBuilder) {
+    setStatus('Build MG — Click a soldier to assign as builder.');
+  } else {
+    setStatus('Sending build order…');
   }
-  const need = Math.max(0, 1 - selectedUnits.size);
-  setStatus(need > 0
-    ? `Build MG — Step 3: select ${need} more soldier${need > 1 ? 's' : ''} to build.`
-    : 'Sending build order…');
 }
 
 function refreshMortarStatus() {
@@ -397,7 +400,12 @@ board.addEventListener('click', (evt) => {
     }
 
   } else if (mode === 'move') {
-    if (myS.length) {
+    if (selectedUnits.size && !evt.ctrlKey) {
+      // Soldiers already selected — any click (even on a soldier) is a move order
+      for (const uid of selectedUnits) send({ type: 'tw_move_unit', unit_id: uid, tile });
+      selectedUnits = new Set();
+    } else if (myS.length) {
+      // Nothing selected (or Ctrl held): click to select/toggle
       const uid = myS[0].unit_id;
       if (evt.ctrlKey) {
         if (selectedUnits.has(uid)) selectedUnits.delete(uid);
@@ -405,10 +413,6 @@ board.addEventListener('click', (evt) => {
       } else {
         selectedUnits = new Set([uid]);
       }
-    } else if (selectedUnits.size) {
-      // Click any destination tile → send all selected soldiers there
-      for (const uid of selectedUnits) send({ type: 'tw_move_unit', unit_id: uid, tile });
-      selectedUnits = new Set();
     }
 
   } else if (mode === 'dig') {
@@ -441,17 +445,16 @@ board.addEventListener('click', (evt) => {
     if (!pendingBuildTile) {
       // Step 1: place MG tile
       pendingBuildTile = tile;
-    } else if (pendingBuildFacing === null) {
-      if (myS.length) {
-        // Convenience: allow selecting builder immediately after tile placement.
-        const soldier = myS[0];
-        const dx = soldier.tile[0] - pendingBuildTile[0];
-        const dy = soldier.tile[1] - pendingBuildTile[1];
-        pendingBuildFacing = Math.atan2(dy, dx) * 180 / Math.PI;
-        selectedUnits = new Set([soldier.unit_id]);
-        tryDispatch();
+    } else if (myS.length) {
+      // Clicking a soldier: select as builder (replace any prior selection)
+      const uid = myS[0].unit_id;
+      if (selectedUnits.has(uid) && selectedUnits.size === 1) {
+        selectedUnits.delete(uid); // deselect if clicking same soldier
       } else {
-        // Step 2: aim barrel toward click point
+        selectedUnits = new Set([uid]);
+      }
+      // If facing not yet set, derive from click position relative to MG tile
+      if (pendingBuildFacing === null) {
         const r = board.getBoundingClientRect();
         const cx = (evt.clientX - r.left) * (board.width / r.width);
         const cy = (evt.clientY - r.top) * (board.height / r.height);
@@ -459,18 +462,18 @@ board.addEventListener('click', (evt) => {
         const dy = cy - cpy(pendingBuildTile[1]);
         const gameDy = mySeat() === 1 ? -dy : dy;
         pendingBuildFacing = Math.atan2(gameDy, dx) * 180 / Math.PI;
-        tryDispatch();
       }
-    } else if (myS.length) {
-      // Step 3: click on soldier — toggle builder selection
-      const uid = myS[0].unit_id;
-      if (selectedUnits.has(uid)) selectedUnits.delete(uid);
-      else {
-        if (selectedUnits.size >= 1) selectedUnits = new Set();
-        selectedUnits.add(uid);
-      }
-      tryDispatch();
+    } else {
+      // Clicking an empty tile: set/update barrel facing direction
+      const r = board.getBoundingClientRect();
+      const cx = (evt.clientX - r.left) * (board.width / r.width);
+      const cy = (evt.clientY - r.top) * (board.height / r.height);
+      const dx = cx - cpx(pendingBuildTile[0]);
+      const dy = cy - cpy(pendingBuildTile[1]);
+      const gameDy = mySeat() === 1 ? -dy : dy;
+      pendingBuildFacing = Math.atan2(gameDy, dx) * 180 / Math.PI;
     }
+    tryDispatch();
     refreshBuildStatus();
 
   } else if (mode === 'operate') {
