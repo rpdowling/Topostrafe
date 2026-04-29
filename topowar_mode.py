@@ -402,10 +402,12 @@ class TopowarGameState:
     def _generate_terrain(self):
         """Procedurally generate symmetric hills and mountains in no-man's land.
 
-        Two or three coherent elliptical mountain bodies are placed in the top
-        half of NML, then 180°-mirrored for fairness.  A 1-tile BFS border
-        around each mountain mass becomes hills, giving a natural elevation
-        gradient.  Body sizes are scaled to target ~15% mountain coverage of NML.
+        ONE compound mountain body is placed in the top half of NML, biased
+        toward the left/right edges, then 180°-mirrored — giving 2 bodies
+        total (one per side).  A random compound shape is chosen each game:
+        single blob, dumbbell, L-shape, ridge-with-knob, or three-lobe cluster.
+        An optional third body can appear at the map centre (self-symmetric).
+        A 2-tile BFS hill border surrounds each mountain mass.
         """
         W, H = self.map.width, self.map.height
         rng = self.random
@@ -413,62 +415,77 @@ class TopowarGameState:
         nml_y_min = int(H * 0.22)
         nml_y_max = int(H * 0.78)
         nml_mid_y = (nml_y_min + nml_y_max) // 2
-        nml_area = W * (nml_y_max - nml_y_min)
 
-        # ── Elliptical mountain body placement ────────────────────────────
-        # Scale body radii so that n_bodies × ellipse_area ≈ 15% of NML/2
-        # (the other half comes from the 180° mirror).
-        n_bodies = rng.randint(2, 3)
-        target_half = 0.15 * nml_area / (2 * n_bodies)
-        aspect = 1.5  # rx/ry ratio — wider than tall for a natural ridge feel
-        ry_f = math.sqrt(max(1.0, target_half) / (math.pi * aspect))
-        rx_f = aspect * ry_f
-
-        section_w = W / n_bodies
-        alive: set[tuple[int, int]] = set()
-        for i in range(n_bodies):
-            # Spread bodies across the x-axis with per-body jitter.
-            jitter_x = int(section_w * 0.20)
-            bx = int(section_w * (i + 0.5)) + rng.randint(-jitter_x, jitter_x)
-            bx = max(int(rx_f) + 1, min(W - int(rx_f) - 2, bx))
-            by = rng.randint(nml_y_min + max(2, int(ry_f)), nml_mid_y - 1)
-
-            # Per-body size jitter ±15%.
-            scale = rng.uniform(0.85, 1.15)
-            rx = max(2, round(rx_f * scale))
-            ry = max(2, round(ry_f * scale))
-
-            # Fill ellipse: solid interior + thin fuzzy fringe.
-            # d2 threshold 1.2 keeps the fringe narrow so density stays
-            # proportionate regardless of blob size.
-            for dx in range(-(rx + 2), rx + 3):
-                for dy in range(-(ry + 2), ry + 3):
-                    x, y = bx + dx, by + dy
-                    if not (0 <= x < W and nml_y_min <= y <= nml_mid_y):
+        # Stamp a fuzzy ellipse centred at (cx, cy) into `tiles`.
+        # Clipped to valid map bounds and y in [y_lo, y_hi].
+        def stamp(cx, cy, rx, ry, tiles, y_lo=nml_y_min, y_hi=nml_mid_y):
+            rx, ry = max(1, rx), max(1, ry)
+            for ddx in range(-(rx + 2), rx + 3):
+                for ddy in range(-(ry + 2), ry + 3):
+                    x, y = cx + ddx, cy + ddy
+                    if not (0 <= x < W and y_lo <= y <= y_hi):
                         continue
-                    d2 = (dx / rx) ** 2 + (dy / ry) ** 2
+                    d2 = (ddx / rx) ** 2 + (ddy / ry) ** 2
                     if d2 <= 1.0:
-                        alive.add((x, y))
-                    elif d2 <= 1.2 and rng.random() < 0.30:
-                        alive.add((x, y))
+                        tiles.add((x, y))
+                    elif d2 <= 1.25 and rng.random() < 0.35:
+                        tiles.add((x, y))
 
-        # One CA smoothing pass: fill interior holes, trim isolated outliers.
-        candidates: set[tuple[int, int]] = set()
-        neighbours8 = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
-        for (x, y) in alive:
-            candidates.add((x, y))
-            for dx, dy in neighbours8:
-                nb = (x + dx, y + dy)
-                if 0 <= nb[0] < W and nml_y_min <= nb[1] <= nml_mid_y:
-                    candidates.add(nb)
-        new_alive: set[tuple[int, int]] = set()
-        for (x, y) in candidates:
-            n = sum(1 for dx, dy in neighbours8 if (x + dx, y + dy) in alive)
-            if (x, y) in alive and n >= 3:
-                new_alive.add((x, y))
-            elif (x, y) not in alive and n >= 6:
-                new_alive.add((x, y))
-        alive = new_alive
+        # ── Main body: one compound shape, biased toward the map edges ─────
+        # bx is in the left portion of the map so the 180°-mirror lands on
+        # the right portion, producing edge-biased terrain.
+        edge_max = max(4, int(W * 0.42))
+        bx = rng.randint(max(3, int(W * 0.06)), edge_max)
+        by = rng.randint(nml_y_min + 3, max(nml_y_min + 4, nml_mid_y - 2))
+
+        # Base radius scales with map width so bodies look proportionate.
+        base_r = max(3, int(W * 0.13))
+
+        alive: set[tuple[int, int]] = set()
+        shape = rng.randint(0, 4)
+
+        if shape == 0:  # Large single blob — widened ellipse
+            stamp(bx, by, int(base_r * 1.5), base_r, alive)
+
+        elif shape == 1:  # Dumbbell — two round lobes joined by a bridge
+            r = max(2, int(base_r * 0.75))
+            gap = r + rng.randint(2, max(3, int(W * 0.08)))
+            lx = bx - gap // 2
+            rx_ = bx + (gap - gap // 2)
+            stamp(lx, by, r, r, alive)
+            stamp(rx_, by, r, r, alive)
+            # Solid bridge connecting the two lobes
+            for brid_x in range(lx + r - 1, rx_ - r + 2):
+                for brid_y in range(by - 1, by + 2):
+                    if 0 <= brid_x < W and nml_y_min <= brid_y <= nml_mid_y:
+                        alive.add((brid_x, brid_y))
+
+        elif shape == 2:  # L-shape / elbow — two blobs at a diagonal offset
+            rx1 = max(2, int(base_r * 1.2))
+            ry1 = max(2, int(base_r * 0.9))
+            rx2 = max(2, int(base_r * 0.9))
+            ry2 = max(2, int(base_r * 0.7))
+            off_x = rng.choice([-1, 1]) * rng.randint(rx1 // 2 + 1, rx1 + 2)
+            off_y = rng.choice([-1, 1]) * rng.randint(ry1 // 2 + 1, ry1 + 2)
+            stamp(bx, by, rx1, ry1, alive)
+            stamp(bx + off_x, by + off_y, rx2, ry2, alive)
+
+        elif shape == 3:  # Ridge with knob — thin horizontal mass + attached blob
+            ridge_rx = max(3, int(base_r * 2.0))
+            stamp(bx, by, ridge_rx, max(1, int(base_r * 0.4)), alive)
+            kx = bx + rng.randint(-ridge_rx // 2, ridge_rx // 2)
+            ky = by + rng.choice([-1, 1]) * rng.randint(2, max(3, base_r))
+            stamp(kx, ky, int(base_r * 0.8), int(base_r * 0.7), alive)
+
+        else:  # shape == 4: Three-lobe cluster
+            r = max(2, int(base_r * 0.7))
+            lobes = [
+                (0, 0),
+                (rng.randint(r + 1, r + 3),  rng.randint(-1,  2)),
+                (rng.randint(-r - 3, -r - 1), rng.randint(-2,  1)),
+            ]
+            for ox, oy in lobes:
+                stamp(bx + ox, by + oy, r, r, alive)
 
         # ── 180° rotational symmetry ──────────────────────────────────────
         all_mountains: set[tuple[int, int]] = set(alive)
@@ -477,15 +494,35 @@ class TopowarGameState:
             if self.map.in_bounds(mirror):
                 all_mountains.add(mirror)
 
-        # ── 1-tile BFS hill border around mountain masses ─────────────────
+        # ── Optional 3rd body: self-symmetric blob at the map centre ──────
+        # Built by stamping near the 180° midpoint then explicitly mirroring
+        # every tile so it maps to itself under the global mirror — appears as
+        # one additional body rather than two.
+        if rng.random() < 0.40:
+            cr = max(2, int(base_r * 0.65))
+            # Stamp into top half only; then force-mirror each tile.
+            centre_raw: set[tuple[int, int]] = set()
+            stamp(W // 2 + rng.randint(-2, 2), nml_mid_y, cr, cr, centre_raw)
+            for (x, y) in list(centre_raw):
+                mirror = (W - 1 - x, H - 1 - y)
+                if self.map.in_bounds(mirror):
+                    centre_raw.add(mirror)
+            all_mountains.update(centre_raw)
+
+        # ── BFS hill border (2 tiles wide) ────────────────────────────────
         all_hills: set[tuple[int, int]] = set()
         visited = set(all_mountains)
-        for (mx, my) in all_mountains:
-            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                nb = (mx + dx, my + dy)
-                if nb not in visited and self.map.in_bounds(nb):
-                    all_hills.add(nb)
-                    visited.add(nb)
+        frontier: set[tuple[int, int]] = set(all_mountains)
+        for _ in range(2):
+            next_frontier: set[tuple[int, int]] = set()
+            for (mx, my) in frontier:
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    nb = (mx + dx, my + dy)
+                    if nb not in visited and self.map.in_bounds(nb):
+                        all_hills.add(nb)
+                        visited.add(nb)
+                        next_frontier.add(nb)
+            frontier = next_frontier
 
         # Strip any terrain that overlaps the starting trench tiles.
         existing_trenches = set(self.map.trenches)
