@@ -13,6 +13,17 @@ ELEV_GROUND = 4
 ELEV_HILL = 5
 ELEV_MOUNTAIN = 6
 
+# Ordered tier list used for elevation-adjacency checks during movement.
+_ELEV_TIER_ORDER = [ELEV_TRENCH, ELEV_GROUND, ELEV_HILL, ELEV_MOUNTAIN]
+
+
+def _elevation_adjacent(e_from: int, e_to: int) -> bool:
+    """Return True if e_from and e_to are within one tier of each other."""
+    try:
+        return abs(_ELEV_TIER_ORDER.index(e_from) - _ELEV_TIER_ORDER.index(e_to)) <= 1
+    except ValueError:
+        return True
+
 SOLDIER_NAMES = [
     "James", "Fred", "Jerry", "Henry", "Ferdinand", "Samuel", "Neb", "Moe",
     "Ned", "Art", "Red", "Leo", "Ted", "Ed", "Ray", "Roy", "Boe", "Ace",
@@ -36,6 +47,7 @@ class RulesConfig:
     projectile_speed: float = 8.0
     grenade_range: float = 7.0
     grenade_windup_seconds: float = 3.0
+    generate_terrain: bool = True
 
 
 @dataclass
@@ -227,6 +239,8 @@ class PathfindingService:
           can always reach it, even if currently occupied).
         - `stop_adjacent`: stop one tile short of the goal (used when the goal
           is an enemy unit we should not walk on top of).
+        Elevation restriction is always enforced: each step may only change
+        elevation by at most one tier (trench↔ground↔hill↔mountain).
         """
         if start == goal:
             return [start]
@@ -241,6 +255,7 @@ class PathfindingService:
         prev: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
         while q:
             cx, cy = q.popleft()
+            cur_elev = self.grid.elevation_at((cx, cy))
             for nx, ny in self._ordered_neighbors((cx, cy), goal):
                 nt = (nx, ny)
                 if nt in prev or nt in blocked:
@@ -248,6 +263,8 @@ class PathfindingService:
                 if not self.grid.in_bounds(nt):
                     continue
                 if trench_only and nt not in self.grid.trenches and nt != goal:
+                    continue
+                if not _elevation_adjacent(cur_elev, self.grid.elevation_at(nt)):
                     continue
                 prev[nt] = (cx, cy)
                 if nt == goal:
@@ -318,7 +335,10 @@ class PathfindingService:
             if not took_step:
                 break
             nt = (nx, ny)
+            cur_elev = self.grid.elevation_at((x, y))
             if (not self.grid.in_bounds(nt)) or (nt in blocked) or (trench_only and nt not in self.grid.trenches and nt != goal):
+                return None
+            if not _elevation_adjacent(cur_elev, self.grid.elevation_at(nt)):
                 return None
             path.append(nt)
             x, y = nx, ny
@@ -371,29 +391,98 @@ class TopowarGameState:
         for x in range(x0, x0 + length):
             self.map.trenches.add((x, y_red))
             self.map.trenches.add((x, y_blue))
-        # Scatter hills and mountains in the no-man's land between the two starting trenches.
-        mid = self.map.height // 2
-        hill_tiles = [
-            (x0 - 3, mid - 3), (x0 - 3, mid + 2),
-            (x0 + length + 1, mid - 2), (x0 + length + 1, mid + 3),
-            (x0 + 2, mid - 4), (x0 + length - 3, mid + 4),
-        ]
-        mountain_tiles = [
-            (x0 - 4, mid - 3), (x0 - 4, mid - 2), (x0 - 4, mid + 2), (x0 - 4, mid + 3),
-            (x0 + length + 2, mid - 2), (x0 + length + 2, mid - 3),
-            (x0 + length + 2, mid + 2), (x0 + length + 2, mid + 3),
-        ]
-        for t in hill_tiles:
-            if self.map.in_bounds(t):
-                self.map.hills.add(t)
-        for t in mountain_tiles:
-            if self.map.in_bounds(t):
-                self.map.mountains.add(t)
+        if self.rules.generate_terrain:
+            self._generate_terrain()
         for i in range(7):
             rx = x0 + i
             bx = x0 + i
             self._spawn_soldier(0, (rx, y_red), is_grenadier=(i < 2), is_officer=(i == 2))
             self._spawn_soldier(1, (bx, y_blue), is_grenadier=(i < 2), is_officer=(i == 2))
+
+    def _generate_terrain(self):
+        """Procedurally generate symmetric hills and mountains in no-man's land.
+
+        Mountains appear as continuous masses near the left and right edges of the
+        map; hills form a 1-3 tile border around each mountain mass.  Terrain is
+        180°-rotationally symmetric so neither player has a positional advantage.
+        """
+        W, H = self.map.width, self.map.height
+        rng = self.random
+
+        # No-man's land: centre ~60% of rows, kept well clear of starting trenches.
+        nml_y_min = int(H * 0.22)
+        nml_y_max = int(H * 0.78)
+
+        # Generate mountains in the LEFT half of the map (x < W//2), weighted
+        # toward x=0 so blobs concentrate near the left edge.
+        half_x = W // 2
+        alive: set[tuple[int, int]] = set()
+        for x in range(half_x):
+            for y in range(nml_y_min, nml_y_max + 1):
+                # Probability falls from ~0.50 at x=0 to near zero at x=half_x-1.
+                p = 0.50 * (1.0 - x / half_x) ** 1.5
+                if rng.random() < p:
+                    alive.add((x, y))
+
+        # Three rounds of cellular automata to produce coherent blobs.
+        # Rule: alive cells survive with ≥3 neighbours; dead cells birth with ≥5.
+        for _ in range(3):
+            candidates: set[tuple[int, int]] = set()
+            for t in alive:
+                candidates.add(t)
+                tx, ty = t
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)):
+                    nb = (tx + dx, ty + dy)
+                    if 0 <= nb[0] < half_x and nml_y_min <= nb[1] <= nml_y_max:
+                        candidates.add(nb)
+            new_alive: set[tuple[int, int]] = set()
+            for (x, y) in candidates:
+                n = sum(
+                    1 for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
+                    if (x + dx, y + dy) in alive
+                )
+                if (x, y) in alive:
+                    if n >= 3:
+                        new_alive.add((x, y))
+                else:
+                    if n >= 5:
+                        new_alive.add((x, y))
+            alive = new_alive
+
+        # Mirror 180° about the map centre: (x, y) → (W-1-x, H-1-y).
+        # This gives right-edge mountains symmetrical to the left-edge ones.
+        all_mountains: set[tuple[int, int]] = set(alive)
+        for (x, y) in alive:
+            mirror = (W - 1 - x, H - 1 - y)
+            if self.map.in_bounds(mirror):
+                all_mountains.add(mirror)
+
+        # BFS expansion of 1-3 tiles outward from mountains → hill border.
+        border_width = rng.randint(1, 3)
+        all_hills: set[tuple[int, int]] = set()
+        frontier = set(all_mountains)
+        visited = set(all_mountains)
+        for _ in range(border_width):
+            next_frontier: set[tuple[int, int]] = set()
+            for (mx, my) in frontier:
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    nb = (mx + dx, my + dy)
+                    if nb in visited or not self.map.in_bounds(nb):
+                        continue
+                    visited.add(nb)
+                    next_frontier.add(nb)
+                    if nb not in all_mountains:
+                        all_hills.add(nb)
+            frontier = next_frontier
+
+        # Strip any terrain that overlaps the starting trench tiles.
+        existing_trenches = set(self.map.trenches)
+        all_mountains -= existing_trenches
+        all_hills -= existing_trenches
+        all_hills -= all_mountains
+
+        self.map.mountains = all_mountains
+        self.map.hills = all_hills
 
     def _spawn_soldier(self, owner: int, tile: tuple[int, int], is_grenadier: bool = False, is_officer: bool = False):
         sid = self.next_unit_id
@@ -1291,6 +1380,11 @@ class TopowarGameState:
             s.path = []
             s.move_cooldown = 0.0
             return
+        # Reject elevation jumps greater than one tier (e.g. ground→mountain).
+        if not _elevation_adjacent(self.map.elevation_at(s.tile), self.map.elevation_at(target)):
+            s.path = []
+            s.move_cooldown = 0.0
+            return
         occ = self._occupied_tiles()
         structure_tiles = self._structure_tile_set() | self._wire_tile_set()
         if target in structure_tiles or (target in occ and occ[target] != s.unit_id):
@@ -1668,8 +1762,9 @@ class TopowarGameState:
                 if not s_in_trench and not self._has_sandbag_cover_between(landing, s.tile):
                     self._register_kill(s, owner)
 
-        # Terrain deformation: landing tile and 4 ortho adjacents each degrade one level.
-        # If a sandbag occupies an adjacent tile it absorbs the hit (takes damage, ground unchanged).
+        # Terrain deformation: landing tile degrades one level (mountain→hill→ground→trench).
+        # Adjacent tiles: trench tiles collapse back to open ground (old toggle behavior);
+        # hills/mountains/ground degrade one level normally.
         self._degrade_tile(landing)
         for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
             adj = (lx + dx, ly + dy)
@@ -1683,7 +1778,14 @@ class TopowarGameState:
                 if adj_sandbag.hp <= 0:
                     adj_sandbag.hp = 0
                 continue
-            self._degrade_tile(adj)
+            if self.map.elevation_at(adj) == ELEV_TRENCH:
+                # Trench collapses back to open ground — crush anyone inside.
+                self.map.trenches.discard(adj)
+                for s in self.soldiers.values():
+                    if s.hp > 0 and s.tile == adj:
+                        self._register_kill(s, owner)
+            else:
+                self._degrade_tile(adj)
 
         self._enforce_structure_ground_integrity()
         self.explosions.append(Explosion(float(lx), float(ly)))

@@ -105,6 +105,7 @@ function buildForm() {
   if (el('tw_build_phase_minutes')) el('tw_build_phase_minutes').value = String(((topowarDefaults.build_phase_seconds ?? 180) / 60));
   if (el('tw_dig_seconds')) el('tw_dig_seconds').value = String(topowarDefaults.dig_seconds_per_tile ?? 5);
   if (el('tw_mg_build_seconds')) el('tw_mg_build_seconds').value = String(topowarDefaults.mg_build_seconds ?? 30);
+  if (el('tw_generate_terrain')) el('tw_generate_terrain').checked = topowarDefaults.generate_terrain !== false;
 }
 
 
@@ -318,6 +319,7 @@ function collectTopowarPayload() {
       build_phase_minutes: Number(el('tw_build_phase_minutes')?.value || 3),
       dig_seconds_per_tile: Number(el('tw_dig_seconds')?.value || 5),
       mg_build_seconds: Number(el('tw_mg_build_seconds')?.value || 30),
+      generate_terrain: el('tw_generate_terrain')?.checked !== false,
     },
   };
 }
