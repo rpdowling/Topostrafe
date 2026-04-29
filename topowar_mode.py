@@ -753,7 +753,7 @@ class TopowarGameState:
                 valid = True
                 for sid, spot in zip(chosen_ids, spots):
                     soldier = self.soldiers[sid]
-                    path = self.path.find_path(soldier.tile, spot, trench_only=True, blocked=occ - {soldier.tile})
+                    path = self.path.find_path(soldier.tile, spot, trench_only=False, blocked=occ - {soldier.tile})
                     if not path:
                         valid = False
                         break
