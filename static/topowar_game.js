@@ -518,15 +518,21 @@ board.addEventListener('click', (evt) => {
   } else if (mode === 'operate') {
     const myMortar = myMortarAt(tile);
     if (myMg) {
-      selectedMg = myMg.structure_id; selectedMortar = null;
-      if (myMg.built) {
-        const ops = (tw().soldiers || [])
-          .filter(s => s.owner === mySeat())
-          .sort((a, b) => Math.hypot(a.tile[0]-myMg.tile[0],a.tile[1]-myMg.tile[1]) - Math.hypot(b.tile[0]-myMg.tile[0],b.tile[1]-myMg.tile[1]))
-          .slice(0, 1).map(s => s.unit_id);
-        send({ type: 'tw_toggle_operate_mg', mg_id: selectedMg, unit_ids: ops });
+      if (myMg.structure_id === selectedMg && myMg.force_target) {
+        // Click the already-selected MG again → clear force fire
+        send({ type: 'tw_force_fire', mg_id: selectedMg, tile: null });
+        setStatus('Force fire cleared.');
+      } else {
+        selectedMg = myMg.structure_id; selectedMortar = null;
+        if (myMg.built) {
+          const ops = (tw().soldiers || [])
+            .filter(s => s.owner === mySeat())
+            .sort((a, b) => Math.hypot(a.tile[0]-myMg.tile[0],a.tile[1]-myMg.tile[1]) - Math.hypot(b.tile[0]-myMg.tile[0],b.tile[1]-myMg.tile[1]))
+            .slice(0, 1).map(s => s.unit_id);
+          send({ type: 'tw_toggle_operate_mg', mg_id: selectedMg, unit_ids: ops });
+        }
+        // If unbuilt: just select it so a follow-up soldier click can resume construction
       }
-      // If unbuilt: just select it so a follow-up soldier click can resume construction
     } else if (myMortar) {
       selectedMortar = myMortar.structure_id; selectedMg = null;
       if (myMortar.built) {
@@ -557,7 +563,10 @@ board.addEventListener('click', (evt) => {
       }
     } else if (selectedMg !== null) {
       const mg = getSelectedMg();
-      if (mg && mg.built) send({ type: 'tw_force_fire', mg_id: selectedMg, tile });
+      if (mg && mg.built) {
+        send({ type: 'tw_force_fire', mg_id: selectedMg, tile });
+        setStatus('Force fire set — click MG again to clear.');
+      }
     }
 
   } else if (mode === 'mortar') {
@@ -651,7 +660,12 @@ board.addEventListener('contextmenu', (evt) => {
   const tile = tileFromEvent(evt);
   if (!tile) return;
   const myMg = myMgAt(tile);
-  if (myMg) { send({ type: 'tw_force_fire', mg_id: myMg.structure_id, tile: null }); return; }
+  if (myMg) {
+    send({ type: 'tw_force_fire', mg_id: myMg.structure_id, tile: null });
+    setStatus('Force fire cleared.');
+    render();
+    return;
+  }
   const myMortar = myMortarAt(tile);
   if (myMortar && myMortar.built) {
     retargetMortarId = myMortar.structure_id;
@@ -1732,7 +1746,20 @@ function render() {
 });
 
 el('cancel-task').addEventListener('click', () => {
-  for (const uid of selectedUnits) send({ type: 'tw_cancel_task', unit_id: uid });
+  const smg = getSelectedMg();
+  if (smg && !smg.built) {
+    send({ type: 'tw_cancel_build_mg', mg_id: smg.structure_id });
+    selectedMg = null;
+  } else {
+    const sm = getSelectedMortar();
+    if (sm && !sm.built) {
+      send({ type: 'tw_cancel_build_mortar', mortar_id: sm.structure_id });
+      selectedMortar = null;
+    } else {
+      for (const uid of selectedUnits) send({ type: 'tw_cancel_task', unit_id: uid });
+    }
+  }
+  render();
 });
 
 el('resign').addEventListener('click', () => {
