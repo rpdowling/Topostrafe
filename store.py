@@ -156,6 +156,7 @@ class GameStore:
             mg_build_seconds=max(5.0, min(120.0, float(raw.get("mg_build_seconds", 30.0)))),
             match_time_seconds=max(60, min(3600, int(float(raw.get("match_minutes", 20)) * 60))),
             build_phase_seconds=max(0, min(900, int(float(raw.get("build_phase_minutes", 3)) * 60))),
+            generate_terrain=bool(raw.get("generate_terrain", True)),
         )
 
     def _prune_expired_open_games_locked(self):
