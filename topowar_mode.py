@@ -679,19 +679,20 @@ class TopowarGameState:
             plan = [tuple(map(int, c)) for c in action.get("plan", [])]
             if not plan:
                 raise ValueError("No dig plan.")
-            sandbag_tiles = self._sandbag_tile_set()
+            sandbag_tile_map = {sb.tile: sb for sb in self.sandbags.values() if sb.hp > 0}
             for p in plan:
                 if not self.map.in_bounds(p):
                     raise ValueError("Dig target out of bounds.")
                 if p in self.map.trenches:
                     raise ValueError("Tile is already a trench.")
-                if p in sandbag_tiles:
-                    raise ValueError("Cannot dig under a sandbag.")
-            # First tile in the plan must be adjacent to an existing trench
+                # Sandbag tiles are allowed – digging removes the sandbag
+            # First tile must be adjacent to an existing trench, UNLESS it has a sandbag
             first = plan[0]
-            adj4 = [(first[0]+dx, first[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
-            if not any(a in self.map.trenches for a in adj4):
-                raise ValueError("Dig must start adjacent to an existing trench.")
+            first_is_sandbag = first in sandbag_tile_map
+            if not first_is_sandbag:
+                adj4 = [(first[0]+dx, first[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
+                if not any(a in self.map.trenches for a in adj4):
+                    raise ValueError("Dig must start adjacent to an existing trench.")
             # Cancel any other soldier already assigned to the same first tile
             for other in self.soldiers.values():
                 if other.unit_id != sid and other.current_task and other.current_task.get("type") == "dig":
@@ -699,11 +700,18 @@ class TopowarGameState:
                         other.current_task = None
                         other.path = []
             s.current_task = {"type": "dig", "plan": plan, "target": list(plan[0]), "progress": 0.0}
-            # Path to the nearest trench tile adjacent to the first dig target (not onto the target itself)
+            # Path to a tile adjacent to the first dig target.
+            # For sandbag removal any adjacent tile works; for normal dig it must be a trench tile.
             adj4_first = [(first[0]+dx, first[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
-            dig_from = [t for t in adj4_first if t in self.map.trenches and self.map.in_bounds(t)]
-            goal = min(dig_from, key=lambda t: math.dist(s.tile, t))
-            s.path = self.path.find_path(s.tile, goal, trench_only=True, blocked=set(self._occupied_tiles().keys()) - {s.tile})
+            if first_is_sandbag:
+                dig_from = [t for t in adj4_first if self.map.in_bounds(t)]
+                if dig_from:
+                    goal = min(dig_from, key=lambda t: math.dist(s.tile, t))
+                    s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=set(self._occupied_tiles().keys()) - {s.tile})
+            else:
+                dig_from = [t for t in adj4_first if t in self.map.trenches and self.map.in_bounds(t)]
+                goal = min(dig_from, key=lambda t: math.dist(s.tile, t))
+                s.path = self.path.find_path(s.tile, goal, trench_only=True, blocked=set(self._occupied_tiles().keys()) - {s.tile})
             return "Dig task assigned."
         if t == "tw_assign_build_mg":
             tile = tuple(map(int, action.get("tile", [])))
@@ -1244,21 +1252,38 @@ class TopowarGameState:
                     s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
             elif task["type"] == "dig":
                 tgt = tuple(task["target"])
+                tgt_sandbag = next((sb for sb in self.sandbags.values() if sb.hp > 0 and sb.tile == tgt), None)
                 adj4_tgt = [(tgt[0]+dx, tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
-                in_adj_trench = s.tile in self.map.trenches and s.tile in set(adj4_tgt)
-                if not in_adj_trench:
-                    if not s.path:
-                        # Path to nearest trench tile adjacent to the dig target
-                        goals = [t for t in adj4_tgt if t in self.map.trenches and self.map.in_bounds(t)]
-                        if goals:
-                            goal = min(goals, key=lambda g: math.dist(s.tile, g))
-                            s.path = self.path.find_path(s.tile, goal, trench_only=True, blocked=blocked_keys - {s.tile})
-                        else:
-                            s.current_task = None
-                    continue
+                if tgt_sandbag:
+                    # Sandbag removal: soldier just needs to be adjacent (any tile)
+                    in_position = s.tile in set(adj4_tgt)
+                    if not in_position:
+                        if not s.path:
+                            goals = [t for t in adj4_tgt if self.map.in_bounds(t)]
+                            if goals:
+                                goal = min(goals, key=lambda g: math.dist(s.tile, g))
+                                s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
+                            else:
+                                s.current_task = None
+                        continue
+                else:
+                    # Normal dig: soldier must be in an adjacent trench tile
+                    in_adj_trench = s.tile in self.map.trenches and s.tile in set(adj4_tgt)
+                    if not in_adj_trench:
+                        if not s.path:
+                            goals = [t for t in adj4_tgt if t in self.map.trenches and self.map.in_bounds(t)]
+                            if goals:
+                                goal = min(goals, key=lambda g: math.dist(s.tile, g))
+                                s.path = self.path.find_path(s.tile, goal, trench_only=True, blocked=blocked_keys - {s.tile})
+                            else:
+                                s.current_task = None
+                        continue
                 task["progress"] = task.get("progress", 0.0) + dt
                 if task["progress"] >= self.rules.dig_seconds_per_tile:
-                    self.map.trenches.add(tgt)
+                    if tgt_sandbag:
+                        del self.sandbags[tgt_sandbag.structure_id]
+                    else:
+                        self.map.trenches.add(tgt)
                     plan = task["plan"]
                     if plan:
                         plan.pop(0)
@@ -1268,11 +1293,13 @@ class TopowarGameState:
                         next_tgt = tuple(plan[0])
                         task["target"] = list(next_tgt)
                         task["progress"] = 0.0
-                        s.path = []  # Re-path to adjacent trench of new target
-                        # Validate next tile is still adjacent to trench
-                        adj4_next = [(next_tgt[0]+dx, next_tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
-                        if not any(a in self.map.trenches for a in adj4_next):
-                            s.current_task = None
+                        s.path = []
+                        # For normal dig: validate next tile is still adjacent to trench
+                        next_sandbag = next((sb for sb in self.sandbags.values() if sb.hp > 0 and sb.tile == next_tgt), None)
+                        if not next_sandbag:
+                            adj4_next = [(next_tgt[0]+dx, next_tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
+                            if not any(a in self.map.trenches for a in adj4_next):
+                                s.current_task = None
             elif task["type"] == "build_mg":
                 mg = self.mgs.get(task["mg_id"])
                 if not mg or mg.hp <= 0 or mg.built:
