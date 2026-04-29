@@ -402,78 +402,70 @@ class TopowarGameState:
     def _generate_terrain(self):
         """Procedurally generate symmetric hills and mountains in no-man's land.
 
-        Mountains appear as continuous masses near the left and right edges of the
-        map; hills form a 1-3 tile border around each mountain mass.  Terrain is
-        180°-rotationally symmetric so neither player has a positional advantage.
+        Mountains form horizontal ridges concentrated in the centre of the map.
+        Hills appear as small scattered clumps independent of mountains.
+        Terrain is 180°-rotationally symmetric for fairness.
         """
         W, H = self.map.width, self.map.height
         rng = self.random
 
-        # No-man's land: centre ~60% of rows, kept well clear of starting trenches.
+        # No-man's land rows: centre ~56% of map height.
         nml_y_min = int(H * 0.22)
         nml_y_max = int(H * 0.78)
+        # Only seed the top portion of NML; mirror 180° to fill the bottom half.
+        nml_mid_y = (nml_y_min + nml_y_max) // 2
+        cx = W // 2
 
-        # Generate mountains in the LEFT half of the map (x < W//2), weighted
-        # toward x=0 so blobs concentrate near the left edge.
-        half_x = W // 2
+        # ── Horizontal ridge seeds ────────────────────────────────────────
+        # Two ridges per half-map at fixed y positions (±1 jitter) using an
+        # anisotropic Gaussian: wide in x (ridge shape), narrow in y.
+        # Two ridges map to 4 after mirroring, forming symmetric horizontal
+        # bands across no-man's land.
         alive: set[tuple[int, int]] = set()
-        for x in range(half_x):
-            for y in range(nml_y_min, nml_y_max + 1):
-                # Probability falls from ~0.50 at x=0 to near zero at x=half_x-1.
-                p = 0.50 * (1.0 - x / half_x) ** 1.5
-                if rng.random() < p:
-                    alive.add((x, y))
+        cx_f = float(cx)
+        sigma_x = cx * 0.30       # ~6 tiles for W=40 — narrow ridge
+        sigma_y = 1.5             # vertical profile (FWHM ≈ 3.5 rows)
+        ridge_y_spacing = 6
+        for i in range(2):
+            ry = max(nml_y_min, nml_mid_y - i * ridge_y_spacing + rng.randint(-1, 1))
+            for x in range(W):
+                for y in range(nml_y_min, nml_mid_y + 1):
+                    p_x = math.exp(-0.5 * ((x - cx_f) / sigma_x) ** 2)
+                    p_y = math.exp(-0.5 * ((y - ry) / sigma_y) ** 2)
+                    if rng.random() < 0.70 * p_x * p_y:
+                        alive.add((x, y))
 
-        # Three rounds of cellular automata to produce coherent blobs.
-        # Rule: alive cells survive with ≥3 neighbours; dead cells birth with ≥5.
-        for _ in range(3):
-            candidates: set[tuple[int, int]] = set()
-            for t in alive:
-                candidates.add(t)
-                tx, ty = t
-                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)):
-                    nb = (tx + dx, ty + dy)
-                    if 0 <= nb[0] < half_x and nml_y_min <= nb[1] <= nml_y_max:
-                        candidates.add(nb)
-            new_alive: set[tuple[int, int]] = set()
-            for (x, y) in candidates:
-                n = sum(
-                    1 for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
-                    if (x + dx, y + dy) in alive
-                )
-                if (x, y) in alive:
-                    if n >= 3:
-                        new_alive.add((x, y))
-                else:
-                    if n >= 5:
-                        new_alive.add((x, y))
-            alive = new_alive
-
-        # Mirror 180° about the map centre: (x, y) → (W-1-x, H-1-y).
-        # This gives right-edge mountains symmetrical to the left-edge ones.
+        # ── 180° rotational symmetry ──────────────────────────────────────
         all_mountains: set[tuple[int, int]] = set(alive)
         for (x, y) in alive:
             mirror = (W - 1 - x, H - 1 - y)
             if self.map.in_bounds(mirror):
                 all_mountains.add(mirror)
 
-        # BFS expansion of 1-3 tiles outward from mountains → hill border.
-        border_width = rng.randint(1, 3)
-        all_hills: set[tuple[int, int]] = set()
-        frontier = set(all_mountains)
-        visited = set(all_mountains)
-        for _ in range(border_width):
-            next_frontier: set[tuple[int, int]] = set()
-            for (mx, my) in frontier:
-                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                    nb = (mx + dx, my + dy)
-                    if nb in visited or not self.map.in_bounds(nb):
-                        continue
-                    visited.add(nb)
-                    next_frontier.add(nb)
-                    if nb not in all_mountains:
-                        all_hills.add(nb)
-            frontier = next_frontier
+        # ── Scattered small hill clumps (independent of mountains) ────────
+        # No BFS border around mountains — hills come exclusively from these
+        # clumps so that thin ridge perimeters don't inflate hill density.
+        # n_clumps=4-6 with r=1 squares (max 9 tiles each, ~6 expected at 70%
+        # fill) → ~25-38 hill tiles per half → ~50-75 total ≈ 10-15% of NML.
+        extra_hills: set[tuple[int, int]] = set()
+        n_clumps = rng.randint(4, 6)
+        for _ in range(n_clumps):
+            clump_x = rng.randint(int(W * 0.10), int(W * 0.90))
+            clump_y = rng.randint(nml_y_min + 1, nml_mid_y)
+            r = 1
+            for dx in range(-r, r + 1):
+                for dy in range(-r, r + 1):
+                    t = (clump_x + dx, clump_y + dy)
+                    if self.map.in_bounds(t) and nml_y_min <= t[1] <= nml_mid_y:
+                        if t not in all_mountains and rng.random() < 0.70:
+                            extra_hills.add(t)
+        mirrored_clumps: set[tuple[int, int]] = set(extra_hills)
+        for (x, y) in extra_hills:
+            mirror = (W - 1 - x, H - 1 - y)
+            if self.map.in_bounds(mirror) and mirror not in all_mountains:
+                mirrored_clumps.add(mirror)
+
+        all_hills: set[tuple[int, int]] = set(mirrored_clumps)
 
         # Strip any terrain that overlaps the starting trench tiles.
         existing_trenches = set(self.map.trenches)
@@ -483,6 +475,7 @@ class TopowarGameState:
 
         self.map.mountains = all_mountains
         self.map.hills = all_hills
+
 
     def _spawn_soldier(self, owner: int, tile: tuple[int, int], is_grenadier: bool = False, is_officer: bool = False):
         sid = self.next_unit_id
