@@ -442,15 +442,25 @@ board.addEventListener('click', (evt) => {
       // Step 1: place MG tile
       pendingBuildTile = tile;
     } else if (pendingBuildFacing === null) {
-      // Step 2: aim barrel toward click point
-      const r = board.getBoundingClientRect();
-      const cx = (evt.clientX - r.left) * (board.width / r.width);
-      const cy = (evt.clientY - r.top) * (board.height / r.height);
-      const dx = cx - cpx(pendingBuildTile[0]);
-      const dy = cy - cpy(pendingBuildTile[1]);
-      const gameDy = mySeat() === 1 ? -dy : dy;
-      pendingBuildFacing = Math.atan2(gameDy, dx) * 180 / Math.PI;
-      tryDispatch();
+      if (myS.length) {
+        // Convenience: allow selecting builder immediately after tile placement.
+        const soldier = myS[0];
+        const dx = soldier.tile[0] - pendingBuildTile[0];
+        const dy = soldier.tile[1] - pendingBuildTile[1];
+        pendingBuildFacing = Math.atan2(dy, dx) * 180 / Math.PI;
+        selectedUnits = new Set([soldier.unit_id]);
+        tryDispatch();
+      } else {
+        // Step 2: aim barrel toward click point
+        const r = board.getBoundingClientRect();
+        const cx = (evt.clientX - r.left) * (board.width / r.width);
+        const cy = (evt.clientY - r.top) * (board.height / r.height);
+        const dx = cx - cpx(pendingBuildTile[0]);
+        const dy = cy - cpy(pendingBuildTile[1]);
+        const gameDy = mySeat() === 1 ? -dy : dy;
+        pendingBuildFacing = Math.atan2(gameDy, dx) * 180 / Math.PI;
+        tryDispatch();
+      }
     } else if (myS.length) {
       // Step 3: click on soldier — toggle builder selection
       const uid = myS[0].unit_id;
@@ -599,6 +609,7 @@ board.addEventListener('mousemove', (evt) => {
   mouseCanvas.y = (evt.clientY - r.top) * (board.height / r.height);
   if (mode === 'build' && pendingBuildTile && pendingBuildFacing === null) render();
   if (mode === 'mortar' && pendingMortarTile && !pendingMortarTarget) render();
+  if (retargetMortarId !== null) render();
   if (mode === 'flare') render();
 });
 

@@ -1728,7 +1728,7 @@ class TopowarGameState:
                 "mode": s.mode,
                 "blocked": s.blocked,
                 "task": task,
-                "path": [list(p) for p in s.path],
+                "path": [list(p) for p in s.path] if (viewer is None or s.owner == viewer) else [],
                 "sandbag_queue": list(s.sandbag_queue),
                 "rifle_cooldown": s.rifle_cooldown,
                 "name": s.name,
