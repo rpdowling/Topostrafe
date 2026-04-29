@@ -720,6 +720,9 @@ class TopowarGameState:
             ]
             if not any(n in friendly for n in tile_and_adj):
                 raise ValueError("MG must be placed on or adjacent to a friendly trench tile.")
+            for mortar in self.mortars.values():
+                if mortar.hp > 0 and max(abs(mortar.tile[0] - tile[0]), abs(mortar.tile[1] - tile[1])) <= 1:
+                    raise ValueError("MG cannot be placed adjacent to a mortar.")
             mid = self.next_structure_id
             self.next_structure_id += 1
             facing = float(action.get("facing", 0.0)) % 360.0

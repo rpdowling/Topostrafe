@@ -397,17 +397,7 @@ board.addEventListener('click', (evt) => {
     }
 
   } else if (mode === 'move') {
-    const clickedUid = myS.length ? myS[0].unit_id : null;
-    const shouldIssueMove = selectedUnits.size > 0
-      && (
-        !myS.length
-        || (!(evt.ctrlKey || evt.shiftKey) && !selectedUnits.has(clickedUid))
-      );
-
-    if (shouldIssueMove) {
-      for (const uid of selectedUnits) send({ type: 'tw_move_unit', unit_id: uid, tile });
-      selectedUnits = new Set();
-    } else if (myS.length) {
+    if (myS.length) {
       const uid = myS[0].unit_id;
       if (evt.ctrlKey || evt.shiftKey) {
         if (selectedUnits.has(uid)) selectedUnits.delete(uid);
@@ -415,6 +405,10 @@ board.addEventListener('click', (evt) => {
       } else {
         selectedUnits = new Set([uid]);
       }
+    } else if (selectedUnits.size) {
+      // Click any destination tile → send all selected soldiers there
+      for (const uid of selectedUnits) send({ type: 'tw_move_unit', unit_id: uid, tile });
+      selectedUnits = new Set();
     }
 
   } else if (mode === 'dig') {
