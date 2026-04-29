@@ -38,11 +38,24 @@ function wsUrl() {
   return `${proto}//${location.host}/ws/game/${encodeURIComponent(gameId)}?player=${encodeURIComponent(playerKey)}`;
 }
 function send(payload) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload)); }
+let _lastErrMsg = null;
+let _lastErrTime = 0;
+const ERR_PERSIST_MS = 4000;
+
 function setStatus(msg, bad = false) {
   const e = el('status-line');
   if (!e) return;
-  e.textContent = msg || '';
-  e.style.color = bad ? '#ff9a9a' : '';
+  if (bad) {
+    _lastErrMsg = msg;
+    _lastErrTime = Date.now();
+    e.textContent = msg || '';
+    e.style.color = '#ff9a9a';
+  } else {
+    if (_lastErrMsg && (Date.now() - _lastErrTime) < ERR_PERSIST_MS) return;
+    _lastErrMsg = null;
+    e.textContent = msg || '';
+    e.style.color = '';
+  }
 }
 
 function clampZoom(z) {
@@ -170,6 +183,15 @@ function soldiersAt(tile) {
   return (tw()?.soldiers || []).filter(s => s.tile[0] === tile[0] && s.tile[1] === tile[1]);
 }
 function mySoldiersAt(tile) { return soldiersAt(tile).filter(s => s.owner === mySeat()); }
+function tileHasEquipment(tile) {
+  const d = tw(); if (!d) return false;
+  const [tx, ty] = tile;
+  const at = t => t[0] === tx && t[1] === ty;
+  return (d.machine_guns || []).some(m => m.hp > 0 && at(m.tile)) ||
+         (d.mortars || []).some(m => m.hp > 0 && at(m.tile)) ||
+         (d.sandbags || []).some(s => s.hp > 0 && at(s.tile)) ||
+         (d.barbed_wire || []).some(w => w.hp > 0 && w.built && at(w.tile));
+}
 function myOfficer() {
   const seat = mySeat();
   if (seat === null) return null;
@@ -352,7 +374,19 @@ document.addEventListener('keydown', (evt) => {
 
   if (key === 'C') {
     evt.preventDefault();
-    for (const uid of selectedUnits) send({ type: 'tw_cancel_task', unit_id: uid });
+    const smg = getSelectedMg();
+    if (smg && !smg.built) {
+      send({ type: 'tw_cancel_build_mg', mg_id: smg.structure_id });
+      selectedMg = null;
+    } else {
+      const sm = getSelectedMortar();
+      if (sm && !sm.built) {
+        send({ type: 'tw_cancel_build_mortar', mortar_id: sm.structure_id });
+        selectedMortar = null;
+      } else {
+        for (const uid of selectedUnits) send({ type: 'tw_cancel_task', unit_id: uid });
+      }
+    }
     render();
   }
 });
@@ -401,9 +435,14 @@ board.addEventListener('click', (evt) => {
 
   } else if (mode === 'move') {
     if (selectedUnits.size && !evt.ctrlKey) {
-      // Soldiers already selected — any click (even on a soldier) is a move order
-      for (const uid of selectedUnits) send({ type: 'tw_move_unit', unit_id: uid, tile });
-      selectedUnits = new Set();
+      if (myS.length) {
+        // Clicking a friendly soldier: change selection instead of moving
+        selectedUnits = new Set([myS[0].unit_id]);
+      } else if (soldiersAt(tile).length === 0 && !tileHasEquipment(tile)) {
+        // Empty tile: send move orders
+        for (const uid of selectedUnits) send({ type: 'tw_move_unit', unit_id: uid, tile });
+        selectedUnits = new Set();
+      }
     } else if (myS.length) {
       // Nothing selected (or Ctrl held): click to select/toggle
       const uid = myS[0].unit_id;
@@ -480,33 +519,45 @@ board.addEventListener('click', (evt) => {
     const myMortar = myMortarAt(tile);
     if (myMg) {
       selectedMg = myMg.structure_id; selectedMortar = null;
-      const ops = (tw().soldiers || [])
-        .filter(s => s.owner === mySeat())
-        .sort((a, b) => Math.hypot(a.tile[0]-myMg.tile[0],a.tile[1]-myMg.tile[1]) - Math.hypot(b.tile[0]-myMg.tile[0],b.tile[1]-myMg.tile[1]))
-        .slice(0, 1).map(s => s.unit_id);
-      send({ type: 'tw_toggle_operate_mg', mg_id: selectedMg, unit_ids: ops });
+      if (myMg.built) {
+        const ops = (tw().soldiers || [])
+          .filter(s => s.owner === mySeat())
+          .sort((a, b) => Math.hypot(a.tile[0]-myMg.tile[0],a.tile[1]-myMg.tile[1]) - Math.hypot(b.tile[0]-myMg.tile[0],b.tile[1]-myMg.tile[1]))
+          .slice(0, 1).map(s => s.unit_id);
+        send({ type: 'tw_toggle_operate_mg', mg_id: selectedMg, unit_ids: ops });
+      }
+      // If unbuilt: just select it so a follow-up soldier click can resume construction
     } else if (myMortar) {
       selectedMortar = myMortar.structure_id; selectedMg = null;
-      const ops = (tw().soldiers || [])
-        .filter(s => s.owner === mySeat())
-        .sort((a, b) => Math.hypot(a.tile[0]-myMortar.tile[0],a.tile[1]-myMortar.tile[1]) - Math.hypot(b.tile[0]-myMortar.tile[0],b.tile[1]-myMortar.tile[1]))
-        .slice(0, 2).map(s => s.unit_id);
-      send({ type: 'tw_toggle_operate_mortar', mortar_id: selectedMortar, unit_ids: ops });
+      if (myMortar.built) {
+        const ops = (tw().soldiers || [])
+          .filter(s => s.owner === mySeat())
+          .sort((a, b) => Math.hypot(a.tile[0]-myMortar.tile[0],a.tile[1]-myMortar.tile[1]) - Math.hypot(b.tile[0]-myMortar.tile[0],b.tile[1]-myMortar.tile[1]))
+          .slice(0, 2).map(s => s.unit_id);
+        send({ type: 'tw_toggle_operate_mortar', mortar_id: selectedMortar, unit_ids: ops });
+      }
     } else if (selectedMg !== null && myS.length) {
       const mg = getSelectedMg();
       if (mg) {
-        const ops = new Set((mg.operators || []).map(x => Number(x)));
-        const uid = myS[0].unit_id;
-        if (ops.has(uid)) {
-          ops.delete(uid);
+        if (!mg.built) {
+          // Resume interrupted build with this soldier
+          send({ type: 'tw_resume_build_mg', mg_id: selectedMg, unit_id: myS[0].unit_id });
+          selectedMg = null;
         } else {
-          ops.clear();
-          ops.add(uid);
+          const ops = new Set((mg.operators || []).map(x => Number(x)));
+          const uid = myS[0].unit_id;
+          if (ops.has(uid)) {
+            ops.delete(uid);
+          } else {
+            ops.clear();
+            ops.add(uid);
+          }
+          send({ type: 'tw_toggle_operate_mg', mg_id: selectedMg, unit_ids: [...ops] });
         }
-        send({ type: 'tw_toggle_operate_mg', mg_id: selectedMg, unit_ids: [...ops] });
       }
     } else if (selectedMg !== null) {
-      send({ type: 'tw_force_fire', mg_id: selectedMg, tile });
+      const mg = getSelectedMg();
+      if (mg && mg.built) send({ type: 'tw_force_fire', mg_id: selectedMg, tile });
     }
 
   } else if (mode === 'mortar') {
@@ -867,16 +918,19 @@ function draw() {
 
     const gameAngleRad = (mg.facing || 0) * Math.PI / 180;
     const va = mySeat() === 1 ? -gameAngleRad : gameAngleRad;
+    // Arc/range uses the fixed arc_center so they don't animate during a turn
+    const arcCenterRad = ((mg.arc_center !== undefined ? mg.arc_center : mg.facing) || 0) * Math.PI / 180;
+    const arcVa = mySeat() === 1 ? -arcCenterRad : arcCenterRad;
     const arcHalfRad = (mg.arc_half || 45) * Math.PI / 180;
     const teamFill = mg.owner === 0 ? '#8b1515' : '#1a3fa0';
     const teamAlpha = mg.owner === 0 ? 'rgba(139,21,21,0.22)' : 'rgba(26,63,160,0.22)';
     const isSelected = mg.structure_id === selectedMg;
 
     if (mg.built) {
-      // Firing arc sector
+      // Firing arc sector (pinned to arc_center)
       ctx.beginPath();
       ctx.moveTo(mcx, mcy);
-      ctx.arc(mcx, mcy, CELL * 1.8, va - arcHalfRad, va + arcHalfRad);
+      ctx.arc(mcx, mcy, CELL * 1.8, arcVa - arcHalfRad, arcVa + arcHalfRad);
       ctx.closePath();
       ctx.fillStyle = teamAlpha;
       ctx.fill();
@@ -888,12 +942,12 @@ function draw() {
       ctx.lineWidth = 1;
 
       if (isSelected) {
-        // Range arc for selected MG
+        // Range arc for selected MG (pinned to arc_center)
         ctx.strokeStyle = 'rgba(255,220,80,0.75)';
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
-        ctx.arc(mcx, mcy, MG_RANGE * CELL, va - arcHalfRad, va + arcHalfRad);
+        ctx.arc(mcx, mcy, MG_RANGE * CELL, arcVa - arcHalfRad, arcVa + arcHalfRad);
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.lineWidth = 1;
@@ -909,7 +963,7 @@ function draw() {
     ctx.lineWidth = 1;
     ctx.stroke();
 
-    // Barrel line
+    // Barrel line (tracks actual facing, not arc_center)
     const barrelLen = CELL * 0.55;
     ctx.strokeStyle = '#e0e0e0';
     ctx.lineWidth = 2.5;

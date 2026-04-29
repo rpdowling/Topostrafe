@@ -84,6 +84,7 @@ class Soldier(Unit):
     grenade_target: tuple[int, int] | None = None
     grenade_windup: float = 0.0
     sandbag_queue: list[int] = field(default_factory=list)
+    wire_queue: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -988,10 +989,6 @@ class TopowarGameState:
             s = self.soldiers.get(sid)
             if not s or s.owner != owner or s.hp <= 0:
                 raise ValueError("Invalid soldier.")
-            if s.current_task and s.current_task.get("type") == "build_wire":
-                in_progress = self.barbed_wire.get(s.current_task.get("wire_id"))
-                if in_progress and in_progress.hp > 0 and not in_progress.built:
-                    raise ValueError("Soldier must finish the current wire before starting another.")
             tile = tuple(map(int, action.get("tile", [])))
             if len(tile) != 2 or not self.map.in_bounds(tile):
                 raise ValueError("Invalid wire tile.")
@@ -1005,6 +1002,11 @@ class TopowarGameState:
             wid = self.next_structure_id
             self.next_structure_id += 1
             self.barbed_wire[wid] = BarbedWire(wid, owner, tile)
+            if s.current_task and s.current_task.get("type") == "build_wire":
+                in_progress = self.barbed_wire.get(s.current_task.get("wire_id"))
+                if in_progress and in_progress.hp > 0 and not in_progress.built:
+                    s.wire_queue.append(wid)
+                    return "Wire queued."
             s.current_task = {"type": "build_wire", "wire_id": wid, "progress": 0.0}
             return "Wire placement started."
         if t == "tw_move_unit":
@@ -1059,6 +1061,11 @@ class TopowarGameState:
                 w = self.barbed_wire.get(wid)
                 if w and w.hp > 0 and not w.built:
                     del self.barbed_wire[wid]
+                for qwid in s.wire_queue:
+                    qw = self.barbed_wire.get(qwid)
+                    if qw and qw.hp > 0 and not qw.built:
+                        del self.barbed_wire[qwid]
+                s.wire_queue.clear()
             s.current_task = None
             s.path = []
             s.blocked = False
@@ -1066,6 +1073,63 @@ class TopowarGameState:
             s.move_cooldown = 0.0
             s.attack_target_id = None
             return "Task canceled."
+        if t == "tw_cancel_build_mg":
+            mid = int(action.get("mg_id", -1))
+            mg = self.mgs.get(mid)
+            if not mg or mg.owner != owner:
+                raise ValueError("MG not found.")
+            if mg.built:
+                raise ValueError("MG is already built.")
+            del self.mgs[mid]
+            for u in self.soldiers.values():
+                if u.current_task and u.current_task.get("type") == "build_mg" and int(u.current_task.get("mg_id", -1)) == mid:
+                    u.current_task = None
+                    u.path = []
+            return "MG build canceled."
+        if t == "tw_cancel_build_mortar":
+            mid = int(action.get("mortar_id", -1))
+            mortar = self.mortars.get(mid)
+            if not mortar or mortar.owner != owner:
+                raise ValueError("Mortar not found.")
+            if mortar.built:
+                raise ValueError("Mortar is already built.")
+            del self.mortars[mid]
+            for u in self.soldiers.values():
+                if u.current_task and u.current_task.get("type") == "build_mortar" and int(u.current_task.get("mortar_id", -1)) == mid:
+                    u.current_task = None
+                    u.path = []
+            return "Mortar build canceled."
+        if t == "tw_resume_build_mg":
+            mid = int(action.get("mg_id", -1))
+            mg = self.mgs.get(mid)
+            if not mg or mg.owner != owner or mg.hp <= 0:
+                raise ValueError("MG not found.")
+            if mg.built:
+                raise ValueError("MG is already built.")
+            sid = int(action.get("unit_id", -1))
+            s = self.soldiers.get(sid)
+            if not s or s.owner != owner or s.hp <= 0:
+                raise ValueError("Invalid soldier.")
+            for u in self.soldiers.values():
+                if u.current_task and u.current_task.get("type") == "build_mg" and int(u.current_task.get("mg_id", -1)) == mid:
+                    u.current_task = None
+                    u.path = []
+            build_positions = self._build_positions_for_mg(mg.tile)
+            if not build_positions:
+                raise ValueError("No valid build positions for this MG.")
+            occ = (set(self._occupied_tiles().keys()) - {s.tile}) | self._mg_tile_set()
+            best_path: list | None = None
+            best_spot: tuple | None = None
+            for spot in build_positions:
+                path = self.path.find_path(s.tile, spot, trench_only=False, blocked=occ - {s.tile})
+                if path and (best_path is None or len(path) < len(best_path)):
+                    best_path = path
+                    best_spot = spot
+            if best_path is None:
+                raise ValueError("Soldier cannot reach any build position.")
+            s.current_task = {"type": "build_mg", "mg_id": mid, "build_tile": list(best_spot)}
+            s.path = best_path
+            return "MG construction resumed."
         raise ValueError("Unknown Topowar action.")
 
     def _move_soldier(self, s: Soldier, dt: float):
@@ -1267,12 +1331,18 @@ class TopowarGameState:
             elif task["type"] == "build_wire":
                 w = self.barbed_wire.get(task.get("wire_id"))
                 if not w or w.hp <= 0 or w.built:
-                    s.current_task = None
+                    if s.wire_queue:
+                        s.current_task = {"type": "build_wire", "wire_id": s.wire_queue.pop(0), "progress": 0.0}
+                    else:
+                        s.current_task = None
                     continue
                 task["progress"] = task.get("progress", 0.0) + dt
                 if task["progress"] >= w.build_required:
                     w.built = True
-                    s.current_task = None
+                    if s.wire_queue:
+                        s.current_task = {"type": "build_wire", "wire_id": s.wire_queue.pop(0), "progress": 0.0}
+                    else:
+                        s.current_task = None
 
     def _update_mortar_construction(self, dt: float):
         """Advance all unfinished mortars when at least two adjacent friendly soldiers are present.

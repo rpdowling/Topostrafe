@@ -1208,6 +1208,15 @@ body.info-modal-open {
 }
 .topowar-toolbar .toolbar-right {
   justify-content: flex-end;
+  overflow: hidden;
+  min-width: 0;
+}
+.topowar-toolbar #status-line {
+  font-size: 0.72rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 220px;
 }
 .topowar-scoreboard {
   display: flex;
