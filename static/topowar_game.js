@@ -787,10 +787,10 @@ function draw() {
     }
   }
 
-  // Mountain tiles (medium gray)
+  // Mountain tiles (grey)
   for (const t of data.map.mountains || []) {
     const tty = tileTop(t[1]);
-    ctx.fillStyle = '#7a7a7a';
+    ctx.fillStyle = '#8c8c8c';
     ctx.fillRect(OX + t[0] * CELL, tty, CELL - 1, CELL - 1);
     ctx.strokeStyle = 'rgba(180,180,180,0.3)';
     ctx.lineWidth = 0.5;
@@ -798,12 +798,12 @@ function draw() {
     ctx.lineWidth = 1;
   }
 
-  // Hill tiles (light brown)
+  // Hill tiles (green-grey)
   for (const t of data.map.hills || []) {
     const tty = tileTop(t[1]);
-    ctx.fillStyle = '#b8935a';
+    ctx.fillStyle = '#8a9e7a';
     ctx.fillRect(OX + t[0] * CELL, tty, CELL - 1, CELL - 1);
-    ctx.strokeStyle = 'rgba(160,120,60,0.3)';
+    ctx.strokeStyle = 'rgba(120,150,90,0.3)';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(OX + t[0] * CELL + 0.5, tty + 0.5, CELL - 2, CELL - 2);
     ctx.lineWidth = 1;
