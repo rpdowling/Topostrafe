@@ -185,7 +185,8 @@ class MortarShell:
     y: float
     sx: float   # start x (for arc progress)
     sy: float   # start y
-    target: tuple[int, int]
+    target: tuple[int, int]           # actual (possibly scattered) landing tile
+    intended_target: tuple[int, int]  # pre-scatter aim point — used for LOS rules
     speed: float = 5.0
 
 
@@ -1795,6 +1796,7 @@ class TopowarGameState:
             float(mortar.tile[0]), float(mortar.tile[1]),
             float(mortar.tile[0]), float(mortar.tile[1]),
             (lx, ly),
+            mortar.target,
         ))
         mortar.ready = False
         mortar.cooldown = 20.0
@@ -1901,7 +1903,7 @@ class TopowarGameState:
             # mountain top from below, or firing from a mountain downward).
             curr_tile = (int(round(shell.x)), int(round(shell.y)))
             origin_tile = start_tile(shell)
-            target_is_mountain = shell.target in self.map.mountains
+            target_is_mountain = shell.intended_target in self.map.mountains
             fired_from_mountain = origin_tile in self.map.mountains
             if (not fired_from_mountain
                     and not target_is_mountain
@@ -2270,7 +2272,7 @@ class TopowarGameState:
             "grenade_targets": [list(t) for t in sorted(self.grenade_tiles.get(viewer, set()))] if viewer is not None else [],
             "flare_shells": [{"x": fs.x, "y": fs.y, "sx": fs.sx, "sy": fs.sy, "target": list(fs.target), "owner": fs.owner} for fs in self.flare_shells],
             "flares_remaining": {"0": self.flares_remaining.get(0, 0), "1": self.flares_remaining.get(1, 0)},
-            "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "owner": ms.owner} for ms in self.mortar_shells],
+            "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "intended_target": list(ms.intended_target), "owner": ms.owner} for ms in self.mortar_shells],
             "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
             "projectiles": [{"x": p.x, "y": p.y, "owner": p.owner, "source": p.source} for p in self.projectiles],
             "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration} for e in self.explosions],
