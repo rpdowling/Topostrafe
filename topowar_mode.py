@@ -1895,12 +1895,16 @@ class TopowarGameState:
                 continue
             shell.x += dx / dist * step
             shell.y += dy / dist * step
-            # Intercept: shell hits an intermediate mountain tile.
-            # Exception: shells fired FROM a mountain fly over terrain below them.
+            # Intercept: shell hits an intermediate mountain tile only when
+            # both the origin AND target are non-mountain.  If either endpoint
+            # is a mountain the shell arcs over the terrain (targeting a
+            # mountain top from below, or firing from a mountain downward).
             curr_tile = (int(round(shell.x)), int(round(shell.y)))
             origin_tile = start_tile(shell)
+            target_is_mountain = shell.target in self.map.mountains
             fired_from_mountain = origin_tile in self.map.mountains
             if (not fired_from_mountain
+                    and not target_is_mountain
                     and curr_tile != origin_tile
                     and curr_tile != shell.target
                     and curr_tile in self.map.mountains):
