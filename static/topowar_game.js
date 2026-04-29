@@ -295,7 +295,7 @@ function refreshBuildStatus() {
     setStatus('Build MG — Step 2: click anywhere to aim the barrel direction.');
     return;
   }
-  const need = Math.max(0, 2 - selectedUnits.size);
+  const need = Math.max(0, 1 - selectedUnits.size);
   setStatus(need > 0
     ? `Build MG — Step 3: select ${need} more soldier${need > 1 ? 's' : ''} to build.`
     : 'Sending build order…');
@@ -398,13 +398,17 @@ board.addEventListener('click', (evt) => {
 
   } else if (mode === 'move') {
     if (myS.length) {
-      // Each click on a friendly soldier toggles them in/out of the selection
       const uid = myS[0].unit_id;
-      if (selectedUnits.has(uid)) selectedUnits.delete(uid);
-      else selectedUnits.add(uid);
+      if (evt.ctrlKey || evt.shiftKey) {
+        if (selectedUnits.has(uid)) selectedUnits.delete(uid);
+        else selectedUnits.add(uid);
+      } else {
+        selectedUnits = new Set([uid]);
+      }
     } else if (selectedUnits.size) {
       // Click any destination tile → send all selected soldiers there
       for (const uid of selectedUnits) send({ type: 'tw_move_unit', unit_id: uid, tile });
+      selectedUnits = new Set();
     }
 
   } else if (mode === 'dig') {
@@ -429,7 +433,7 @@ board.addEventListener('click', (evt) => {
 
   } else if (mode === 'build') {
     const tryDispatch = () => {
-      if (pendingBuildTile && pendingBuildFacing !== null && selectedUnits.size >= 2 && !pendingMgDispatch) {
+      if (pendingBuildTile && pendingBuildFacing !== null && selectedUnits.size >= 1 && !pendingMgDispatch) {
         send({ type: 'tw_assign_build_mg', unit_ids: [...selectedUnits], tile: pendingBuildTile, facing: pendingBuildFacing });
         pendingMgDispatch = true;
       }
@@ -452,7 +456,7 @@ board.addEventListener('click', (evt) => {
       const uid = myS[0].unit_id;
       if (selectedUnits.has(uid)) selectedUnits.delete(uid);
       else {
-        if (selectedUnits.size >= 2) selectedUnits = new Set();
+        if (selectedUnits.size >= 1) selectedUnits = new Set();
         selectedUnits.add(uid);
       }
       tryDispatch();
@@ -1104,7 +1108,7 @@ function draw() {
     }
 
     // Thin dashed path preview for moving soldiers.
-    if (s.path && s.path.length) {
+    if (s.owner === mySeat() && s.path && s.path.length) {
       ctx.strokeStyle = 'rgba(255,255,255,0.9)';
       ctx.lineWidth = 1;
       ctx.setLineDash([3, 3]);
@@ -1171,6 +1175,31 @@ function draw() {
   }
 
   // Mortars
+  if (retargetMortarId !== null) {
+    const retargetMortar = (data.mortars || []).find(m => m.structure_id === retargetMortarId && m.owner === mySeat());
+    if (retargetMortar) {
+      const tcx = mouseCanvas.x;
+      const tcy = mouseCanvas.y;
+      const dx = tcx - cpx(retargetMortar.tile[0]);
+      const dy = tcy - cpy(retargetMortar.tile[1]);
+      const dPixels = Math.hypot(dx, dy);
+      const previewScatterR = 3 + Math.max(0, Math.floor(Math.max(0, dPixels / CELL - 10) / 5));
+      ctx.strokeStyle = 'rgba(244,160,32,0.8)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(tcx - CELL * 0.6, tcy); ctx.lineTo(tcx + CELL * 0.6, tcy);
+      ctx.moveTo(tcx, tcy - CELL * 0.6); ctx.lineTo(tcx, tcy + CELL * 0.6);
+      ctx.stroke();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = 'rgba(244,160,32,0.4)';
+      ctx.beginPath();
+      ctx.arc(tcx, tcy, previewScatterR * CELL, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.lineWidth = 1;
+    }
+  }
+
   if (mode === 'mortar') {
     if (pendingMortarTile) {
       const [bx, by] = pendingMortarTile;
