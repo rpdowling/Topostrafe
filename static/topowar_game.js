@@ -310,7 +310,7 @@ function refreshBuildStatus() {
     return;
   }
   if (!pendingBuildTile) {
-    setStatus('Build MG — Step 1: click a tile next to your trench (not in trench).');
+    setStatus('Build MG — Step 1: click a tile to place the MG (ground, hill, or mountain).');
     return;
   }
   const needFacing = pendingBuildFacing === null;
@@ -602,11 +602,12 @@ board.addEventListener('click', (evt) => {
         if (sol) {
           const dx = Math.abs(tile[0] - sol.tile[0]);
           const dy = Math.abs(tile[1] - sol.tile[1]);
-          const trenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
-          if (Math.max(dx, dy) === 1 && !trenchSet.has(`${tile[0]},${tile[1]}`)) {
+          const sbTrenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
+          const sbKey = `${tile[0]},${tile[1]}`;
+          if (Math.max(dx, dy) === 1 && !sbTrenchSet.has(sbKey)) {
             send({ type: 'tw_assign_build_sandbag', unit_id: uid, tile });
           } else {
-            setStatus('Sandbag must be placed on an open tile adjacent to the soldier.', true);
+            setStatus('Sandbag must be placed on a non-trench tile adjacent to the soldier.', true);
           }
         }
       }
@@ -640,10 +641,16 @@ board.addEventListener('click', (evt) => {
           const dy = Math.abs(tile[1] - sol.tile[1]);
           const trenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
           const wireSet = new Set((tw().barbed_wire || []).filter(w => w.hp > 0).map(w => `${w.tile[0]},${w.tile[1]}`));
-          if (Math.max(dx, dy) === 1 && !trenchSet.has(`${tile[0]},${tile[1]}`) && !wireSet.has(`${tile[0]},${tile[1]}`)) {
+          const wireStructSet = new Set([
+            ...(tw().machine_guns || []).filter(m => m.hp > 0).map(m => `${m.tile[0]},${m.tile[1]}`),
+            ...(tw().mortars || []).filter(m => m.hp > 0).map(m => `${m.tile[0]},${m.tile[1]}`),
+            ...(tw().sandbags || []).filter(s => s.hp > 0).map(s => `${s.tile[0]},${s.tile[1]}`),
+          ]);
+          const wkey = `${tile[0]},${tile[1]}`;
+          if (Math.max(dx, dy) === 1 && !trenchSet.has(wkey) && !wireSet.has(wkey) && !wireStructSet.has(wkey)) {
             send({ type: 'tw_assign_wire', unit_id: uid, tile });
           } else {
-            setStatus('Wire must be placed on an open adjacent tile.', true);
+            setStatus('Wire must be placed on an adjacent non-trench tile.', true);
           }
         }
       }
@@ -780,6 +787,28 @@ function draw() {
     }
   }
 
+  // Mountain tiles (medium gray)
+  for (const t of data.map.mountains || []) {
+    const tty = tileTop(t[1]);
+    ctx.fillStyle = '#7a7a7a';
+    ctx.fillRect(OX + t[0] * CELL, tty, CELL - 1, CELL - 1);
+    ctx.strokeStyle = 'rgba(180,180,180,0.3)';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(OX + t[0] * CELL + 0.5, tty + 0.5, CELL - 2, CELL - 2);
+    ctx.lineWidth = 1;
+  }
+
+  // Hill tiles (light brown)
+  for (const t of data.map.hills || []) {
+    const tty = tileTop(t[1]);
+    ctx.fillStyle = '#b8935a';
+    ctx.fillRect(OX + t[0] * CELL, tty, CELL - 1, CELL - 1);
+    ctx.strokeStyle = 'rgba(160,120,60,0.3)';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(OX + t[0] * CELL + 0.5, tty + 0.5, CELL - 2, CELL - 2);
+    ctx.lineWidth = 1;
+  }
+
   // Trench tiles
   for (const t of data.map.trenches) {
     const tty = tileTop(t[1]);
@@ -849,17 +878,22 @@ function draw() {
     ctx.lineWidth = 1;
   }
 
-  // Sandbag mode: highlight valid adjacent open tiles for selected soldier
+  // Sandbag mode: highlight valid adjacent non-trench tiles for selected soldier
   if (mode === 'sandbag') {
     const selSb = getSelectedSoldier();
     if (selSb) {
       const trenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
+      const structSet = new Set([
+        ...(tw().machine_guns || []).filter(m => m.hp > 0).map(m => `${m.tile[0]},${m.tile[1]}`),
+        ...(tw().mortars || []).filter(m => m.hp > 0).map(m => `${m.tile[0]},${m.tile[1]}`),
+        ...(tw().sandbags || []).filter(s => s.hp > 0).map(s => `${s.tile[0]},${s.tile[1]}`),
+      ]);
       for (let dx = -1; dx <= 1; dx++) {
         for (let dy = -1; dy <= 1; dy++) {
           if (dx === 0 && dy === 0) continue;
           const ax = selSb.tile[0] + dx, ay = selSb.tile[1] + dy;
           if (ax < 0 || ay < 0 || ax >= tw().map.width || ay >= tw().map.height) continue;
-          if (trenchSet.has(`${ax},${ay}`)) continue;
+          if (trenchSet.has(`${ax},${ay}`) || structSet.has(`${ax},${ay}`)) continue;
           ctx.fillStyle = 'rgba(180,160,100,0.30)';
           ctx.fillRect(OX + ax * CELL, tileTop(ay), CELL - 1, CELL - 1);
           ctx.strokeStyle = 'rgba(200,180,120,0.7)';
@@ -1127,7 +1161,7 @@ function draw() {
     ctx.restore();
   }
 
-  // Wire mode: highlight valid adjacent tiles for selected soldier
+  // Wire mode: highlight valid adjacent non-trench tiles for selected soldier
   if (mode === 'wire') {
     const selW = getSelectedSoldier();
     if (selW) {
@@ -1143,7 +1177,8 @@ function draw() {
           if (dx === 0 && dy === 0) continue;
           const ax = selW.tile[0] + dx, ay = selW.tile[1] + dy;
           if (ax < 0 || ay < 0 || ax >= tw().map.width || ay >= tw().map.height) continue;
-          if (trenchSet.has(`${ax},${ay}`) || blockedSet.has(`${ax},${ay}`)) continue;
+          const wk = `${ax},${ay}`;
+          if (trenchSet.has(wk) || blockedSet.has(wk)) continue;
           ctx.fillStyle = 'rgba(100,100,100,0.28)';
           ctx.fillRect(OX + ax * CELL, tileTop(ay), CELL - 1, CELL - 1);
           ctx.strokeStyle = 'rgba(160,160,160,0.7)';
