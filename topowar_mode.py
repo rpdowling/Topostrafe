@@ -99,7 +99,7 @@ class MachineGun(Structure):
     built: bool = False
     build_progress: float = 0.0
     build_required: float = 30.0
-    required_staff: int = 2
+    required_staff: int = 1
     force_target: tuple[int, int] | None = None
     cooldown: float = 0.0
     burst_left: int = 0
