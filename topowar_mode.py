@@ -7,6 +7,12 @@ import itertools
 import math
 import random
 
+# Terrain elevation tiers (matches default_elevation=4 for open ground)
+ELEV_TRENCH = 2
+ELEV_GROUND = 4
+ELEV_HILL = 5
+ELEV_MOUNTAIN = 6
+
 SOLDIER_NAMES = [
     "James", "Fred", "Jerry", "Henry", "Ferdinand", "Samuel", "Neb", "Moe",
     "Ned", "Art", "Red", "Leo", "Ted", "Ed", "Ray", "Roy", "Boe", "Ace",
@@ -26,7 +32,7 @@ class RulesConfig:
     match_time_seconds: int = 1200
     build_phase_seconds: int = 180
     # Soldiers move discretely: one tile per (1 / soldier_move_speed) seconds.
-    soldier_move_speed: float = 1.0
+    soldier_move_speed: float = 1.25
     projectile_speed: float = 8.0
     grenade_range: float = 7.0
     grenade_windup_seconds: float = 3.0
@@ -38,16 +44,21 @@ class GridMap:
     height: int
     default_elevation: int
     trenches: set[tuple[int, int]] = field(default_factory=set)
+    hills: set[tuple[int, int]] = field(default_factory=set)
+    mountains: set[tuple[int, int]] = field(default_factory=set)
 
     def in_bounds(self, t: tuple[int, int]) -> bool:
         x, y = t
         return 0 <= x < self.width and 0 <= y < self.height
 
     def elevation_at(self, t: tuple[int, int]) -> int:
-        # Trench tiles are dug down — two units below open ground.
+        if t in self.mountains:
+            return ELEV_MOUNTAIN
+        if t in self.hills:
+            return ELEV_HILL
         if t in self.trenches:
-            return self.default_elevation - 2
-        return self.default_elevation
+            return ELEV_TRENCH
+        return ELEV_GROUND
 
 
 @dataclass
@@ -110,7 +121,7 @@ class MachineGun(Structure):
     arc_center: float = 0.0    # fixed center angle chosen when the MG is placed
     arc_half: float = 45.0     # degrees either side of arc_center within which MG can fire/swivel
     swivel_speed: float = 15.0 # degrees per second the barrel can rotate
-    base_ground_is_trench: bool = False
+    base_elevation: int = ELEV_GROUND
 
 
 @dataclass
@@ -135,7 +146,7 @@ class Mortar(Structure):
     ready: bool = False        # True when primed and crew can fire
     cooldown: float = 0.0      # shared reload / retarget cooldown (seconds remaining)
     operators: set[int] = field(default_factory=set)
-    base_ground_is_trench: bool = False
+    base_elevation: int = ELEV_GROUND
     operable: bool = True
 
 
@@ -145,7 +156,6 @@ class Sandbag(Structure):
     built: bool = False
     build_progress: float = 0.0
     build_required: float = 5.0
-    base_ground_is_trench: bool = False
 
 
 @dataclass
@@ -361,6 +371,24 @@ class TopowarGameState:
         for x in range(x0, x0 + length):
             self.map.trenches.add((x, y_red))
             self.map.trenches.add((x, y_blue))
+        # Scatter hills and mountains in the no-man's land between the two starting trenches.
+        mid = self.map.height // 2
+        hill_tiles = [
+            (x0 - 3, mid - 3), (x0 - 3, mid + 2),
+            (x0 + length + 1, mid - 2), (x0 + length + 1, mid + 3),
+            (x0 + 2, mid - 4), (x0 + length - 3, mid + 4),
+        ]
+        mountain_tiles = [
+            (x0 - 4, mid - 3), (x0 - 4, mid - 2), (x0 - 4, mid + 2), (x0 - 4, mid + 3),
+            (x0 + length + 2, mid - 2), (x0 + length + 2, mid - 3),
+            (x0 + length + 2, mid + 2), (x0 + length + 2, mid + 3),
+        ]
+        for t in hill_tiles:
+            if self.map.in_bounds(t):
+                self.map.hills.add(t)
+        for t in mountain_tiles:
+            if self.map.in_bounds(t):
+                self.map.mountains.add(t)
         for i in range(7):
             rx = x0 + i
             bx = x0 + i
@@ -428,22 +456,22 @@ class TopowarGameState:
         return self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
 
     def _crew_positions_for_mortar(self, mortar: "Mortar") -> list[tuple[int, int]]:
-        """Adjacent tiles of the same ground type as the mortar, usable as crew spots."""
+        """Adjacent tiles at the same elevation as the mortar, usable as crew spots."""
         mx, my = mortar.tile
-        in_trench = mortar.tile in self.map.trenches
+        mortar_elev = self.map.elevation_at(mortar.tile)
         return [
             (mx + dx, my + dy)
             for dx in (-1, 0, 1)
             for dy in (-1, 0, 1)
             if not (dx == 0 and dy == 0)
             and self.map.in_bounds((mx + dx, my + dy))
-            and ((mx + dx, my + dy) in self.map.trenches) == in_trench
+            and self.map.elevation_at((mx + dx, my + dy)) == mortar_elev
         ]
 
     def _mortar_adjacent_ground_valid(self, mortar: "Mortar") -> bool:
-        """Mortar is operable only when all 8 neighbors match mortar tile ground type."""
+        """Mortar is operable only when all 8 neighbors are at the same elevation as the mortar tile."""
         mx, my = mortar.tile
-        tile_in_trench = mortar.tile in self.map.trenches
+        mortar_elev = self.map.elevation_at(mortar.tile)
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
                 if dx == 0 and dy == 0:
@@ -451,24 +479,22 @@ class TopowarGameState:
                 adj = (mx + dx, my + dy)
                 if not self.map.in_bounds(adj):
                     return False
-                if (adj in self.map.trenches) != tile_in_trench:
+                if self.map.elevation_at(adj) != mortar_elev:
                     return False
         return True
 
     def _enforce_structure_ground_integrity(self):
-        """Destroy structures whose own tile ground type changed since placement."""
+        """Destroy structures whose tile elevation changed since placement."""
         for mg in self.mgs.values():
             if mg.hp <= 0:
                 continue
-            current = mg.tile in self.map.trenches
-            if current != mg.base_ground_is_trench:
+            if self.map.elevation_at(mg.tile) != mg.base_elevation:
                 mg.hp = 0
                 mg.operators.clear()
         for mortar in self.mortars.values():
             if mortar.hp <= 0:
                 continue
-            current = mortar.tile in self.map.trenches
-            if current != mortar.base_ground_is_trench:
+            if self.map.elevation_at(mortar.tile) != mortar.base_elevation:
                 mortar.hp = 0
                 mortar.operators.clear()
 
@@ -482,6 +508,10 @@ class TopowarGameState:
             self.flare_shells = []
         if not hasattr(self, "flares_remaining"):
             self.flares_remaining = {0: 5, 1: 5}
+        if not hasattr(self.map, "hills"):
+            self.map.hills = set()
+        if not hasattr(self.map, "mountains"):
+            self.map.mountains = set()
         for s in self.soldiers.values():
             if not hasattr(s, "is_officer"):
                 s.is_officer = False
@@ -497,16 +527,20 @@ class TopowarGameState:
         for mg in self.mgs.values():
             if not hasattr(mg, "arc_center"):
                 mg.arc_center = getattr(mg, "facing", 0.0)
-            if not hasattr(mg, "base_ground_is_trench"):
-                mg.base_ground_is_trench = (mg.tile in self.map.trenches)
+            if not hasattr(mg, "base_elevation"):
+                old = getattr(mg, "base_ground_is_trench", False)
+                mg.base_elevation = ELEV_TRENCH if old else ELEV_GROUND
         for mortar in self.mortars.values():
-            if not hasattr(mortar, "base_ground_is_trench"):
-                mortar.base_ground_is_trench = (mortar.tile in self.map.trenches)
+            if not hasattr(mortar, "base_elevation"):
+                old = getattr(mortar, "base_ground_is_trench", False)
+                mortar.base_elevation = ELEV_TRENCH if old else ELEV_GROUND
             if not hasattr(mortar, "operable"):
                 mortar.operable = True
 
     def _crew_positions_for_mg(self, mg: "MachineGun") -> list[tuple[int, int]]:
-        """Adjacent trench tiles a crew member can stand at to operate this MG."""
+        """Tiles where crew can stand to operate this MG.
+        Ground MGs: adjacent trench tiles (or any adjacent if none exist).
+        Hill/Mountain MGs: adjacent tiles at the same elevation."""
         mx, my = mg.tile
         neighbours = [
             (mx + dx, my + dy)
@@ -514,12 +548,15 @@ class TopowarGameState:
             for dy in (-1, 0, 1)
             if not (dx == 0 and dy == 0)
         ]
-        trench_adj = [t for t in neighbours if t in self.map.trenches and self.map.in_bounds(t)]
-        # Fall back to any adjacent in-bounds tile if no trench is adjacent.
-        return trench_adj if trench_adj else [t for t in neighbours if self.map.in_bounds(t)]
+        mg_elev = self.map.elevation_at(mg.tile)
+        if mg_elev <= ELEV_GROUND:
+            trench_adj = [t for t in neighbours if self.map.in_bounds(t) and self.map.elevation_at(t) == ELEV_TRENCH]
+            return trench_adj if trench_adj else [t for t in neighbours if self.map.in_bounds(t)]
+        return [t for t in neighbours if self.map.in_bounds(t) and self.map.elevation_at(t) == mg_elev]
 
     def _build_positions_for_mg(self, mg_tile: tuple[int, int]) -> list[tuple[int, int]]:
-        """Adjacent trench tiles where builders can stand to construct an MG."""
+        """Tiles where builders can stand to construct an MG.
+        Ground MGs: adjacent trench tiles; hill/mountain MGs: same-elevation adjacent tiles."""
         mx, my = mg_tile
         neighbours = [
             (mx + dx, my + dy)
@@ -527,7 +564,13 @@ class TopowarGameState:
             for dy in (-1, 0, 1)
             if not (dx == 0 and dy == 0)
         ]
-        return [t for t in neighbours if self.map.in_bounds(t) and t in self.map.trenches]
+        mg_elev = self.map.elevation_at(mg_tile)
+        if mg_elev <= ELEV_GROUND:
+            trench_adj = [t for t in neighbours if self.map.in_bounds(t) and self.map.elevation_at(t) == ELEV_TRENCH]
+            if trench_adj:
+                return trench_adj
+            return [t for t in neighbours if self.map.in_bounds(t) and self.map.elevation_at(t) == ELEV_GROUND]
+        return [t for t in neighbours if self.map.in_bounds(t) and self.map.elevation_at(t) == mg_elev]
 
     def _nearest_enemy(self, owner: int, from_tile: tuple[int, int], visible_only: bool = False) -> tuple[str, int] | None:
         best = None
@@ -578,6 +621,94 @@ class TopowarGameState:
         rel = self._angle_diff_deg(arc_center, angle)
         rel = max(-arc_half, min(arc_half, rel))
         return (arc_center + rel) % 360.0
+
+    def _terrain_speed_multiplier(self, tile: tuple[int, int]) -> float:
+        elev = self.map.elevation_at(tile)
+        if elev == ELEV_MOUNTAIN:
+            return 0.75
+        if elev == ELEV_HILL:
+            return 0.90
+        return 1.0
+
+    def _has_terrain_los(self, a: tuple[int, int], b: tuple[int, int], viewer_elevation: int) -> bool:
+        """Bresenham LOS blocked by any intermediate tile whose elevation exceeds viewer_elevation."""
+        x0, y0 = a
+        x1, y1 = b
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x1 >= x0 else -1
+        sy = 1 if y1 >= y0 else -1
+        err = dx - dy
+        cx, cy = x0, y0
+        while True:
+            if (cx, cy) == (x1, y1):
+                return True
+            if (cx, cy) != a and self.map.elevation_at((cx, cy)) > viewer_elevation:
+                return False
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                cx += sx
+            if e2 < dx:
+                err += dx
+                cy += sy
+
+    def _has_mortar_los(self, mortar_tile: tuple[int, int], target: tuple[int, int]) -> bool:
+        """Mortar LOS: blocked only by intermediate mountain tiles (not hills)."""
+        x0, y0 = mortar_tile
+        x1, y1 = target
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x1 >= x0 else -1
+        sy = 1 if y1 >= y0 else -1
+        err = dx - dy
+        cx, cy = x0, y0
+        while True:
+            if (cx, cy) == (x1, y1):
+                return True
+            if (cx, cy) != mortar_tile and (cx, cy) in self.map.mountains:
+                return False
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                cx += sx
+            if e2 < dx:
+                err += dx
+                cy += sy
+
+    def _soldier_effective_range(self, s: "Soldier", target_elevation: int) -> float:
+        """Effective rifle range considering elevation bonuses.
+        A mountain soldier adjacent to lower terrain sees farther onto it.
+        A hill soldier adjacent to open ground sees 7 tiles over it.
+        """
+        s_elev = self.map.elevation_at(s.tile)
+        sx, sy = s.tile
+        adj4 = [(sx+1, sy), (sx-1, sy), (sx, sy+1), (sx, sy-1)]
+        adj_elevs = {self.map.elevation_at(t) for t in adj4 if self.map.in_bounds(t)}
+        if s_elev == ELEV_MOUNTAIN:
+            if target_elevation == ELEV_GROUND and ELEV_GROUND in adj_elevs:
+                return 10.0
+            if target_elevation == ELEV_HILL and ELEV_HILL in adj_elevs:
+                return 7.0
+            return 5.0
+        if s_elev == ELEV_HILL:
+            if target_elevation == ELEV_GROUND and ELEV_GROUND in adj_elevs:
+                return 7.0
+            return 5.0
+        return 5.0
+
+    def _degrade_tile(self, tile: tuple[int, int]) -> bool:
+        """Lower tile one elevation level. Returns True if it just became a trench (collapse)."""
+        elev = self.map.elevation_at(tile)
+        if elev == ELEV_MOUNTAIN:
+            self.map.mountains.discard(tile)
+            self.map.hills.add(tile)
+        elif elev == ELEV_HILL:
+            self.map.hills.discard(tile)
+        elif elev == ELEV_GROUND:
+            self.map.trenches.add(tile)
+            return True
+        return False
 
     def _trench_component(self, start: tuple[int, int]) -> set[tuple[int, int]]:
         """4-connected flood fill over trench tiles starting from start."""
@@ -683,15 +814,16 @@ class TopowarGameState:
             for p in plan:
                 if not self.map.in_bounds(p):
                     raise ValueError("Dig target out of bounds.")
-                if p in self.map.trenches:
-                    raise ValueError("Tile is already a trench.")
+                if self.map.elevation_at(p) == ELEV_TRENCH:
+                    raise ValueError("Tile is already fully dug.")
                 # Sandbag tiles are allowed – digging removes the sandbag
-            # First tile must be adjacent to an existing trench, UNLESS it has a sandbag
+            # Ground tiles must start adjacent to an existing trench (mountains/hills are free)
             first = plan[0]
             first_is_sandbag = first in sandbag_tile_map
-            if not first_is_sandbag:
+            first_elev = self.map.elevation_at(first)
+            if not first_is_sandbag and first_elev == ELEV_GROUND:
                 adj4 = [(first[0]+dx, first[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
-                if not any(a in self.map.trenches for a in adj4):
+                if not any(self.map.elevation_at(a) == ELEV_TRENCH for a in adj4):
                     raise ValueError("Dig must start adjacent to an existing trench.")
             # Cancel any other soldier already assigned to the same first tile
             for other in self.soldiers.values():
@@ -700,18 +832,20 @@ class TopowarGameState:
                         other.current_task = None
                         other.path = []
             s.current_task = {"type": "dig", "plan": plan, "target": list(plan[0]), "progress": 0.0}
-            # Path to a tile adjacent to the first dig target.
-            # For sandbag removal any adjacent tile works; for normal dig it must be a trench tile.
             adj4_first = [(first[0]+dx, first[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
-            if first_is_sandbag:
+            occ_blocked = set(self._occupied_tiles().keys()) - {s.tile}
+            if first_is_sandbag or first_elev in (ELEV_MOUNTAIN, ELEV_HILL):
+                # Mountain/hill/sandbag: approach from any adjacent tile
                 dig_from = [t for t in adj4_first if self.map.in_bounds(t)]
                 if dig_from:
                     goal = min(dig_from, key=lambda t: math.dist(s.tile, t))
-                    s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=set(self._occupied_tiles().keys()) - {s.tile})
+                    s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=occ_blocked)
             else:
-                dig_from = [t for t in adj4_first if t in self.map.trenches and self.map.in_bounds(t)]
-                goal = min(dig_from, key=lambda t: math.dist(s.tile, t))
-                s.path = self.path.find_path(s.tile, goal, trench_only=True, blocked=set(self._occupied_tiles().keys()) - {s.tile})
+                # Ground: must approach from an adjacent trench tile
+                dig_from = [t for t in adj4_first if self.map.elevation_at(t) == ELEV_TRENCH and self.map.in_bounds(t)]
+                if dig_from:
+                    goal = min(dig_from, key=lambda t: math.dist(s.tile, t))
+                    s.path = self.path.find_path(s.tile, goal, trench_only=True, blocked=occ_blocked)
             return "Dig task assigned."
         if t == "tw_assign_build_mg":
             tile = tuple(map(int, action.get("tile", [])))
@@ -719,28 +853,19 @@ class TopowarGameState:
                 raise ValueError("Invalid MG tile.")
             if tile in self._structure_tile_set():
                 raise ValueError("Only one equipment structure can occupy a tile.")
-            # MG must be placed on or adjacent to a friendly trench tile
-            friendly = set(self._friendly_trench_tiles(owner))
-            tile_and_adj = [tile] + [
-                (tile[0] + dx, tile[1] + dy)
-                for dx in (-1, 0, 1)
-                for dy in (-1, 0, 1)
-                if not (dx == 0 and dy == 0)
-            ]
-            if not any(n in friendly for n in tile_and_adj):
-                raise ValueError("MG must be placed on or adjacent to a friendly trench tile.")
             for mortar in self.mortars.values():
                 if mortar.hp > 0 and max(abs(mortar.tile[0] - tile[0]), abs(mortar.tile[1] - tile[1])) <= 1:
                     raise ValueError("MG cannot be placed adjacent to a mortar.")
             mid = self.next_structure_id
             self.next_structure_id += 1
             facing = float(action.get("facing", 0.0)) % 360.0
-            mg = MachineGun(mid, owner, tile, build_required=self.rules.mg_build_seconds, facing=facing, arc_center=facing)
+            mg = MachineGun(mid, owner, tile, build_required=self.rules.mg_build_seconds, facing=facing, arc_center=facing,
+                            base_elevation=self.map.elevation_at(tile))
             self.mgs[mid] = mg
             build_positions = self._build_positions_for_mg(tile)
             if len(build_positions) < 1:
                 del self.mgs[mid]
-                raise ValueError("MG must have at least one adjacent trench tile for builders.")
+                raise ValueError("MG must have at least one adjacent same-elevation tile for builders.")
 
             chosen_ids: list[int] = []
             for sid in action.get("unit_ids", []):
@@ -819,8 +944,9 @@ class TopowarGameState:
             target = tuple(map(int, target_raw))
             if not self.map.in_bounds(target):
                 raise ValueError("Target out of bounds.")
-            # All 8 adjacent tiles must be same ground type as the mortar tile.
-            tile_in_trench = tile in self.map.trenches
+            if not self._has_mortar_los(tile, target):
+                raise ValueError("Target is blocked by a mountain.")
+            tile_elev = self.map.elevation_at(tile)
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
                     if dx == 0 and dy == 0:
@@ -828,11 +954,11 @@ class TopowarGameState:
                     adj = (tile[0] + dx, tile[1] + dy)
                     if not self.map.in_bounds(adj):
                         raise ValueError("Mortar tile too close to map edge.")
-                    if (adj in self.map.trenches) != tile_in_trench:
-                        raise ValueError("All 8 adjacent tiles must match the mortar tile's ground type.")
+                    if self.map.elevation_at(adj) != tile_elev:
+                        raise ValueError("All 8 adjacent tiles must match the mortar tile's elevation.")
             mid = self.next_structure_id
             self.next_structure_id += 1
-            mortar = Mortar(mid, owner, tile, target=target, base_ground_is_trench=(tile in self.map.trenches))
+            mortar = Mortar(mid, owner, tile, target=target, base_elevation=self.map.elevation_at(tile))
             self.mortars[mid] = mortar
             crew_spots = self._crew_positions_for_mortar(mortar)
             if len(crew_spots) < 2:
@@ -911,6 +1037,8 @@ class TopowarGameState:
             new_target = tuple(map(int, target_raw))
             if not self.map.in_bounds(new_target):
                 raise ValueError("Target out of bounds.")
+            if not self._has_mortar_los(mortar.tile, new_target):
+                raise ValueError("Target is blocked by a mountain.")
             mortar.target = new_target
             mortar.ready = False
             mortar.cooldown = 20.0
@@ -943,13 +1071,13 @@ class TopowarGameState:
                 raise ValueError("Invalid sandbag tile.")
             if max(abs(tile[0] - s.tile[0]), abs(tile[1] - s.tile[1])) != 1:
                 raise ValueError("Sandbag must be placed in a tile adjacent to the soldier.")
-            if tile in self.map.trenches:
-                raise ValueError("Sandbags can only be built on open ground.")
+            if self.map.elevation_at(tile) == ELEV_TRENCH:
+                raise ValueError("Sandbags cannot be built in a trench.")
             if tile in self._structure_tile_set():
                 raise ValueError("Tile already occupied by a structure.")
             mid = self.next_structure_id
             self.next_structure_id += 1
-            sb = Sandbag(mid, owner, tile, build_required=5.0, base_ground_is_trench=False)
+            sb = Sandbag(mid, owner, tile, build_required=5.0)
             self.sandbags[mid] = sb
             if s.current_task and s.current_task.get("type") == "build_sandbag":
                 s.sandbag_queue.append(mid)
@@ -1002,7 +1130,7 @@ class TopowarGameState:
                 raise ValueError("Invalid wire tile.")
             if max(abs(tile[0] - s.tile[0]), abs(tile[1] - s.tile[1])) != 1:
                 raise ValueError("Wire must be placed on a tile adjacent to the soldier.")
-            if tile in self.map.trenches:
+            if self.map.elevation_at(tile) == ELEV_TRENCH:
                 raise ValueError("Cannot place wire in a trench.")
             occupied = self._structure_tile_set() | self._wire_structure_tile_set()
             if tile in occupied:
@@ -1172,11 +1300,11 @@ class TopowarGameState:
             return
         s.blocked = False
         s.blocked_for = 0.0
-        # One full tile-step takes (1 / soldier_move_speed) seconds. The
-        # soldier remains visually on its current tile until the cooldown
-        # reaches zero, then snaps to the next tile.
+        # One full tile-step takes (1 / (soldier_move_speed * terrain_mult)) seconds.
+        # Hill tiles cost 10% more time; mountain tiles cost 25% more time.
         if s.move_cooldown <= 0.0:
-            s.move_cooldown = 1.0 / max(0.001, self.rules.soldier_move_speed)
+            terrain_mult = self._terrain_speed_multiplier(target)
+            s.move_cooldown = 1.0 / max(0.001, self.rules.soldier_move_speed * terrain_mult)
         s.move_cooldown -= dt
         if s.move_cooldown <= 0.0:
             s.x, s.y = float(target[0]), float(target[1])
@@ -1218,18 +1346,23 @@ class TopowarGameState:
             typ, tid = picked
             target_tile = self.soldiers[tid].tile if typ == "soldier" else self.mgs[tid].tile
             d = math.dist(s.tile, target_tile)
-            if d > 5.0:
+            target_elev = self.map.elevation_at(target_tile)
+            effective_range = self._soldier_effective_range(s, target_elev)
+            if d > effective_range:
+                continue
+            s_elev = self.map.elevation_at(s.tile)
+            if not self._has_terrain_los(s.tile, target_tile, s_elev):
                 continue
 
             # Hit chance: 25% when moving through open ground toward a trench enemy;
             # 50% when stationary (halted or already in a trench).
             is_moving = advancing and not s.combat_halt
-            target_in_trench = typ == "soldier" and target_tile in self.map.trenches
+            target_in_trench = typ == "soldier" and target_elev == ELEV_TRENCH
             chance = 0.25 if (is_moving and target_in_trench) else 0.5
 
             s.rifle_cooldown = 3.0
             if self.random.random() <= chance:
-                self.projectiles.append(Projectile(s.owner, s.x, s.y, target_tile[0] - s.x, target_tile[1] - s.y, 5.0, "rifle"))
+                self.projectiles.append(Projectile(s.owner, s.x, s.y, target_tile[0] - s.x, target_tile[1] - s.y, effective_range, "rifle", s_elev))
 
     def _update_tasks(self, dt: float):
         occ = self._occupied_tiles()
@@ -1254,8 +1387,9 @@ class TopowarGameState:
                 tgt = tuple(task["target"])
                 tgt_sandbag = next((sb for sb in self.sandbags.values() if sb.hp > 0 and sb.tile == tgt), None)
                 adj4_tgt = [(tgt[0]+dx, tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
-                if tgt_sandbag:
-                    # Sandbag removal: soldier just needs to be adjacent (any tile)
+                tgt_elev = self.map.elevation_at(tgt)
+                if tgt_sandbag or tgt_elev in (ELEV_MOUNTAIN, ELEV_HILL):
+                    # Sandbag removal or mountain/hill: soldier just needs to be adjacent (any tile)
                     in_position = s.tile in set(adj4_tgt)
                     if not in_position:
                         if not s.path:
@@ -1267,11 +1401,11 @@ class TopowarGameState:
                                 s.current_task = None
                         continue
                 else:
-                    # Normal dig: soldier must be in an adjacent trench tile
-                    in_adj_trench = s.tile in self.map.trenches and s.tile in set(adj4_tgt)
+                    # Ground→trench dig: soldier must be in an adjacent trench tile
+                    in_adj_trench = self.map.elevation_at(s.tile) == ELEV_TRENCH and s.tile in set(adj4_tgt)
                     if not in_adj_trench:
                         if not s.path:
-                            goals = [t for t in adj4_tgt if t in self.map.trenches and self.map.in_bounds(t)]
+                            goals = [t for t in adj4_tgt if self.map.elevation_at(t) == ELEV_TRENCH and self.map.in_bounds(t)]
                             if goals:
                                 goal = min(goals, key=lambda g: math.dist(s.tile, g))
                                 s.path = self.path.find_path(s.tile, goal, trench_only=True, blocked=blocked_keys - {s.tile})
@@ -1282,6 +1416,11 @@ class TopowarGameState:
                 if task["progress"] >= self.rules.dig_seconds_per_tile:
                     if tgt_sandbag:
                         del self.sandbags[tgt_sandbag.structure_id]
+                    elif tgt_elev == ELEV_MOUNTAIN:
+                        self.map.mountains.discard(tgt)
+                        self.map.hills.add(tgt)
+                    elif tgt_elev == ELEV_HILL:
+                        self.map.hills.discard(tgt)
                     else:
                         self.map.trenches.add(tgt)
                     plan = task["plan"]
@@ -1294,12 +1433,15 @@ class TopowarGameState:
                         task["target"] = list(next_tgt)
                         task["progress"] = 0.0
                         s.path = []
-                        # For normal dig: validate next tile is still adjacent to trench
                         next_sandbag = next((sb for sb in self.sandbags.values() if sb.hp > 0 and sb.tile == next_tgt), None)
                         if not next_sandbag:
-                            adj4_next = [(next_tgt[0]+dx, next_tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
-                            if not any(a in self.map.trenches for a in adj4_next):
-                                s.current_task = None
+                            next_elev = self.map.elevation_at(next_tgt)
+                            if next_elev == ELEV_TRENCH:
+                                s.current_task = None  # already fully dug
+                            elif next_elev == ELEV_GROUND:
+                                adj4_next = [(next_tgt[0]+dx, next_tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
+                                if not any(self.map.elevation_at(a) == ELEV_TRENCH for a in adj4_next):
+                                    s.current_task = None
             elif task["type"] == "build_mg":
                 mg = self.mgs.get(task["mg_id"])
                 if not mg or mg.hp <= 0 or mg.built:
@@ -1405,12 +1547,18 @@ class TopowarGameState:
             live_ops = [sv for sv in self.soldiers.values() if sv.hp > 0 and sv.owner == mg.owner and 0 < math.dist(sv.tile, mg.tile) <= 1.5]
             if len(live_ops) < 1:
                 continue
+            mg_elev = self.map.elevation_at(mg.tile)
             target = mg.force_target
             if target is None:
                 nearest = None
                 for sv in self.soldiers.values():
                     if sv.hp <= 0 or sv.owner == mg.owner:
                         continue
+                    sv_elev = self.map.elevation_at(sv.tile)
+                    if sv_elev > mg_elev:
+                        continue  # MG cannot fire at higher elevation
+                    if not self._has_terrain_los(mg.tile, sv.tile, mg_elev):
+                        continue  # blocked by hills/mountains
                     if not self._soldier_visible_to(sv, mg.owner):
                         continue
                     d = math.dist(sv.tile, mg.tile)
@@ -1502,15 +1650,15 @@ class TopowarGameState:
             return
 
         # Blast kill radius
-        target_in_trench = landing in self.map.trenches
+        landing_elev = self.map.elevation_at(landing)
         kill_radius = 3.0
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
             if math.dist(s.tile, landing) > kill_radius:
                 continue
-            s_in_trench = s.tile in self.map.trenches
-            if target_in_trench:
+            s_in_trench = self.map.elevation_at(s.tile) == ELEV_TRENCH
+            if landing_elev == ELEV_TRENCH:
                 if s_in_trench:
                     if self._has_los_through_trenches(landing, s.tile):
                         self._register_kill(s, owner)
@@ -1520,11 +1668,9 @@ class TopowarGameState:
                 if not s_in_trench and not self._has_sandbag_cover_between(landing, s.tile):
                     self._register_kill(s, owner)
 
-        # Terrain deformation: landing → trench; 4 ortho adjacent flip type.
-        # If a sandbag occupies an adjacent tile it absorbs the flip (takes damage, ground unchanged).
-        if landing not in self.map.trenches:
-            self.map.trenches.add(landing)
-        collapsing: set[tuple[int, int]] = set()
+        # Terrain deformation: landing tile and 4 ortho adjacents each degrade one level.
+        # If a sandbag occupies an adjacent tile it absorbs the hit (takes damage, ground unchanged).
+        self._degrade_tile(landing)
         for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
             adj = (lx + dx, ly + dy)
             if not self.map.in_bounds(adj):
@@ -1536,18 +1682,8 @@ class TopowarGameState:
                 adj_sandbag.hp -= 1
                 if adj_sandbag.hp <= 0:
                     adj_sandbag.hp = 0
-                # Ground under sandbag is protected — skip terrain flip for this tile.
                 continue
-            if adj in self.map.trenches:
-                collapsing.add(adj)
-                self.map.trenches.discard(adj)
-            else:
-                self.map.trenches.add(adj)
-
-        # Soldiers on a tile that just flipped trench→open are crushed.
-        for s in self.soldiers.values():
-            if s.hp > 0 and s.tile in collapsing:
-                self._register_kill(s, owner)
+            self._degrade_tile(adj)
 
         self._enforce_structure_ground_integrity()
         self.explosions.append(Explosion(float(lx), float(ly)))
@@ -1566,6 +1702,7 @@ class TopowarGameState:
 
     def _update_mortar_shells(self, dt: float):
         remaining: list[MortarShell] = []
+        start_tile = lambda s: (int(round(s.sx)), int(round(s.sy)))
         for shell in self.mortar_shells:
             tx, ty = shell.target
             dx = tx - shell.x
@@ -1575,9 +1712,13 @@ class TopowarGameState:
             if dist <= step:
                 self._mortar_impact(shell.target, shell.owner)
                 continue
-            else:
-                shell.x += dx / dist * step
-                shell.y += dy / dist * step
+            shell.x += dx / dist * step
+            shell.y += dy / dist * step
+            # Intercept: if the shell passes over a mountain tile (not start, not target)
+            curr_tile = (int(round(shell.x)), int(round(shell.y)))
+            if curr_tile != start_tile(shell) and curr_tile != shell.target and curr_tile in self.map.mountains:
+                self._mortar_impact(curr_tile, shell.owner)
+                continue
             remaining.append(shell)
         self.mortar_shells = remaining
 
@@ -1717,12 +1858,14 @@ class TopowarGameState:
                     continue
                 if math.dist((p.x, p.y), (s.x, s.y)) <= 0.35:
                     target_e = self.map.elevation_at(s.tile)
-                    if target_e < p.origin_elevation:
-                        # Lower-elevation targets are harder to hit: 25% chance.
-                        # MG fire at trench soldiers is fully deflected (shoots over them).
-                        if p.source == "mg":
-                            continue
-                        if self.random.random() > 0.25:
+                    if p.source == "mg":
+                        if target_e > p.origin_elevation:
+                            continue  # MG cannot hit targets at higher elevation
+                        if target_e == ELEV_TRENCH:
+                            continue  # MG flat trajectory overshoots trenches
+                    else:
+                        # Rifle fire: 25% chance against lower-elevation targets
+                        if target_e < p.origin_elevation and self.random.random() > 0.25:
                             continue
                     self._register_kill(s, p.owner)
                     hit = True
@@ -1911,8 +2054,12 @@ class TopowarGameState:
                 "build_required": w.build_required,
             })
         visible_trenches = self.map.trenches
+        visible_hills = self.map.hills
+        visible_mountains = self.map.mountains
         if in_build_phase and viewer is not None:
             visible_trenches = {t for t in self.map.trenches if self._on_owner_side(viewer, t) or t in illuminated}
+            visible_hills = {t for t in self.map.hills if self._on_owner_side(viewer, t) or t in illuminated}
+            visible_mountains = {t for t in self.map.mountains if self._on_owner_side(viewer, t) or t in illuminated}
         return {
             "rules": self.rules.__dict__.copy(),
             "build_phase_remaining": max(0.0, self.rules.build_phase_seconds - self.time_elapsed),
@@ -1921,6 +2068,8 @@ class TopowarGameState:
                 "height": self.map.height,
                 "default_elevation": self.map.default_elevation,
                 "trenches": [list(t) for t in sorted(visible_trenches)],
+                "hills": [list(t) for t in sorted(visible_hills)],
+                "mountains": [list(t) for t in sorted(visible_mountains)],
             },
             "soldiers": soldiers,
             "machine_guns": mgs,
