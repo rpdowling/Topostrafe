@@ -1635,7 +1635,7 @@ function updateSelectionPanel() {
         <span class="sel-label">Side</span><span class="sel-val">${side}</span>
         <span class="sel-label">HP</span><span class="sel-val">${hp}%</span>
         <span class="sel-label">Built</span><span class="sel-val">${mg.built ? 'Yes' : 'No'}</span>
-        <span class="sel-label">Crew</span><span class="sel-val">${ops}/2</span>
+        <span class="sel-label">Crew</span><span class="sel-val">${ops}/1</span>
       </div>${ffTag}`;
     return;
   }

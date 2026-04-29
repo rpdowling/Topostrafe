@@ -1307,9 +1307,9 @@ class TopowarGameState:
                     continue
                 build_tile = tuple(task.get("build_tile", s.tile))
                 if s.tile != build_tile:
-                    s.path = self.path.find_path(s.tile, build_tile, trench_only=True, blocked=blocked_keys - {s.tile})
+                    s.path = self.path.find_path(s.tile, build_tile, trench_only=False, blocked=blocked_keys - {s.tile})
                 adj = [u for u in self.soldiers.values() if u.hp > 0 and u.owner == mg.owner and 0 < math.dist(u.tile, mg.tile) <= 1.5]
-                if len(adj) >= 2:
+                if len(adj) >= mg.required_staff:
                     mg.build_progress += dt
                     if mg.build_progress >= mg.build_required:
                         mg.built = True
