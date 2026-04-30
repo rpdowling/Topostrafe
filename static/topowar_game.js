@@ -23,6 +23,11 @@ let boardZoom = 1;
 
 let mouseCanvas = { x: 0, y: 0 };
 
+let lastStateTime = performance.now();
+let smokeParticles = [];
+let lastSmokeTick = performance.now();
+let elevMap = new Map();
+
 const CELL = 24;
 const OX = 20;
 const OY = 20;
@@ -146,7 +151,17 @@ function connect() {
     const payload = JSON.parse(evt.data);
     if (payload.type === 'state') {
       if (payload.message && state) state.log = [...(state.log || []), payload.message].slice(-20);
+      const prevTw = state?.topowar;
       state = payload.state;
+      lastStateTime = performance.now();
+      const newTw = state?.topowar;
+      if (newTw?.map) rebuildElevMap(newTw.map);
+      if (prevTw && newTw) {
+        const prevPos = new Set((prevTw.explosions || []).map(e => `${Math.round(e.x)},${Math.round(e.y)}`));
+        for (const ex of newTw.explosions || []) {
+          if (!prevPos.has(`${Math.round(ex.x)},${Math.round(ex.y)}`)) spawnSmoke(ex.x, ex.y);
+        }
+      }
       reconcilePendingBuildState();
       render();
     } else if (payload.type === 'error') {
@@ -714,6 +729,31 @@ function drawRangeCircle(cx, cy, radius, color) {
   ctx.restore();
 }
 
+function rebuildElevMap(mapData) {
+  elevMap = new Map();
+  for (const t of mapData.mountains || []) elevMap.set(`${t[0]},${t[1]}`, 3);
+  for (const t of mapData.hills || []) elevMap.set(`${t[0]},${t[1]}`, 2);
+  for (const t of mapData.trenches || []) elevMap.set(`${t[0]},${t[1]}`, 0);
+}
+
+function spawnSmoke(gx, gy) {
+  const count = 7 + Math.floor(Math.random() * 5);
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const spd = 0.15 + Math.random() * 0.35;
+    smokeParticles.push({
+      x: gx + (Math.random() - 0.5) * 0.6,
+      y: gy + (Math.random() - 0.5) * 0.6,
+      vx: Math.cos(angle) * spd * 0.4,
+      vy: Math.sin(angle) * spd - 0.28,
+      alpha: 0.55 + Math.random() * 0.3,
+      age: 0,
+      maxAge: 2.8 + Math.random() * 2.2,
+      r: 0.14 + Math.random() * 0.22,
+    });
+  }
+}
+
 function flareScatterRadius(targetTile) {
   const data = tw();
   if (!data || !targetTile) return 0;
@@ -823,6 +863,35 @@ function draw() {
     ctx.lineTo(OX + t[0] * CELL, tty + CELL - 1);
     ctx.stroke();
     ctx.lineWidth = 1;
+  }
+
+  // Elevation shading: north-side shadow where a tile is south of a higher neighbour.
+  // Tiers: 0=trench, 1=ground, 2=hill, 3=mountain.
+  {
+    const isFlipped = mySeat() === 1;
+    for (let y = 1; y < data.map.height; y++) {
+      for (let x = 0; x < data.map.width; x++) {
+        const northTier = elevMap.get(`${x},${y - 1}`) ?? 1;
+        const curTier   = elevMap.get(`${x},${y}`)     ?? 1;
+        const td = northTier - curTier;
+        if (td <= 0) continue;
+        const alpha = 0.16 + 0.12 * (td - 1);
+        const shH   = 3 + td;
+        const tlx   = OX + x * CELL;
+        const tly   = tileTop(y);
+        const topEdge = isFlipped ? tly + CELL - 1 - shH : tly;
+        ctx.fillStyle = `rgba(0,0,0,${alpha})`;
+        ctx.fillRect(tlx, topEdge, CELL - 1, shH);
+        // crisp shadow edge line
+        ctx.strokeStyle = `rgba(0,0,0,${Math.min(0.45, alpha + 0.08)})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        const lineY = isFlipped ? topEdge + shH - 0.5 : topEdge + 0.5;
+        ctx.moveTo(tlx, lineY);
+        ctx.lineTo(tlx + CELL - 1, lineY);
+        ctx.stroke();
+      }
+    }
   }
 
   drawBuildPhaseOverlay(data);
@@ -1471,62 +1540,83 @@ function draw() {
     }
   }
 
-  // Mortar shells (lobbed arc)
-  for (const ms of data.mortar_shells || []) {
-    const totalDist = Math.hypot(ms.target[0] - ms.sx, ms.target[1] - ms.sy);
-    const traveledDist = Math.hypot(ms.x - ms.sx, ms.y - ms.sy);
-    const progress = totalDist > 0 ? Math.min(1, traveledDist / totalDist) : 0;
-    const arcHeight = Math.sin(progress * Math.PI); // 0→1→0
-    const radius = 2 + arcHeight * 5;
-    const alpha = 0.5 + arcHeight * 0.5;
-    const sx = cpx(ms.x), sy = cpy(ms.y);
-    // Shadow on the ground (small dot below)
-    ctx.globalAlpha = 0.3;
-    ctx.fillStyle = '#333';
-    ctx.beginPath();
-    ctx.arc(sx, sy, 2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = ms.owner === 0 ? '#e05020' : '#5050e0';
-    ctx.beginPath();
-    ctx.arc(sx, sy - arcHeight * CELL * 0.8, radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
+  // Mortar shells (lobbed arc) — positions dead-reckoned between server updates
+  {
+    const elapsed = (performance.now() - lastStateTime) / 1000;
+    for (const ms of data.mortar_shells || []) {
+      const ddx = ms.target[0] - ms.x, ddy = ms.target[1] - ms.y;
+      const nd = Math.hypot(ddx, ddy);
+      const advance = nd > 0 ? Math.min(nd, 5.0 * elapsed) : 0;
+      const ex = ms.x + (nd > 0 ? (ddx / nd) * advance : 0);
+      const ey = ms.y + (nd > 0 ? (ddy / nd) * advance : 0);
+      const totalDist = Math.hypot(ms.target[0] - ms.sx, ms.target[1] - ms.sy);
+      const traveledDist = Math.hypot(ex - ms.sx, ey - ms.sy);
+      const progress = totalDist > 0 ? Math.min(1, traveledDist / totalDist) : 0;
+      const arcHeight = Math.sin(progress * Math.PI);
+      const radius = 2 + arcHeight * 5;
+      const alpha = 0.5 + arcHeight * 0.5;
+      const sx = cpx(ex), sy = cpy(ey);
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = '#333';
+      ctx.beginPath();
+      ctx.arc(sx, sy, 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = ms.owner === 0 ? '#e05020' : '#5050e0';
+      ctx.beginPath();
+      ctx.arc(sx, sy - arcHeight * CELL * 0.8, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
   }
 
-  // Grenade shells
-  for (const gs of data.grenade_shells || []) {
-    const gx = cpx(gs.x), gy = cpy(gs.y);
-    ctx.fillStyle = '#9ad26d';
-    ctx.beginPath();
-    ctx.arc(gx, gy, 3, 0, Math.PI * 2);
-    ctx.fill();
+  // Grenade shells — dead-reckoned
+  {
+    const elapsed = (performance.now() - lastStateTime) / 1000;
+    for (const gs of data.grenade_shells || []) {
+      const ddx = gs.target[0] - gs.x, ddy = gs.target[1] - gs.y;
+      const nd = Math.hypot(ddx, ddy);
+      const advance = nd > 0 ? Math.min(nd, 5.0 * elapsed) : 0;
+      const ex = gs.x + (nd > 0 ? (ddx / nd) * advance : 0);
+      const ey = gs.y + (nd > 0 ? (ddy / nd) * advance : 0);
+      const gx = cpx(ex), gy = cpy(ey);
+      ctx.fillStyle = '#9ad26d';
+      ctx.beginPath();
+      ctx.arc(gx, gy, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
-  // Flare shells — illumination glow + projectile dot
-  for (const fs of data.flare_shells || []) {
-    const totalDist = Math.hypot(fs.target[0] - fs.sx, fs.target[1] - fs.sy);
-    const traveledDist = Math.hypot(fs.x - fs.sx, fs.y - fs.sy);
-    const progress = totalDist > 0 ? Math.min(1, traveledDist / totalDist) : 0;
-    const illumR = (2 + 2 * (1 - Math.abs(2 * progress - 1))) * CELL;
-    const fcx = cpx(fs.x), fcy = cpy(fs.y);
-    // Ground illumination glow
-    const grad = ctx.createRadialGradient(fcx, fcy, 0, fcx, fcy, illumR);
-    grad.addColorStop(0, 'rgba(255,240,160,0.28)');
-    grad.addColorStop(0.6, 'rgba(255,220,80,0.10)');
-    grad.addColorStop(1, 'rgba(255,200,0,0)');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(fcx, fcy, illumR, 0, Math.PI * 2);
-    ctx.fill();
-    // Flare dot (bright white-yellow)
-    ctx.fillStyle = '#fffde0';
-    ctx.shadowColor = '#ffe060';
-    ctx.shadowBlur = 8;
-    ctx.beginPath();
-    ctx.arc(fcx, fcy, 3.5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
+  // Flare shells — illumination glow + projectile dot, dead-reckoned
+  {
+    const elapsed = (performance.now() - lastStateTime) / 1000;
+    for (const fs of data.flare_shells || []) {
+      const ddx = fs.target[0] - fs.x, ddy = fs.target[1] - fs.y;
+      const nd = Math.hypot(ddx, ddy);
+      const advance = nd > 0 ? Math.min(nd, 2.5 * elapsed) : 0;
+      const ex = fs.x + (nd > 0 ? (ddx / nd) * advance : 0);
+      const ey = fs.y + (nd > 0 ? (ddy / nd) * advance : 0);
+      const totalDist = Math.hypot(fs.target[0] - fs.sx, fs.target[1] - fs.sy);
+      const traveledDist = Math.hypot(ex - fs.sx, ey - fs.sy);
+      const progress = totalDist > 0 ? Math.min(1, traveledDist / totalDist) : 0;
+      const illumR = (2 + 2 * (1 - Math.abs(2 * progress - 1))) * CELL;
+      const fcx = cpx(ex), fcy = cpy(ey);
+      const grad = ctx.createRadialGradient(fcx, fcy, 0, fcx, fcy, illumR);
+      grad.addColorStop(0, 'rgba(255,240,160,0.28)');
+      grad.addColorStop(0.6, 'rgba(255,220,80,0.10)');
+      grad.addColorStop(1, 'rgba(255,200,0,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(fcx, fcy, illumR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fffde0';
+      ctx.shadowColor = '#ffe060';
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.arc(fcx, fcy, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
   }
 
   // Planned grenade targets
@@ -1556,14 +1646,21 @@ function draw() {
     }
   }
 
-  // Projectiles
-  for (const p of data.projectiles || []) {
-    const pcx = cpx(p.x);
-    const pcy = cpy(p.y);
-    ctx.fillStyle = p.source === 'mg' ? '#ffd34d' : 'rgba(255,255,255,0.9)';
-    ctx.beginPath();
-    ctx.arc(pcx, pcy, p.source === 'mg' ? 2.5 : 1.5, 0, Math.PI * 2);
-    ctx.fill();
+  // Projectiles — dead-reckoned using dx/dy velocity from server
+  {
+    const elapsed = (performance.now() - lastStateTime) / 1000;
+    const projSpeed = data.rules?.projectile_speed ?? 8.0;
+    for (const p of data.projectiles || []) {
+      const norm = Math.hypot(p.dx ?? 0, p.dy ?? 0);
+      const ex = norm > 0 ? p.x + (p.dx / norm) * projSpeed * elapsed : p.x;
+      const ey = norm > 0 ? p.y + (p.dy / norm) * projSpeed * elapsed : p.y;
+      const pcx = cpx(ex);
+      const pcy = cpy(ey);
+      ctx.fillStyle = p.source === 'mg' ? '#ffd34d' : 'rgba(255,255,255,0.9)';
+      ctx.beginPath();
+      ctx.arc(pcx, pcy, p.source === 'mg' ? 2.5 : 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   // Explosions
@@ -1582,6 +1679,23 @@ function draw() {
     ctx.arc(ecx, ecy, radius, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
+  }
+
+  // Smoke particles from mortar/grenade impacts
+  if (smokeParticles.length) {
+    ctx.save();
+    for (const p of smokeParticles) {
+      const t = p.age / p.maxAge;
+      const a = p.alpha * (1 - t * t);
+      if (a < 0.015) continue;
+      const r = p.r * CELL * (1 + t * 1.8);
+      ctx.globalAlpha = a * 0.7;
+      ctx.fillStyle = '#b8a898';
+      ctx.beginPath();
+      ctx.arc(cpx(p.x), cpy(p.y), r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   // Death crosses
@@ -1807,6 +1921,25 @@ connect();
 setupBoardZoomControl();
 applyBoardZoom();
 setInterval(() => send({ type: 'ping' }), 200);
-setInterval(render, 100);
+
+function updateSmoke() {
+  const now = performance.now();
+  const dt = Math.min(0.1, (now - lastSmokeTick) / 1000);
+  lastSmokeTick = now;
+  for (const p of smokeParticles) {
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vx *= 1 - 3 * dt;
+    p.vy *= 1 - 2 * dt;
+    p.age += dt;
+  }
+  smokeParticles = smokeParticles.filter(p => p.age < p.maxAge);
+}
+
+(function rafLoop() {
+  updateSmoke();
+  if (state) render();
+  requestAnimationFrame(rafLoop);
+})();
 updateModeButtons();
 updateModeLabel();
