@@ -608,8 +608,21 @@ board.addEventListener('click', (evt) => {
     refreshMortarStatus();
 
   } else if (mode === 'sandbag') {
+    const inBuildPhase = (tw()?.build_phase_remaining || 0) > 0;
     if (myS.length) {
       selectedUnits = new Set([myS[0].unit_id]);
+    } else if (inBuildPhase && firstSelected() === null) {
+      // Build-phase free instant placement (no soldier required)
+      const sbRem = tw()?.build_sandbags_remaining ?? 0;
+      const sbTrenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
+      const sbKey = `${tile[0]},${tile[1]}`;
+      if (sbRem <= 0) {
+        setStatus('No build-phase sandbags remaining.', true);
+      } else if (sbTrenchSet.has(sbKey)) {
+        setStatus('Cannot place sandbag in a trench.', true);
+      } else {
+        send({ type: 'tw_build_phase_place_sandbag', tile });
+      }
     } else {
       const uid = firstSelected();
       if (uid !== null) {
@@ -645,8 +658,27 @@ board.addEventListener('click', (evt) => {
     }
 
   } else if (mode === 'wire') {
+    const inBuildPhase = (tw()?.build_phase_remaining || 0) > 0;
     if (myS.length) {
       selectedUnits = new Set([myS[0].unit_id]);
+    } else if (inBuildPhase && firstSelected() === null) {
+      // Build-phase free instant placement
+      const wireRem = tw()?.build_wire_remaining ?? 0;
+      const trenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
+      const wireSet = new Set((tw().barbed_wire || []).filter(w => w.hp > 0).map(w => `${w.tile[0]},${w.tile[1]}`));
+      const wireStructSet = new Set([
+        ...(tw().machine_guns || []).filter(m => m.hp > 0).map(m => `${m.tile[0]},${m.tile[1]}`),
+        ...(tw().mortars || []).filter(m => m.hp > 0).map(m => `${m.tile[0]},${m.tile[1]}`),
+        ...(tw().sandbags || []).filter(s => s.hp > 0).map(s => `${s.tile[0]},${s.tile[1]}`),
+      ]);
+      const wkey = `${tile[0]},${tile[1]}`;
+      if (wireRem <= 0) {
+        setStatus('No build-phase wire remaining.', true);
+      } else if (trenchSet.has(wkey) || wireSet.has(wkey) || wireStructSet.has(wkey)) {
+        setStatus('Cannot place wire on an occupied or trench tile.', true);
+      } else {
+        send({ type: 'tw_build_phase_place_wire', tile });
+      }
     } else {
       const uid = firstSelected();
       if (uid !== null) {
@@ -1831,13 +1863,27 @@ function render() {
     if (!selectedUnits.size) setStatus('Move — click soldiers to select, then click a destination tile.');
     else setStatus(`Move — ${selectedUnits.size} selected. Click any tile to move.`);
   } else if (mode === 'sandbag') {
-    if (!selectedUnits.size) setStatus('Sandbag — click a soldier, then click an adjacent open tile.');
-    else setStatus('Sandbag — click an adjacent open tile to build.');
+    const inBuildPhase = (tw()?.build_phase_remaining || 0) > 0;
+    if (inBuildPhase) {
+      const sbRem = tw()?.build_sandbags_remaining ?? 0;
+      if (!selectedUnits.size) setStatus(`Sandbag — click any tile to place instantly (${sbRem} remaining), or select a soldier to place manually.`);
+      else setStatus('Sandbag — click an adjacent open tile to build (manual, no cost).');
+    } else {
+      if (!selectedUnits.size) setStatus('Sandbag — click a soldier, then click an adjacent open tile.');
+      else setStatus('Sandbag — click an adjacent open tile to build.');
+    }
   } else if (mode === 'grenade') {
     setStatus('Grenade — click tiles to toggle grenade targets (range 7 from grenadiers).');
   } else if (mode === 'wire') {
-    if (!selectedUnits.size) setStatus('Wire — click a soldier, then click an adjacent open tile to place wire.');
-    else setStatus('Wire — click an adjacent open tile to place wire (2 s build).');
+    const inBuildPhase = (tw()?.build_phase_remaining || 0) > 0;
+    if (inBuildPhase) {
+      const wireRem = tw()?.build_wire_remaining ?? 0;
+      if (!selectedUnits.size) setStatus(`Wire — click any tile to place instantly (${wireRem} remaining), or select a soldier to place manually.`);
+      else setStatus('Wire — click an adjacent open tile to place wire (manual, no cost).');
+    } else {
+      if (!selectedUnits.size) setStatus('Wire — click a soldier, then click an adjacent open tile to place wire.');
+      else setStatus('Wire — click an adjacent open tile to place wire (2 s build).');
+    }
   } else if (mode === 'flare') {
     const fr = tw()?.flares_remaining;
     const rem = fr ? (fr[String(mySeat())] ?? 0) : 0;
