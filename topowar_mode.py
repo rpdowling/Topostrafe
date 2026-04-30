@@ -774,6 +774,8 @@ class TopowarGameState:
             return 0.75
         if elev == ELEV_HILL:
             return 0.90
+        if elev == ELEV_GROUND:
+            return 1.10
         return 1.0
 
     def _has_terrain_los(self, a: tuple[int, int], b: tuple[int, int], viewer_elevation: int) -> bool:
