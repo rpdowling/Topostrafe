@@ -796,22 +796,32 @@ class TopowarGameState:
     def _has_combat_los(self, a: tuple[int, int], b: tuple[int, int]) -> bool:
         """LOS check for rifle and MG fire, respecting elevation in both directions.
 
-        Threshold tile elevation that blocks the shot:
-          - Equal / downhill (shooter >= target): min(shooter, target)
-            → only tiles strictly above the target's elevation block.
-          - Uphill (shooter < target): target_elev - 1
-            → tiles at the target's elevation or above block, so you
-               can't shoot past a tile that is the same tier as the target
-               (e.g. ground can't shoot through hills at another hill, but
-               can shoot through hills at a mountain).
+        Threshold (passed to _has_terrain_los as "block if tile > threshold"):
 
-        Because elevation values are 2, 4, 5, 6 (no consecutive gap between
-        trench and ground), "target_elev - 1" correctly keeps existing
-        trench→ground behaviour unchanged.
+          Downhill (shooter > target): threshold = shooter_elev - 1
+            → block if tile >= shooter_elev
+            → shots from a mountain pass over hills and ground freely;
+               another mountain tile in the path blocks them.
+
+          Uphill (shooter < target): threshold = target_elev - 1
+            → block if tile >= target_elev
+            → you can shoot past lower tiers toward the target tier, but
+               a tile at the target's own elevation (or higher) blocks.
+
+          Equal elevation: threshold = shooter_elev
+            → block if tile > shooter_elev (unchanged existing behaviour).
+
+        Because elevation values are 2, 4, 5, 6 (no integer between 2 and 4),
+        trench→ground uphill gives threshold = 3, matching the old rule exactly.
         """
         a_elev = self.map.elevation_at(a)
         b_elev = self.map.elevation_at(b)
-        threshold = (b_elev - 1) if a_elev < b_elev else min(a_elev, b_elev)
+        if a_elev > b_elev:    # downhill
+            threshold = a_elev - 1
+        elif a_elev < b_elev:  # uphill
+            threshold = b_elev - 1
+        else:                  # equal
+            threshold = a_elev
         return self._has_terrain_los(a, b, threshold)
 
     def _has_mortar_los(self, mortar_tile: tuple[int, int], target: tuple[int, int]) -> bool:
@@ -1509,6 +1519,7 @@ class TopowarGameState:
                     and self._soldier_visible_to(s2, s.owner)
                     and s2.tile not in self.map.trenches
                     and math.dist(s.tile, s2.tile) <= 5.0
+                    and self._has_combat_los(s.tile, s2.tile)
                     for s2 in self.soldiers.values()
                 )
                 s.combat_halt = open_enemy_near
@@ -1764,13 +1775,17 @@ class TopowarGameState:
             else:
                 mg.facing = (mg.facing + math.copysign(max_turn, diff)) % 360.0
             mg.facing = self._clamp_angle_to_arc(mg.facing, mg.arc_center, mg.arc_half)
+            # Guard: only fire if elevation and LOS allow it.
+            # This applies to both auto-targeted and force-targeted shots.
+            tgt_elev = self.map.elevation_at(target)
+            can_fire = tgt_elev <= mg_elev and self._has_combat_los(mg.tile, target)
             # Start a new burst cycle when cooldown expires
-            if mg.cooldown <= 0 and mg.burst_left <= 0:
+            if can_fire and mg.cooldown <= 0 and mg.burst_left <= 0:
                 mg.burst_left = 3
                 mg.burst_shot_cooldown = 0.0
                 mg.cooldown = 3.0
             # Fire one shot per ~0.33 s within the burst
-            if mg.burst_left > 0 and mg.burst_shot_cooldown <= 0:
+            if can_fire and mg.burst_left > 0 and mg.burst_shot_cooldown <= 0:
                 mg.burst_left -= 1
                 mg.burst_shot_cooldown = 1.0 / 3.0
                 spreadx = self.random.uniform(-0.3, 0.3)
