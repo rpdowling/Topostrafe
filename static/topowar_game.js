@@ -826,17 +826,27 @@ function drawBuildPhaseOverlay(data) {
   const mm = Math.floor(seconds / 60);
   const ss = String(seconds % 60).padStart(2, '0');
   const timerLabel = `BUILD PHASE ${mm}:${ss}`;
+  const sbRem = data.build_sandbags_remaining ?? 0;
+  const wireRem = data.build_wire_remaining ?? 0;
+  const resourceLabel = `Sandbags: ${sbRem}   Wire: ${wireRem}`;
   ctx.save();
-  ctx.font = 'bold 18px system-ui';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.fillStyle = 'rgba(30, 0, 0, 0.85)';
-  const textY = OY + 6;
   const textX = board.width / 2;
-  const textWidth = ctx.measureText(timerLabel).width;
-  ctx.fillRect(textX - textWidth / 2 - 10, textY - 2, textWidth + 20, 24);
+  const textY = OY + 6;
+  ctx.font = 'bold 18px system-ui';
+  const timerWidth = ctx.measureText(timerLabel).width;
+  ctx.font = '13px system-ui';
+  const resWidth = ctx.measureText(resourceLabel).width;
+  const boxWidth = Math.max(timerWidth, resWidth) + 20;
+  ctx.fillStyle = 'rgba(30, 0, 0, 0.85)';
+  ctx.fillRect(textX - boxWidth / 2, textY - 2, boxWidth, 46);
+  ctx.font = 'bold 18px system-ui';
   ctx.fillStyle = '#ff4a4a';
   ctx.fillText(timerLabel, textX, textY);
+  ctx.font = '13px system-ui';
+  ctx.fillStyle = '#ffaa66';
+  ctx.fillText(resourceLabel, textX, textY + 24);
   ctx.restore();
 }
 
