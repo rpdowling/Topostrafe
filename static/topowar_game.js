@@ -977,7 +977,7 @@ function draw() {
   const selSoldier = getSelectedSoldier();
   if (selSoldier) {
     const grenRange = tw()?.rules?.grenade_range ?? GRENADIER_RANGE;
-    const effectiveRange = selSoldier.is_grenadier ? grenRange : RIFLE_RANGE;
+    const effectiveRange = selSoldier.is_grenadier ? grenRange : (selSoldier.range ?? RIFLE_RANGE);
     drawRangeCircle(cpx(selSoldier.x), cpy(selSoldier.y), effectiveRange * CELL, 'rgba(255,180,50,0.8)');
   }
 
@@ -1763,11 +1763,15 @@ function updateSelectionPanel() {
     const hp = Math.round((soldier.hp / (soldier.hp_max || 5)) * 100);
     const tsk = soldier.combat_halt ? 'Engaging' : (soldier.task ? (taskLabel[soldier.task.type] || soldier.task.type) : '—');
     const blockedTag = soldier.blocked ? '<span class="sel-blocked">BLOCKED</span>' : '';
+    const rangeRow = !soldier.is_grenadier
+      ? `<span class="sel-label">Range</span><span class="sel-val">${soldier.range ?? RIFLE_RANGE}</span>`
+      : '';
     panel.innerHTML = `
       <div class="sel-grid">
         <span class="sel-label">Side</span><span class="sel-val">${side}</span>
         <span class="sel-label">Role</span><span class="sel-val">${soldier.is_grenadier ? 'Grenadier' : 'Rifleman'}</span>
         <span class="sel-label">HP</span><span class="sel-val">${hp}%</span>
+        ${rangeRow}
         <span class="sel-label">Mode</span><span class="sel-val">${modeLabel[soldier.mode] || soldier.mode}</span>
         <span class="sel-label">Task</span><span class="sel-val">${tsk}</span>
       </div>${blockedTag}`;

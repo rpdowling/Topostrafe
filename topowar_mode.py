@@ -851,26 +851,46 @@ class TopowarGameState:
                 err += dx
                 cy += sy
 
-    def _soldier_effective_range(self, s: "Soldier", target_elevation: int) -> float:
-        """Effective rifle range considering elevation bonuses.
-        A mountain soldier adjacent to lower terrain sees farther onto it.
-        A hill soldier adjacent to open ground sees 7 tiles over it.
-        """
+    def _bresenham_first_step(self, a: tuple[int, int], b: tuple[int, int]) -> tuple[int, int] | None:
+        """Return the first tile along the Bresenham line from a toward b (not a itself)."""
+        x0, y0 = a
+        x1, y1 = b
+        if (x0, y0) == (x1, y1):
+            return None
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x1 > x0 else -1
+        sy = 1 if y1 > y0 else -1
+        err = dx - dy
+        e2 = 2 * err
+        cx = x0 + sx if e2 > -dy else x0
+        cy = y0 + sy if e2 < dx else y0
+        return (cx, cy)
+
+    def _soldier_effective_range(self, s: "Soldier", target_tile: tuple[int, int]) -> float:
+        """Rifle range based on how many elevation tiers the shooter is above the first
+        intermediate tile on the path to target: 5 + max(0, shooter_tier - first_tile_tier)."""
         s_elev = self.map.elevation_at(s.tile)
+        s_tier = _ELEV_TIER_ORDER.index(s_elev)
+        first = self._bresenham_first_step(s.tile, target_tile)
+        if first is None or not self.map.in_bounds(first):
+            return 5.0
+        first_tier = _ELEV_TIER_ORDER.index(self.map.elevation_at(first))
+        return 5.0 + max(0, s_tier - first_tier)
+
+    def _soldier_max_range(self, s: "Soldier") -> float:
+        """Maximum rifle range in any direction — used for UI display and open-ground spotting."""
+        s_elev = self.map.elevation_at(s.tile)
+        s_tier = _ELEV_TIER_ORDER.index(s_elev)
         sx, sy = s.tile
         adj4 = [(sx+1, sy), (sx-1, sy), (sx, sy+1), (sx, sy-1)]
-        adj_elevs = {self.map.elevation_at(t) for t in adj4 if self.map.in_bounds(t)}
-        if s_elev == ELEV_MOUNTAIN:
-            if target_elevation == ELEV_GROUND and ELEV_GROUND in adj_elevs:
-                return 10.0
-            if target_elevation == ELEV_HILL and ELEV_HILL in adj_elevs:
-                return 7.0
-            return 5.0
-        if s_elev == ELEV_HILL:
-            if target_elevation == ELEV_GROUND and ELEV_GROUND in adj_elevs:
-                return 7.0
-            return 5.0
-        return 5.0
+        min_adj_tier = s_tier
+        for t in adj4:
+            if self.map.in_bounds(t):
+                tier = _ELEV_TIER_ORDER.index(self.map.elevation_at(t))
+                if tier < min_adj_tier:
+                    min_adj_tier = tier
+        return 5.0 + max(0, s_tier - min_adj_tier)
 
     def _degrade_tile(self, tile: tuple[int, int]) -> bool:
         """Lower tile one elevation level. Returns True if it just became a trench (collapse)."""
@@ -970,7 +990,7 @@ class TopowarGameState:
                     return True
             else:
                 # Soldier in the open can spot nearby enemies within rifle range
-                if math.dist(s.tile, target.tile) <= 5.0:
+                if math.dist(s.tile, target.tile) <= self._soldier_max_range(s):
                     return True
         return False
 
@@ -1518,7 +1538,7 @@ class TopowarGameState:
                     s2.hp > 0 and s2.owner != s.owner
                     and self._soldier_visible_to(s2, s.owner)
                     and s2.tile not in self.map.trenches
-                    and math.dist(s.tile, s2.tile) <= 5.0
+                    and math.dist(s.tile, s2.tile) <= self._soldier_effective_range(s, s2.tile)
                     and self._has_combat_los(s.tile, s2.tile)
                     for s2 in self.soldiers.values()
                 )
@@ -1537,7 +1557,7 @@ class TopowarGameState:
             target_tile = self.soldiers[tid].tile if typ == "soldier" else self.mgs[tid].tile
             d = math.dist(s.tile, target_tile)
             target_elev = self.map.elevation_at(target_tile)
-            effective_range = self._soldier_effective_range(s, target_elev)
+            effective_range = self._soldier_effective_range(s, target_tile)
             if d > effective_range:
                 continue
             s_elev = self.map.elevation_at(s.tile)
@@ -2093,8 +2113,8 @@ class TopowarGameState:
                         if target_e == ELEV_TRENCH:
                             continue  # MG flat trajectory overshoots trenches
                     else:
-                        # Rifle fire: 25% chance against lower-elevation targets
-                        if target_e < p.origin_elevation and self.random.random() > 0.25:
+                        # Rifle fire: 25% hit chance only when shooting into a trench from above
+                        if target_e == ELEV_TRENCH and p.origin_elevation > ELEV_TRENCH and self.random.random() > 0.25:
                             continue
                     self._register_kill(s, p.owner)
                     hit = True
@@ -2204,6 +2224,7 @@ class TopowarGameState:
                 "combat_halt": s.combat_halt,
                 "is_grenadier": s.is_grenadier,
                 "is_officer": s.is_officer,
+                "range": self._soldier_max_range(s) if not s.is_grenadier else None,
             })
         mgs = []
         for mg in self.mgs.values():
