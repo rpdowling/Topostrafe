@@ -771,10 +771,7 @@ class TopowarGameState:
         return 1.0
 
     def _has_terrain_los(self, a: tuple[int, int], b: tuple[int, int], viewer_elevation: int) -> bool:
-        """Bresenham LOS blocked by any intermediate tile whose elevation exceeds viewer_elevation.
-
-        Pass min(shooter_elev, target_elev) when shooting downhill so that only
-        tiles above the target's elevation break the line of sight."""
+        """Bresenham LOS blocked by any intermediate tile whose elevation exceeds viewer_elevation."""
         x0, y0 = a
         x1, y1 = b
         dx = abs(x1 - x0)
@@ -795,6 +792,27 @@ class TopowarGameState:
             if e2 < dx:
                 err += dx
                 cy += sy
+
+    def _has_combat_los(self, a: tuple[int, int], b: tuple[int, int]) -> bool:
+        """LOS check for rifle and MG fire, respecting elevation in both directions.
+
+        Threshold tile elevation that blocks the shot:
+          - Equal / downhill (shooter >= target): min(shooter, target)
+            → only tiles strictly above the target's elevation block.
+          - Uphill (shooter < target): target_elev - 1
+            → tiles at the target's elevation or above block, so you
+               can't shoot past a tile that is the same tier as the target
+               (e.g. ground can't shoot through hills at another hill, but
+               can shoot through hills at a mountain).
+
+        Because elevation values are 2, 4, 5, 6 (no consecutive gap between
+        trench and ground), "target_elev - 1" correctly keeps existing
+        trench→ground behaviour unchanged.
+        """
+        a_elev = self.map.elevation_at(a)
+        b_elev = self.map.elevation_at(b)
+        threshold = (b_elev - 1) if a_elev < b_elev else min(a_elev, b_elev)
+        return self._has_terrain_los(a, b, threshold)
 
     def _has_mortar_los(self, mortar_tile: tuple[int, int], target: tuple[int, int]) -> bool:
         """True if no mountain tile lies between mortar and target on the Bresenham line.
@@ -1512,7 +1530,7 @@ class TopowarGameState:
             if d > effective_range:
                 continue
             s_elev = self.map.elevation_at(s.tile)
-            if not self._has_terrain_los(s.tile, target_tile, min(s_elev, target_elev)):
+            if not self._has_combat_los(s.tile, target_tile):
                 continue
 
             # Hit chance: 25% when moving through open ground toward a trench enemy;
@@ -1718,7 +1736,7 @@ class TopowarGameState:
                     sv_elev = self.map.elevation_at(sv.tile)
                     if sv_elev > mg_elev:
                         continue  # MG cannot fire at higher elevation
-                    if not self._has_terrain_los(mg.tile, sv.tile, min(mg_elev, sv_elev)):
+                    if not self._has_combat_los(mg.tile, sv.tile):
                         continue  # blocked by terrain above target's elevation
                     if not self._soldier_visible_to(sv, mg.owner):
                         continue
