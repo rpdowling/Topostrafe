@@ -372,6 +372,8 @@ class TopowarGameState:
         self.grenade_shells: list[GrenadeShell] = []
         self.flare_shells: list[FlareShell] = []
         self.flares_remaining: dict[int, int] = {0: 5, 1: 5}
+        self.build_sandbags_remaining: dict[int, int] = {0: 30, 1: 30}
+        self.build_wire_remaining: dict[int, int] = {0: 40, 1: 40}
         self.projectiles: list[Projectile] = []
         self.explosions: list[Explosion] = []
         self.death_marks: list[DeathMark] = []
@@ -676,6 +678,10 @@ class TopowarGameState:
                 mortar.base_elevation = ELEV_TRENCH if old else ELEV_GROUND
             if not hasattr(mortar, "operable"):
                 mortar.operable = True
+        if not hasattr(self, "build_sandbags_remaining"):
+            self.build_sandbags_remaining = {0: 0, 1: 0}
+        if not hasattr(self, "build_wire_remaining"):
+            self.build_wire_remaining = {0: 0, 1: 0}
 
     def _crew_positions_for_mg(self, mg: "MachineGun") -> list[tuple[int, int]]:
         """Tiles where crew can stand to operate this MG.
@@ -1349,6 +1355,53 @@ class TopowarGameState:
                     return "Wire queued."
             s.current_task = {"type": "build_wire", "wire_id": wid, "progress": 0.0}
             return "Wire placement started."
+        if t == "tw_build_phase_place_sandbag":
+            if self.time_elapsed >= self.rules.build_phase_seconds:
+                raise ValueError("Build phase has ended.")
+            tile = tuple(map(int, action.get("tile", [])))
+            if len(tile) != 2 or not self.map.in_bounds(tile):
+                raise ValueError("Invalid tile.")
+            if not self._on_owner_side(owner, tile):
+                raise ValueError("Must place on your side of the map.")
+            if self.map.elevation_at(tile) == ELEV_TRENCH:
+                raise ValueError("Cannot place sandbags in a trench.")
+            if tile in self._structure_tile_set():
+                raise ValueError("Tile already occupied by a structure.")
+            rem = self.build_sandbags_remaining.get(owner, 0)
+            if rem <= 0:
+                raise ValueError("No build-phase sandbags remaining.")
+            mid = self.next_structure_id
+            self.next_structure_id += 1
+            sb = Sandbag(mid, owner, tile, build_required=5.0)
+            sb.built = True
+            sb.build_progress = sb.build_required
+            self.sandbags[mid] = sb
+            self.build_sandbags_remaining[owner] = rem - 1
+            return "Sandbag placed."
+        if t == "tw_build_phase_place_wire":
+            if self.time_elapsed >= self.rules.build_phase_seconds:
+                raise ValueError("Build phase has ended.")
+            tile = tuple(map(int, action.get("tile", [])))
+            if len(tile) != 2 or not self.map.in_bounds(tile):
+                raise ValueError("Invalid tile.")
+            if not self._on_owner_side(owner, tile):
+                raise ValueError("Must place on your side of the map.")
+            if self.map.elevation_at(tile) == ELEV_TRENCH:
+                raise ValueError("Cannot place wire in a trench.")
+            occupied = self._structure_tile_set() | self._wire_structure_tile_set()
+            if tile in occupied:
+                raise ValueError("Tile already occupied.")
+            rem = self.build_wire_remaining.get(owner, 0)
+            if rem <= 0:
+                raise ValueError("No build-phase wire remaining.")
+            wid = self.next_structure_id
+            self.next_structure_id += 1
+            w = BarbedWire(wid, owner, tile)
+            w.built = True
+            w.build_progress = w.build_required
+            self.barbed_wire[wid] = w
+            self.build_wire_remaining[owner] = rem - 1
+            return "Wire placed."
         if t == "tw_move_unit":
             sid = int(action.get("unit_id", -1))
             s = self.soldiers.get(sid)
@@ -1873,10 +1926,22 @@ class TopowarGameState:
             (sb for sb in self.sandbags.values() if sb.hp > 0 and sb.built and sb.tile == landing), None
         )
         if direct_sandbag:
-            # Sandbag absorbs the hit: damage it, suppress all terrain deformation.
+            # Sandbag absorbs hit: damage it, suppress terrain deformation, but blast still kills.
             direct_sandbag.hp -= 1
             if direct_sandbag.hp <= 0:
                 direct_sandbag.hp = 0
+            landing_elev = self.map.elevation_at(landing)
+            kill_radius = 3.0
+            for s in self.soldiers.values():
+                if s.hp <= 0:
+                    continue
+                if math.dist(s.tile, landing) > kill_radius:
+                    continue
+                if self.map.elevation_at(s.tile) < landing_elev:
+                    continue  # Lower-elevation node (e.g. trench) is naturally protected
+                if self._has_sandbag_cover_between(landing, s.tile):
+                    continue
+                self._register_kill(s, owner)
             self.explosions.append(Explosion(float(lx), float(ly)))
             return
 
@@ -2329,6 +2394,8 @@ class TopowarGameState:
             "grenade_targets": [list(t) for t in sorted(self.grenade_tiles.get(viewer, set()))] if viewer is not None else [],
             "flare_shells": [{"x": fs.x, "y": fs.y, "sx": fs.sx, "sy": fs.sy, "target": list(fs.target), "owner": fs.owner} for fs in self.flare_shells],
             "flares_remaining": {"0": self.flares_remaining.get(0, 0), "1": self.flares_remaining.get(1, 0)},
+            "build_sandbags_remaining": self.build_sandbags_remaining.get(viewer, 0) if viewer is not None else None,
+            "build_wire_remaining": self.build_wire_remaining.get(viewer, 0) if viewer is not None else None,
             "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "intended_target": list(ms.intended_target), "owner": ms.owner} for ms in self.mortar_shells],
             "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
             "projectiles": [{"x": p.x, "y": p.y, "dx": p.dx, "dy": p.dy, "owner": p.owner, "source": p.source} for p in self.projectiles],
