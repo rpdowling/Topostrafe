@@ -179,6 +179,14 @@ class BarbedWire(Structure):
 
 
 @dataclass
+class Bunker:
+    structure_id: int
+    owner: int
+    tile: tuple[int, int]
+    hp: int = 1
+
+
+@dataclass
 class MortarShell:
     owner: int
     x: float
@@ -370,6 +378,8 @@ class TopowarGameState:
         self.mortars: dict[int, Mortar] = {}
         self.sandbags: dict[int, Sandbag] = {}
         self.barbed_wire: dict[int, BarbedWire] = {}
+        self.bunkers: dict[int, Bunker] = {}
+        self.build_bunkers_remaining: dict[int, int] = {0: 5, 1: 5}
         self.mortar_shells: list[MortarShell] = []
         self.grenade_shells: list[GrenadeShell] = []
         self.flare_shells: list[FlareShell] = []
@@ -596,8 +606,11 @@ class TopowarGameState:
         """All wire tiles including under-construction (for placement checks)."""
         return {w.tile for w in self.barbed_wire.values() if w.hp > 0}
 
+    def _bunker_tile_set(self) -> set[tuple[int, int]]:
+        return {b.tile for b in self.bunkers.values() if b.hp > 0}
+
     def _structure_tile_set(self) -> set[tuple[int, int]]:
-        return self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
+        return self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set() | self._bunker_tile_set()
 
     def _crew_positions_for_mortar(self, mortar: "Mortar") -> list[tuple[int, int]]:
         """Adjacent tiles at the same elevation as the mortar, usable as crew spots."""
@@ -684,6 +697,10 @@ class TopowarGameState:
             self.build_sandbags_remaining = {0: 0, 1: 0}
         if not hasattr(self, "build_wire_remaining"):
             self.build_wire_remaining = {0: 0, 1: 0}
+        if not hasattr(self, "bunkers"):
+            self.bunkers = {}
+        if not hasattr(self, "build_bunkers_remaining"):
+            self.build_bunkers_remaining = {0: 0, 1: 0}
 
     def _crew_positions_for_mg(self, mg: "MachineGun") -> list[tuple[int, int]]:
         """Tiles where crew can stand to operate this MG.
@@ -1417,6 +1434,26 @@ class TopowarGameState:
             self.barbed_wire[wid] = w
             self.build_wire_remaining[owner] = rem - 1
             return "Wire placed."
+        if t == "tw_build_phase_place_bunker":
+            if self.time_elapsed >= self.rules.build_phase_seconds:
+                raise ValueError("Build phase has ended.")
+            tile = tuple(map(int, action.get("tile", [])))
+            if len(tile) != 2 or not self.map.in_bounds(tile):
+                raise ValueError("Invalid tile.")
+            if not self._on_owner_side(owner, tile):
+                raise ValueError("Must place on your side of the map.")
+            if tile not in self.map.trenches:
+                raise ValueError("Bunkers can only be placed on trench tiles.")
+            if tile in self._structure_tile_set():
+                raise ValueError("Tile already occupied.")
+            rem = self.build_bunkers_remaining.get(owner, 0)
+            if rem <= 0:
+                raise ValueError("No build-phase bunkers remaining.")
+            bid = self.next_structure_id
+            self.next_structure_id += 1
+            self.bunkers[bid] = Bunker(bid, owner, tile)
+            self.build_bunkers_remaining[owner] = rem - 1
+            return "Bunker placed."
         if t == "tw_move_unit":
             sid = int(action.get("unit_id", -1))
             s = self.soldiers.get(sid)
@@ -1961,6 +1998,15 @@ class TopowarGameState:
             self.explosions.append(Explosion(float(lx), float(ly), kill_radius=kill_radius))
             return
 
+        direct_bunker = next(
+            (b for b in self.bunkers.values() if b.hp > 0 and b.tile == landing), None
+        )
+        if direct_bunker:
+            # Direct hit destroys bunker and negates all blast/terrain effects.
+            direct_bunker.hp = 0
+            self.explosions.append(Explosion(float(lx), float(ly), kill_radius=0.0, landing_in_trench=True))
+            return
+
         # Blast kill radius
         landing_elev = self.map.elevation_at(landing)
         kill_radius = 3.0
@@ -1997,6 +2043,9 @@ class TopowarGameState:
                     adj_sandbag.hp = 0
                 continue
             if self.map.elevation_at(adj) == ELEV_TRENCH:
+                # Bunker protects its tile from trench collapse.
+                if adj in self._bunker_tile_set():
+                    continue
                 # Trench collapses back to open ground — crush anyone inside.
                 self.map.trenches.discard(adj)
                 for s in self.soldiers.values():
@@ -2369,6 +2418,16 @@ class TopowarGameState:
                 "build_progress": sb.build_progress,
                 "build_required": sb.build_required,
             })
+        bunkers_out = []
+        for b in self.bunkers.values():
+            if b.hp <= 0:
+                continue
+            bunkers_out.append({
+                "structure_id": b.structure_id,
+                "owner": b.owner,
+                "tile": list(b.tile),
+                "hp": b.hp,
+            })
         wire_out = []
         for w in self.barbed_wire.values():
             if w.hp <= 0:
@@ -2406,6 +2465,8 @@ class TopowarGameState:
             "machine_guns": mgs,
             "mortars": mortars_out,
             "sandbags": sandbags_out,
+            "bunkers": bunkers_out,
+            "build_bunkers_remaining": self.build_bunkers_remaining.get(viewer, 0) if viewer is not None else None,
             "barbed_wire": wire_out,
             "grenade_targets": [list(t) for t in sorted(self.grenade_tiles.get(viewer, set()))] if viewer is not None else [],
             "flare_shells": [{"x": fs.x, "y": fs.y, "sx": fs.sx, "sy": fs.sy, "target": list(fs.target), "owner": fs.owner} for fs in self.flare_shells],

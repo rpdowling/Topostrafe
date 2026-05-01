@@ -246,7 +246,7 @@ function getSelectedMortar() {
 // === MODE MANAGEMENT ===
 
 function updateModeButtons() {
-  const modes = ['select','move','dig','plan','build','operate','mortar','grenade','sandbag','wire','flare'];
+  const modes = ['select','move','dig','plan','build','operate','mortar','grenade','sandbag','wire','bunker','flare'];
   for (const m of modes) {
     const btn = el('mode-' + m);
     if (btn) btn.classList.toggle('active', mode === m);
@@ -265,7 +265,7 @@ function setMode(m) {
     if (m !== 'plan') plan = [];
     if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false; }
     if (m !== 'mortar') { pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false; }
-    if (m === 'build' || m === 'mortar' || m === 'sandbag' || m === 'wire' || m === 'move') selectedUnits = new Set();
+    if (m === 'build' || m === 'mortar' || m === 'sandbag' || m === 'wire' || m === 'bunker' || m === 'move') selectedUnits = new Set();
   }
   updateModeButtons();
   updateModeLabel();
@@ -275,7 +275,7 @@ function setMode(m) {
 function updateModeLabel() {
   const labels = {
     select: 'Select', move: 'Move',
-    dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew', mortar: 'Build Mortar', grenade: 'Grenade', sandbag: 'Build Sandbag', wire: 'Wire', flare: 'Flare',
+    dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew', mortar: 'Build Mortar', grenade: 'Grenade', sandbag: 'Build Sandbag', wire: 'Wire', bunker: 'Bunker', flare: 'Flare',
   };
   const e = el('mode-line');
   if (e) e.textContent = labels[mode] || 'Select';
@@ -703,6 +703,22 @@ board.addEventListener('click', (evt) => {
       }
     }
 
+  } else if (mode === 'bunker') {
+    const inBuildPhase = (tw()?.build_phase_remaining || 0) > 0;
+    if (!inBuildPhase) {
+      setStatus('Bunkers can only be placed during the build phase.', true);
+    } else {
+      const bunkerRem = tw()?.build_bunkers_remaining ?? 0;
+      const trenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
+      const bkey = `${tile[0]},${tile[1]}`;
+      if (bunkerRem <= 0) {
+        setStatus('No build-phase bunkers remaining.', true);
+      } else if (!trenchSet.has(bkey)) {
+        setStatus('Bunkers can only be placed on trench tiles.', true);
+      } else {
+        send({ type: 'tw_build_phase_place_bunker', tile });
+      }
+    }
   }
 
   render();
@@ -841,7 +857,8 @@ function drawBuildPhaseOverlay(data) {
   const timerLabel = `BUILD PHASE ${mm}:${ss}`;
   const sbRem = data.build_sandbags_remaining ?? 0;
   const wireRem = data.build_wire_remaining ?? 0;
-  const resourceLabel = `Sandbags: ${sbRem}   Wire: ${wireRem}`;
+  const bunkerRem = data.build_bunkers_remaining ?? 0;
+  const resourceLabel = `Sandbags: ${sbRem}   Wire: ${wireRem}   Bunkers: ${bunkerRem}`;
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
@@ -950,6 +967,28 @@ function draw() {
   }
 
   drawBuildPhaseOverlay(data);
+
+  // Draw bunkers (dark reinforced overlay on trench tiles)
+  const bunkerTileSet = new Set((data.bunkers || []).map(b => `${b.tile[0]},${b.tile[1]}`));
+  for (const b of data.bunkers || []) {
+    const [bx, by] = b.tile;
+    const tlx = OX + bx * CELL;
+    const tly = tileTop(by);
+    // Dark concrete overlay
+    ctx.fillStyle = b.owner === 0 ? 'rgba(120,40,40,0.7)' : 'rgba(40,60,140,0.7)';
+    ctx.fillRect(tlx, tly, CELL - 1, CELL - 1);
+    // Roof hatching lines
+    ctx.strokeStyle = b.owner === 0 ? 'rgba(180,80,80,0.8)' : 'rgba(80,120,220,0.8)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 2; i < CELL - 2; i += 4) {
+      ctx.moveTo(tlx + i, tly + 1);
+      ctx.lineTo(tlx + 1, tly + i);
+      ctx.moveTo(tlx + CELL - 2, tly + i);
+      ctx.lineTo(tlx + i, tly + CELL - 2);
+    }
+    ctx.stroke();
+  }
 
   // Active dig plan overlays from assigned soldier tasks
   for (const s of data.soldiers || []) {
@@ -1317,6 +1356,8 @@ function draw() {
   for (const s of data.soldiers || []) {
     const scx = cpx(s.x);
     const scy = cpy(s.y);
+    const onBunker = bunkerTileSet.has(`${Math.round(s.x)},${Math.round(s.y)}`);
+    if (onBunker) ctx.globalAlpha = 0.4;
 
     // Firing flash halo
     if (s.rifle_cooldown > 2.5) {
@@ -1416,6 +1457,7 @@ function draw() {
       ctx.fillText(s.name, scx, scy + 14);
       ctx.textAlign = 'left';
     }
+    if (onBunker) ctx.globalAlpha = 1.0;
   }
 
   // Mortars – retarget preview: snap to hovered tile, show line + crosshair + scatter ring
@@ -1933,6 +1975,14 @@ function render() {
       if (!selectedUnits.size) setStatus('Wire — click a soldier, then click an adjacent open tile to place wire.');
       else setStatus('Wire — click an adjacent open tile to place wire (2 s build).');
     }
+  } else if (mode === 'bunker') {
+    const inBuildPhase = (tw()?.build_phase_remaining || 0) > 0;
+    if (inBuildPhase) {
+      const bunkerRem = tw()?.build_bunkers_remaining ?? 0;
+      setStatus(`Bunker — click a trench tile to place (${bunkerRem} remaining). Direct mortar hits negated; protects trench from collapse.`);
+    } else {
+      setStatus('Bunker placement is only available during the build phase.', true);
+    }
   } else if (mode === 'flare') {
     const fr = tw()?.flares_remaining;
     const rem = fr ? (fr[String(mySeat())] ?? 0) : 0;
@@ -1987,7 +2037,7 @@ function render() {
 
 [
   ['mode-select','select'], ['mode-move','move'],
-  ['mode-dig','dig'], ['mode-plan','plan'], ['mode-build','build'], ['mode-operate','operate'], ['mode-mortar','mortar'], ['mode-grenade','grenade'], ['mode-sandbag','sandbag'], ['mode-wire','wire'], ['mode-flare','flare'],
+  ['mode-dig','dig'], ['mode-plan','plan'], ['mode-build','build'], ['mode-operate','operate'], ['mode-mortar','mortar'], ['mode-grenade','grenade'], ['mode-sandbag','sandbag'], ['mode-wire','wire'], ['mode-bunker','bunker'], ['mode-flare','flare'],
 ].forEach(([id, m]) => {
   const btn = el(id);
   if (btn) btn.addEventListener('click', (evt) => { evt.stopPropagation(); setMode(m); render(); });
