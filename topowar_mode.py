@@ -2072,7 +2072,7 @@ class TopowarGameState:
             else:
                 if not s_in_trench and not self._has_sandbag_cover_between(landing, s.tile):
                     self._register_kill(s, owner)
-        self.explosions.append(Explosion(float(landing[0]), float(landing[1])))
+        self.explosions.append(Explosion(float(landing[0]), float(landing[1]), kill_radius=kill_radius))
 
     def _update_grenade_shells(self, dt: float):
         remaining: list[GrenadeShell] = []

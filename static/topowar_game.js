@@ -1707,19 +1707,32 @@ function draw() {
 
   // Explosions
   for (const ex of data.explosions || []) {
-    // Blast tile flash: subtle light-red wash on affected tiles while explosion is fresh
-    if ((ex.kill_radius || 0) > 0 && ex.age < ex.duration * 0.45) {
-      const flashAlpha = (1 - ex.age / (ex.duration * 0.45)) * 0.22;
-      ctx.fillStyle = `rgba(255,80,80,${flashAlpha.toFixed(3)})`;
-      const r = ex.kill_radius;
-      for (let dy = -Math.ceil(r); dy <= Math.ceil(r); dy++) {
-        for (let dx = -Math.ceil(r); dx <= Math.ceil(r); dx++) {
-          if (Math.sqrt(dx * dx + dy * dy) > r) continue;
-          const tx = Math.round(ex.x) + dx, ty = Math.round(ex.y) + dy;
-          if (tx < 0 || ty < 0 || tx >= data.map.width || ty >= data.map.height) continue;
-          ctx.fillRect(OX + tx * CELL, tileTop(ty), CELL - 1, CELL - 1);
+    // Blast perimeter outline: red border around the outer edge of the kill zone
+    const kr = ex.kill_radius || 0;
+    if (kr > 0 && ex.age < ex.duration * 0.55) {
+      const fadeT = ex.age / (ex.duration * 0.55);
+      const outlineAlpha = (1 - fadeT) * 0.9;
+      const cx = Math.round(ex.x), cy = Math.round(ex.y);
+      const inZone = (tx, ty) => Math.sqrt((tx - cx) ** 2 + (ty - cy) ** 2) <= kr
+        && tx >= 0 && ty >= 0 && tx < data.map.width && ty < data.map.height;
+      ctx.save();
+      ctx.strokeStyle = `rgba(255,50,50,${outlineAlpha.toFixed(3)})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let dy = -Math.ceil(kr); dy <= Math.ceil(kr); dy++) {
+        for (let dx = -Math.ceil(kr); dx <= Math.ceil(kr); dx++) {
+          const tx = cx + dx, ty = cy + dy;
+          if (!inZone(tx, ty)) continue;
+          const px = OX + tx * CELL, py = tileTop(ty);
+          // Draw only the edges that border a non-zone tile
+          if (!inZone(tx, ty - 1)) { ctx.moveTo(px, py); ctx.lineTo(px + CELL - 1, py); }
+          if (!inZone(tx, ty + 1)) { ctx.moveTo(px, py + CELL - 1); ctx.lineTo(px + CELL - 1, py + CELL - 1); }
+          if (!inZone(tx - 1, ty)) { ctx.moveTo(px, py); ctx.lineTo(px, py + CELL - 1); }
+          if (!inZone(tx + 1, ty)) { ctx.moveTo(px + CELL - 1, py); ctx.lineTo(px + CELL - 1, py + CELL - 1); }
         }
       }
+      ctx.stroke();
+      ctx.restore();
     }
     const t = ex.age / ex.duration;
     const alpha = 1 - t;
