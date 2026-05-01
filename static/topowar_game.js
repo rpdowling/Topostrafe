@@ -968,26 +968,38 @@ function draw() {
 
   drawBuildPhaseOverlay(data);
 
-  // Draw bunkers (dark reinforced overlay on trench tiles)
+  // Draw bunkers (dark reinforced overlay on trench tiles, degradation by hp)
   const bunkerTileSet = new Set((data.bunkers || []).map(b => `${b.tile[0]},${b.tile[1]}`));
   for (const b of data.bunkers || []) {
     const [bx, by] = b.tile;
     const tlx = OX + bx * CELL;
     const tly = tileTop(by);
-    // Dark concrete overlay
-    ctx.fillStyle = b.owner === 0 ? 'rgba(120,40,40,0.7)' : 'rgba(40,60,140,0.7)';
+    const hp = b.hp ?? 3;
+    // Opacity fades with damage: full=0.75, 2hp=0.55, 1hp=0.38
+    const alpha = hp === 3 ? 0.75 : hp === 2 ? 0.55 : 0.38;
+    ctx.fillStyle = b.owner === 0 ? `rgba(120,40,40,${alpha})` : `rgba(40,60,140,${alpha})`;
     ctx.fillRect(tlx, tly, CELL - 1, CELL - 1);
-    // Roof hatching lines
-    ctx.strokeStyle = b.owner === 0 ? 'rgba(180,80,80,0.8)' : 'rgba(80,120,220,0.8)';
+    // Roof hatching lines (sparser when damaged)
+    const step = hp === 3 ? 4 : hp === 2 ? 5 : 7;
+    ctx.strokeStyle = b.owner === 0 ? `rgba(180,80,80,${alpha + 0.05})` : `rgba(80,120,220,${alpha + 0.05})`;
     ctx.lineWidth = 1;
     ctx.beginPath();
-    for (let i = 2; i < CELL - 2; i += 4) {
+    for (let i = 2; i < CELL - 2; i += step) {
       ctx.moveTo(tlx + i, tly + 1);
       ctx.lineTo(tlx + 1, tly + i);
       ctx.moveTo(tlx + CELL - 2, tly + i);
       ctx.lineTo(tlx + i, tly + CELL - 2);
     }
     ctx.stroke();
+    // Cracks on damaged bunkers
+    if (hp < 3) {
+      ctx.strokeStyle = `rgba(0,0,0,0.5)`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(tlx + 2, tly + 2); ctx.lineTo(tlx + CELL / 2, tly + CELL / 2);
+      if (hp === 1) { ctx.moveTo(tlx + CELL - 3, tly + 2); ctx.lineTo(tlx + CELL / 2, tly + CELL / 2); }
+      ctx.stroke();
+    }
   }
 
   // Active dig plan overlays from assigned soldier tasks
@@ -1357,7 +1369,7 @@ function draw() {
     const scx = cpx(s.x);
     const scy = cpy(s.y);
     const onBunker = bunkerTileSet.has(`${Math.round(s.x)},${Math.round(s.y)}`);
-    if (onBunker) ctx.globalAlpha = 0.4;
+    if (onBunker) ctx.globalAlpha = 0.5;
 
     // Firing flash halo
     if (s.rifle_cooldown > 2.5) {

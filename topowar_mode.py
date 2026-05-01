@@ -183,7 +183,7 @@ class Bunker:
     structure_id: int
     owner: int
     tile: tuple[int, int]
-    hp: int = 1
+    hp: int = 3
 
 
 @dataclass
@@ -1033,12 +1033,13 @@ class TopowarGameState:
             if not plan:
                 raise ValueError("No dig plan.")
             sandbag_tile_map = {sb.tile: sb for sb in self.sandbags.values() if sb.hp > 0}
+            bunker_tile_map = {b.tile: b for b in self.bunkers.values() if b.hp > 0}
             for p in plan:
                 if not self.map.in_bounds(p):
                     raise ValueError("Dig target out of bounds.")
-                if self.map.elevation_at(p) == ELEV_TRENCH:
+                if self.map.elevation_at(p) == ELEV_TRENCH and p not in bunker_tile_map:
                     raise ValueError("Tile is already fully dug.")
-                # Sandbag tiles are allowed – digging removes the sandbag
+                # Sandbag and bunker tiles are allowed – digging removes them
             # Ground tiles must start adjacent to an existing trench (mountains/hills are free)
             first = plan[0]
             first_is_sandbag = first in sandbag_tile_map
@@ -1605,6 +1606,11 @@ class TopowarGameState:
             s.path = []
             s.move_cooldown = 0.0
             return
+        # Bunker tiles can only be entered from a trench or another bunker tile.
+        if target in self._bunker_tile_set() and s.tile not in self.map.trenches and s.tile not in self._bunker_tile_set():
+            s.path = []
+            s.move_cooldown = 0.0
+            return
         occ = self._occupied_tiles()
         structure_tiles = self._structure_tile_set() | self._wire_tile_set()
         if target in structure_tiles or (target in occ and occ[target] != s.unit_id):
@@ -1700,9 +1706,34 @@ class TopowarGameState:
                     s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
             elif task["type"] == "dig":
                 tgt = tuple(task["target"])
+                tgt_bunker = next((b for b in self.bunkers.values() if b.hp > 0 and b.tile == tgt), None)
                 tgt_sandbag = next((sb for sb in self.sandbags.values() if sb.hp > 0 and sb.tile == tgt), None)
                 adj4_tgt = [(tgt[0]+dx, tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
                 tgt_elev = self.map.elevation_at(tgt)
+                if tgt_bunker:
+                    # Bunker removal: soldier must be adjacent, takes 60 seconds
+                    in_position = s.tile in set(adj4_tgt)
+                    if not in_position:
+                        if not s.path:
+                            goals = [t for t in adj4_tgt if self.map.in_bounds(t)]
+                            if goals:
+                                goal = min(goals, key=lambda g: math.dist(s.tile, g))
+                                s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
+                            else:
+                                s.current_task = None
+                        continue
+                    task["progress"] = task.get("progress", 0.0) + dt
+                    if task["progress"] >= 60.0:
+                        del self.bunkers[tgt_bunker.structure_id]
+                        plan = task["plan"]
+                        if plan:
+                            plan.pop(0)
+                        s.current_task = None if not plan else s.current_task
+                        if plan:
+                            task["target"] = list(plan[0])
+                            task["progress"] = 0.0
+                            s.path = []
+                    continue
                 if tgt_sandbag or tgt_elev in (ELEV_MOUNTAIN, ELEV_HILL):
                     # Sandbag removal or mountain/hill: soldier just needs to be adjacent (any tile)
                     in_position = s.tile in set(adj4_tgt)
@@ -2002,8 +2033,15 @@ class TopowarGameState:
             (b for b in self.bunkers.values() if b.hp > 0 and b.tile == landing), None
         )
         if direct_bunker:
-            # Direct hit destroys bunker and negates all blast/terrain effects.
-            direct_bunker.hp = 0
+            # Direct hit damages bunker. All blast and terrain effects fully negated.
+            direct_bunker.hp -= 1
+            if direct_bunker.hp <= 0:
+                direct_bunker.hp = 0
+                # Bunker collapses: trench becomes open ground, kills anyone inside.
+                self.map.trenches.discard(landing)
+                for s in self.soldiers.values():
+                    if s.hp > 0 and s.tile == landing:
+                        self._register_kill(s, owner)
             self.explosions.append(Explosion(float(lx), float(ly), kill_radius=0.0, landing_in_trench=True))
             return
 
