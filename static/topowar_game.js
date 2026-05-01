@@ -1724,7 +1724,7 @@ function draw() {
     // Blast light flash: warm yellow-orange on tiles actually in the kill zone, fades over 1s
     const kr = ex.kill_radius || 0;
     if (kr > 0 && ex.age < 1.0) {
-      const fadeAlpha = (1 - ex.age) * 0.55;
+      const fadeAlpha = (1 - ex.age) * 0.42;
       const cx = Math.round(ex.x), cy = Math.round(ex.y);
       const landingInTrench = trenchSet.has(`${cx},${cy}`);
       ctx.fillStyle = `rgba(255,210,70,${fadeAlpha.toFixed(3)})`;
@@ -1736,7 +1736,8 @@ function draw() {
           const tileInTrench = trenchSet.has(`${tx},${ty}`);
           if (landingInTrench) {
             // Trench blast: only highlight trench tiles with LOS through the trench network
-            if (tileInTrench && !hasTrenchLos(trenchSet, cx, cy, tx, ty)) continue;
+            if (!tileInTrench) continue;
+            if (!hasTrenchLos(trenchSet, cx, cy, tx, ty)) continue;
           } else {
             // Open blast: trench tiles are at lower elevation — protected, skip them
             if (tileInTrench) continue;
