@@ -776,7 +776,7 @@ function spawnSmoke(gx, gy) {
     smokeParticles.push({
       x: gx + (Math.random() - 0.5) * 0.6,
       y: gy + (Math.random() - 0.5) * 0.6,
-      vx: Math.cos(angle) * spd * 0.4,
+      vx: Math.cos(angle) * spd * 0.4 + 0.18,  // eastward bias
       vy: Math.sin(angle) * spd - 0.28,
       alpha: 0.55 + Math.random() * 0.3,
       age: 0,
@@ -1707,32 +1707,24 @@ function draw() {
 
   // Explosions
   for (const ex of data.explosions || []) {
-    // Blast perimeter outline: red border around the outer edge of the kill zone
+    // Blast tile highlight: dark red wash on kill zone tiles, fading over 1 second
     const kr = ex.kill_radius || 0;
-    if (kr > 0 && ex.age < ex.duration * 0.55) {
-      const fadeT = ex.age / (ex.duration * 0.55);
-      const outlineAlpha = (1 - fadeT) * 0.9;
-      const cx = Math.round(ex.x), cy = Math.round(ex.y);
-      const inZone = (tx, ty) => Math.sqrt((tx - cx) ** 2 + (ty - cy) ** 2) <= kr
-        && tx >= 0 && ty >= 0 && tx < data.map.width && ty < data.map.height;
-      ctx.save();
-      ctx.strokeStyle = `rgba(255,50,50,${outlineAlpha.toFixed(3)})`;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      for (let dy = -Math.ceil(kr); dy <= Math.ceil(kr); dy++) {
-        for (let dx = -Math.ceil(kr); dx <= Math.ceil(kr); dx++) {
-          const tx = cx + dx, ty = cy + dy;
-          if (!inZone(tx, ty)) continue;
-          const px = OX + tx * CELL, py = tileTop(ty);
-          // Draw only the edges that border a non-zone tile
-          if (!inZone(tx, ty - 1)) { ctx.moveTo(px, py); ctx.lineTo(px + CELL - 1, py); }
-          if (!inZone(tx, ty + 1)) { ctx.moveTo(px, py + CELL - 1); ctx.lineTo(px + CELL - 1, py + CELL - 1); }
-          if (!inZone(tx - 1, ty)) { ctx.moveTo(px, py); ctx.lineTo(px, py + CELL - 1); }
-          if (!inZone(tx + 1, ty)) { ctx.moveTo(px + CELL - 1, py); ctx.lineTo(px + CELL - 1, py + CELL - 1); }
+    if (kr > 0) {
+      const elapsed = ex.age;
+      const fadeDuration = 1.0;
+      if (elapsed < fadeDuration) {
+        const fadeAlpha = (1 - elapsed / fadeDuration) * 0.45;
+        const cx = Math.round(ex.x), cy = Math.round(ex.y);
+        ctx.fillStyle = `rgba(180,20,20,${fadeAlpha.toFixed(3)})`;
+        for (let dy = -Math.ceil(kr); dy <= Math.ceil(kr); dy++) {
+          for (let dx = -Math.ceil(kr); dx <= Math.ceil(kr); dx++) {
+            if (Math.sqrt(dx * dx + dy * dy) > kr) continue;
+            const tx = cx + dx, ty = cy + dy;
+            if (tx < 0 || ty < 0 || tx >= data.map.width || ty >= data.map.height) continue;
+            ctx.fillRect(OX + tx * CELL, tileTop(ty), CELL - 1, CELL - 1);
+          }
         }
       }
-      ctx.stroke();
-      ctx.restore();
     }
     const t = ex.age / ex.duration;
     const alpha = 1 - t;
@@ -2014,6 +2006,7 @@ function updateSmoke() {
   const dt = Math.min(0.1, (now - lastSmokeTick) / 1000);
   lastSmokeTick = now;
   for (const p of smokeParticles) {
+    p.vx += 0.9 * dt;   // eastward wind
     p.x += p.vx * dt;
     p.y += p.vy * dt;
     p.vx *= 1 - 3 * dt;
