@@ -218,6 +218,7 @@ class Explosion:
     y: float
     age: float = 0.0
     duration: float = 0.8
+    kill_radius: float = 0.0
 
 
 @dataclass
@@ -1184,6 +1185,11 @@ class TopowarGameState:
             if len(chosen_ids) != 2:
                 del self.mortars[mid]
                 raise ValueError("Select exactly 2 soldiers to build the mortar.")
+            mortar_elev = self.map.elevation_at(tile)
+            for sid in chosen_ids:
+                if self.map.elevation_at(self.soldiers[sid].tile) != mortar_elev:
+                    del self.mortars[mid]
+                    raise ValueError("Both soldiers must be on the same elevation as the mortar.")
             occ = (set(self._occupied_tiles().keys()) - {self.soldiers[sid].tile for sid in chosen_ids}) | self._mg_tile_set() | self._mortar_tile_set()
             best_assignment = None
             for spots in itertools.permutations(crew_spots, 2):
@@ -1262,7 +1268,13 @@ class TopowarGameState:
                 raise ValueError("Mortar not operable.")
             if not mortar.operable:
                 raise ValueError("Mortar is inoperable: rebuild matching adjacent ground first.")
-            mortar.operators = {int(x) for x in action.get("unit_ids", [])}
+            mortar_elev = self.map.elevation_at(mortar.tile)
+            new_operators = {int(x) for x in action.get("unit_ids", [])}
+            for uid in new_operators:
+                s = self.soldiers.get(uid)
+                if s and s.owner == owner and s.hp > 0 and self.map.elevation_at(s.tile) != mortar_elev:
+                    raise ValueError("All crew must be on the same elevation as the mortar.")
+            mortar.operators = new_operators
             occ = set(self._occupied_tiles().keys()) | self._mg_tile_set() | self._mortar_tile_set()
             crew_spots = self._crew_positions_for_mortar(mortar)
             for uid in mortar.operators:
@@ -1929,11 +1941,12 @@ class TopowarGameState:
         )
         if direct_sandbag:
             # Sandbag absorbs hit: damage it, suppress terrain deformation, but blast still kills.
+            # Reduced kill radius (2 instead of 3) because sandbag absorbed some of the blast.
             direct_sandbag.hp -= 1
             if direct_sandbag.hp <= 0:
                 direct_sandbag.hp = 0
             landing_elev = self.map.elevation_at(landing)
-            kill_radius = 3.0
+            kill_radius = 2.0
             for s in self.soldiers.values():
                 if s.hp <= 0:
                     continue
@@ -1944,7 +1957,7 @@ class TopowarGameState:
                 if self._has_sandbag_cover_between(landing, s.tile):
                     continue
                 self._register_kill(s, owner)
-            self.explosions.append(Explosion(float(lx), float(ly)))
+            self.explosions.append(Explosion(float(lx), float(ly), kill_radius=kill_radius))
             return
 
         # Blast kill radius
@@ -1992,7 +2005,7 @@ class TopowarGameState:
                 self._degrade_tile(adj)
 
         self._enforce_structure_ground_integrity()
-        self.explosions.append(Explosion(float(lx), float(ly)))
+        self.explosions.append(Explosion(float(lx), float(ly), kill_radius=kill_radius))
 
     def _update_mortars(self, dt: float):
         for mortar in self.mortars.values():
@@ -2401,7 +2414,7 @@ class TopowarGameState:
             "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "intended_target": list(ms.intended_target), "owner": ms.owner} for ms in self.mortar_shells],
             "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
             "projectiles": [{"x": p.x, "y": p.y, "dx": p.dx, "dy": p.dy, "owner": p.owner, "source": p.source} for p in self.projectiles],
-            "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration} for e in self.explosions],
+            "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration, "kill_radius": e.kill_radius} for e in self.explosions],
             "death_marks": [{"x": dm.x, "y": dm.y, "age": dm.age, "duration": dm.duration} for dm in self.death_marks],
             "time_elapsed": self.time_elapsed,
             "time_remaining": max(0.0, self.rules.match_time_seconds - self.time_elapsed),

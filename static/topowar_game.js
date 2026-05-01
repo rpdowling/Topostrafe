@@ -1707,6 +1707,20 @@ function draw() {
 
   // Explosions
   for (const ex of data.explosions || []) {
+    // Blast tile flash: subtle light-red wash on affected tiles while explosion is fresh
+    if ((ex.kill_radius || 0) > 0 && ex.age < ex.duration * 0.45) {
+      const flashAlpha = (1 - ex.age / (ex.duration * 0.45)) * 0.22;
+      ctx.fillStyle = `rgba(255,80,80,${flashAlpha.toFixed(3)})`;
+      const r = ex.kill_radius;
+      for (let dy = -Math.ceil(r); dy <= Math.ceil(r); dy++) {
+        for (let dx = -Math.ceil(r); dx <= Math.ceil(r); dx++) {
+          if (Math.sqrt(dx * dx + dy * dy) > r) continue;
+          const tx = Math.round(ex.x) + dx, ty = Math.round(ex.y) + dy;
+          if (tx < 0 || ty < 0 || tx >= data.map.width || ty >= data.map.height) continue;
+          ctx.fillRect(OX + tx * CELL, tileTop(ty), CELL - 1, CELL - 1);
+        }
+      }
+    }
     const t = ex.age / ex.duration;
     const alpha = 1 - t;
     const radius = (0.5 + t * 3) * CELL;
