@@ -968,38 +968,51 @@ function draw() {
 
   drawBuildPhaseOverlay(data);
 
-  // Draw bunkers (dark reinforced overlay on trench tiles, degradation by hp)
+  // Draw bunkers: dark grey brick texture with ownership dot and crack degradation
   const bunkerTileSet = new Set((data.bunkers || []).map(b => `${b.tile[0]},${b.tile[1]}`));
   for (const b of data.bunkers || []) {
     const [bx, by] = b.tile;
     const tlx = OX + bx * CELL;
     const tly = tileTop(by);
     const hp = b.hp ?? 3;
-    // Opacity fades with damage: full=0.75, 2hp=0.55, 1hp=0.38
-    const alpha = hp === 3 ? 0.75 : hp === 2 ? 0.55 : 0.38;
-    ctx.fillStyle = b.owner === 0 ? `rgba(120,40,40,${alpha})` : `rgba(40,60,140,${alpha})`;
-    ctx.fillRect(tlx, tly, CELL - 1, CELL - 1);
-    // Roof hatching lines (sparser when damaged)
-    const step = hp === 3 ? 4 : hp === 2 ? 5 : 7;
-    ctx.strokeStyle = b.owner === 0 ? `rgba(180,80,80,${alpha + 0.05})` : `rgba(80,120,220,${alpha + 0.05})`;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let i = 2; i < CELL - 2; i += step) {
-      ctx.moveTo(tlx + i, tly + 1);
-      ctx.lineTo(tlx + 1, tly + i);
-      ctx.moveTo(tlx + CELL - 2, tly + i);
-      ctx.lineTo(tlx + i, tly + CELL - 2);
+    const sz = CELL - 1; // 23px drawable area
+
+    // Dark mortar-joint background
+    ctx.fillStyle = '#484850';
+    ctx.fillRect(tlx, tly, sz, sz);
+
+    // Staggered brick rows (10×5 bricks, 1px mortar joints)
+    const bW = 10, bH = 5, mW = 1, mH = 1, rowH = bH + mH;
+    ctx.fillStyle = hp === 3 ? '#8a8a92' : hp === 2 ? '#7a7a82' : '#6a6a72';
+    for (let row = 0; row * rowH < sz; row++) {
+      const ry = tly + row * rowH;
+      const drawH = Math.min(bH, tly + sz - ry);
+      if (drawH <= 0) break;
+      const offset = (row & 1) ? Math.floor((bW + mW) / 2) : 0;
+      for (let x = -offset; x < sz; x += bW + mW) {
+        const clipX = Math.max(tlx + x, tlx);
+        const clipW = Math.min(tlx + x + bW, tlx + sz) - clipX;
+        if (clipW <= 0) continue;
+        ctx.fillRect(clipX, ry, clipW, drawH);
+      }
     }
-    ctx.stroke();
-    // Cracks on damaged bunkers
+
+    // Cracks for damaged bunkers
     if (hp < 3) {
-      ctx.strokeStyle = `rgba(0,0,0,0.5)`;
+      ctx.strokeStyle = 'rgba(15,15,15,0.8)';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(tlx + 2, tly + 2); ctx.lineTo(tlx + CELL / 2, tly + CELL / 2);
-      if (hp === 1) { ctx.moveTo(tlx + CELL - 3, tly + 2); ctx.lineTo(tlx + CELL / 2, tly + CELL / 2); }
+      ctx.moveTo(tlx + 3, tly + 2); ctx.lineTo(tlx + sz / 2, tly + sz / 2);
+      if (hp === 1) {
+        ctx.moveTo(tlx + sz - 3, tly + 3); ctx.lineTo(tlx + sz / 2, tly + sz / 2);
+        ctx.moveTo(tlx + sz / 2, tly + sz / 2); ctx.lineTo(tlx + sz / 2 - 2, tly + sz - 3);
+      }
       ctx.stroke();
     }
+
+    // Small corner dot indicating side ownership
+    ctx.fillStyle = b.owner === 0 ? 'rgba(220,60,60,0.9)' : 'rgba(60,110,220,0.9)';
+    ctx.fillRect(tlx + 1, tly + 1, 3, 3);
   }
 
   // Active dig plan overlays from assigned soldier tasks

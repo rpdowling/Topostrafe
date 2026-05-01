@@ -1612,7 +1612,8 @@ class TopowarGameState:
             s.move_cooldown = 0.0
             return
         occ = self._occupied_tiles()
-        structure_tiles = self._structure_tile_set() | self._wire_tile_set()
+        # Bunker tiles are traversable (entry restricted by the check above); exclude them here.
+        structure_tiles = (self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()) | self._wire_tile_set()
         if target in structure_tiles or (target in occ and occ[target] != s.unit_id):
             s.blocked = True
             s.blocked_for += dt
