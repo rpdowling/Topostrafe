@@ -219,6 +219,7 @@ class Explosion:
     age: float = 0.0
     duration: float = 0.8
     kill_radius: float = 0.0
+    landing_in_trench: bool = False
 
 
 @dataclass
@@ -2005,7 +2006,7 @@ class TopowarGameState:
                 self._degrade_tile(adj)
 
         self._enforce_structure_ground_integrity()
-        self.explosions.append(Explosion(float(lx), float(ly), kill_radius=kill_radius))
+        self.explosions.append(Explosion(float(lx), float(ly), kill_radius=kill_radius, landing_in_trench=(landing_elev == ELEV_TRENCH)))
 
     def _update_mortars(self, dt: float):
         for mortar in self.mortars.values():
@@ -2414,7 +2415,7 @@ class TopowarGameState:
             "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "intended_target": list(ms.intended_target), "owner": ms.owner} for ms in self.mortar_shells],
             "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
             "projectiles": [{"x": p.x, "y": p.y, "dx": p.dx, "dy": p.dy, "owner": p.owner, "source": p.source} for p in self.projectiles],
-            "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration, "kill_radius": e.kill_radius} for e in self.explosions],
+            "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration, "kill_radius": e.kill_radius, "landing_in_trench": e.landing_in_trench} for e in self.explosions],
             "death_marks": [{"x": dm.x, "y": dm.y, "age": dm.age, "duration": dm.duration} for dm in self.death_marks],
             "time_elapsed": self.time_elapsed,
             "time_remaining": max(0.0, self.rules.match_time_seconds - self.time_elapsed),
