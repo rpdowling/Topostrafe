@@ -749,6 +749,19 @@ function cpy(gy) { return OY + flipY(gy) * CELL + CELL / 2; }
 // Top-left pixel y of a tile (integer or float game-y).
 function tileTop(gy) { return OY + Math.floor(flipY(gy)) * CELL; }
 
+function hasTrenchLos(trenchSet, x0, y0, x1, y1) {
+  const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
+  const sx = x1 >= x0 ? 1 : -1, sy = y1 >= y0 ? 1 : -1;
+  let err = dx - dy, cx = x0, cy = y0;
+  while (true) {
+    if (cx === x1 && cy === y1) return true;
+    if ((cx !== x0 || cy !== y0) && !trenchSet.has(`${cx},${cy}`)) return false;
+    const e2 = 2 * err;
+    if (e2 > -dy) { err -= dy; cx += sx; }
+    if (e2 < dx) { err += dx; cy += sy; }
+  }
+}
+
 function drawRangeCircle(cx, cy, radius, color) {
   ctx.save();
   ctx.strokeStyle = color;
@@ -1706,23 +1719,29 @@ function draw() {
   }
 
   // Explosions
+  const trenchSet = new Set((data.map.trenches || []).map(t => `${t[0]},${t[1]}`));
   for (const ex of data.explosions || []) {
-    // Blast tile highlight: dark red wash on kill zone tiles, fading over 1 second
+    // Blast light flash: warm yellow-orange on tiles actually in the kill zone, fades over 1s
     const kr = ex.kill_radius || 0;
-    if (kr > 0) {
-      const elapsed = ex.age;
-      const fadeDuration = 1.0;
-      if (elapsed < fadeDuration) {
-        const fadeAlpha = (1 - elapsed / fadeDuration) * 0.45;
-        const cx = Math.round(ex.x), cy = Math.round(ex.y);
-        ctx.fillStyle = `rgba(180,20,20,${fadeAlpha.toFixed(3)})`;
-        for (let dy = -Math.ceil(kr); dy <= Math.ceil(kr); dy++) {
-          for (let dx = -Math.ceil(kr); dx <= Math.ceil(kr); dx++) {
-            if (Math.sqrt(dx * dx + dy * dy) > kr) continue;
-            const tx = cx + dx, ty = cy + dy;
-            if (tx < 0 || ty < 0 || tx >= data.map.width || ty >= data.map.height) continue;
-            ctx.fillRect(OX + tx * CELL, tileTop(ty), CELL - 1, CELL - 1);
+    if (kr > 0 && ex.age < 1.0) {
+      const fadeAlpha = (1 - ex.age) * 0.55;
+      const cx = Math.round(ex.x), cy = Math.round(ex.y);
+      const landingInTrench = trenchSet.has(`${cx},${cy}`);
+      ctx.fillStyle = `rgba(255,210,70,${fadeAlpha.toFixed(3)})`;
+      for (let dy = -Math.ceil(kr); dy <= Math.ceil(kr); dy++) {
+        for (let dx = -Math.ceil(kr); dx <= Math.ceil(kr); dx++) {
+          if (Math.sqrt(dx * dx + dy * dy) > kr) continue;
+          const tx = cx + dx, ty = cy + dy;
+          if (tx < 0 || ty < 0 || tx >= data.map.width || ty >= data.map.height) continue;
+          const tileInTrench = trenchSet.has(`${tx},${ty}`);
+          if (landingInTrench) {
+            // Trench blast: only highlight trench tiles with LOS through the trench network
+            if (tileInTrench && !hasTrenchLos(trenchSet, cx, cy, tx, ty)) continue;
+          } else {
+            // Open blast: trench tiles are at lower elevation — protected, skip them
+            if (tileInTrench) continue;
           }
+          ctx.fillRect(OX + tx * CELL, tileTop(ty), CELL - 1, CELL - 1);
         }
       }
     }
