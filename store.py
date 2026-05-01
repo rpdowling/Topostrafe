@@ -836,6 +836,7 @@ class GameStore:
                 "tw_fire_flare",
                 "tw_build_phase_place_sandbag",
                 "tw_build_phase_place_wire",
+                "tw_build_phase_place_bunker",
             }:
                 out = {"type": t}
                 for key in (
