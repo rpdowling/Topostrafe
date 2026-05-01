@@ -1726,7 +1726,7 @@ function draw() {
     if (kr > 0 && ex.age < 1.0) {
       const fadeAlpha = (1 - ex.age) * 0.42;
       const cx = Math.round(ex.x), cy = Math.round(ex.y);
-      const landingInTrench = trenchSet.has(`${cx},${cy}`);
+      const landingInTrench = ex.landing_in_trench ?? trenchSet.has(`${cx},${cy}`);
       ctx.fillStyle = `rgba(255,210,70,${fadeAlpha.toFixed(3)})`;
       for (let dy = -Math.ceil(kr); dy <= Math.ceil(kr); dy++) {
         for (let dx = -Math.ceil(kr); dx <= Math.ceil(kr); dx++) {
