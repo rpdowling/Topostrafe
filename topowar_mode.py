@@ -1075,14 +1075,9 @@ class TopowarGameState:
                 if self.map.elevation_at(p) == ELEV_TRENCH and p not in bunker_tile_map:
                     raise ValueError("Tile is already fully dug.")
                 # Sandbag and bunker tiles are allowed – digging removes them
-            # Ground tiles must start adjacent to an existing trench (mountains/hills are free)
             first = plan[0]
             first_is_sandbag = first in sandbag_tile_map
             first_elev = self.map.elevation_at(first)
-            if not first_is_sandbag and first_elev == ELEV_GROUND:
-                adj4 = [(first[0]+dx, first[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
-                if not any(self.map.elevation_at(a) == ELEV_TRENCH for a in adj4):
-                    raise ValueError("Dig must start adjacent to an existing trench.")
             # Cancel any other soldier already assigned to the same first tile
             for other in self.soldiers.values():
                 if other.unit_id != sid and other.current_task and other.current_task.get("type") == "dig":
@@ -1092,18 +1087,11 @@ class TopowarGameState:
             s.current_task = {"type": "dig", "plan": plan, "target": list(plan[0]), "progress": 0.0}
             adj4_first = [(first[0]+dx, first[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
             occ_blocked = set(self._occupied_tiles().keys()) - {s.tile}
-            if first_is_sandbag or first_elev in (ELEV_MOUNTAIN, ELEV_HILL):
-                # Mountain/hill/sandbag: approach from any adjacent tile
-                dig_from = [t for t in adj4_first if self.map.in_bounds(t)]
-                if dig_from:
-                    goal = min(dig_from, key=lambda t: math.dist(s.tile, t))
-                    s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=occ_blocked)
-            else:
-                # Ground: must approach from an adjacent trench tile
-                dig_from = [t for t in adj4_first if self.map.elevation_at(t) == ELEV_TRENCH and self.map.in_bounds(t)]
-                if dig_from:
-                    goal = min(dig_from, key=lambda t: math.dist(s.tile, t))
-                    s.path = self.path.find_path(s.tile, goal, trench_only=True, blocked=occ_blocked)
+            # All dig types: approach from any adjacent tile
+            dig_from = [t for t in adj4_first if self.map.in_bounds(t)]
+            if dig_from:
+                goal = min(dig_from, key=lambda t: math.dist(s.tile, t))
+                s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=occ_blocked)
             return "Dig task assigned."
         if t == "tw_assign_build_mg":
             tile = tuple(map(int, action.get("tile", [])))
@@ -1775,30 +1763,17 @@ class TopowarGameState:
                             task["progress"] = 0.0
                             s.path = []
                     continue
-                if tgt_sandbag or tgt_elev in (ELEV_MOUNTAIN, ELEV_HILL):
-                    # Sandbag removal or mountain/hill: soldier just needs to be adjacent (any tile)
-                    in_position = s.tile in set(adj4_tgt)
-                    if not in_position:
-                        if not s.path:
-                            goals = [t for t in adj4_tgt if self.map.in_bounds(t)]
-                            if goals:
-                                goal = min(goals, key=lambda g: math.dist(s.tile, g))
-                                s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
-                            else:
-                                s.current_task = None
-                        continue
-                else:
-                    # Ground→trench dig: soldier must be in an adjacent trench tile
-                    in_adj_trench = self.map.elevation_at(s.tile) == ELEV_TRENCH and s.tile in set(adj4_tgt)
-                    if not in_adj_trench:
-                        if not s.path:
-                            goals = [t for t in adj4_tgt if self.map.elevation_at(t) == ELEV_TRENCH and self.map.in_bounds(t)]
-                            if goals:
-                                goal = min(goals, key=lambda g: math.dist(s.tile, g))
-                                s.path = self.path.find_path(s.tile, goal, trench_only=True, blocked=blocked_keys - {s.tile})
-                            else:
-                                s.current_task = None
-                        continue
+                # All dig types: soldier just needs to be adjacent to the target tile
+                in_position = s.tile in set(adj4_tgt)
+                if not in_position:
+                    if not s.path:
+                        goals = [t for t in adj4_tgt if self.map.in_bounds(t)]
+                        if goals:
+                            goal = min(goals, key=lambda g: math.dist(s.tile, g))
+                            s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
+                        else:
+                            s.current_task = None
+                    continue
                 task["progress"] = task.get("progress", 0.0) + dt
                 if task["progress"] >= self.rules.dig_seconds_per_tile:
                     if tgt_sandbag:
@@ -1825,10 +1800,6 @@ class TopowarGameState:
                             next_elev = self.map.elevation_at(next_tgt)
                             if next_elev == ELEV_TRENCH:
                                 s.current_task = None  # already fully dug
-                            elif next_elev == ELEV_GROUND:
-                                adj4_next = [(next_tgt[0]+dx, next_tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
-                                if not any(self.map.elevation_at(a) == ELEV_TRENCH for a in adj4_next):
-                                    s.current_task = None
             elif task["type"] == "build_mg":
                 mg = self.mgs.get(task["mg_id"])
                 if not mg or mg.hp <= 0 or mg.built:
