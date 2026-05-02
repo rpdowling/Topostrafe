@@ -2530,7 +2530,7 @@ class TopowarGameState:
                     (in_build_phase and not self._on_owner_side(viewer, s.tile))
                     or not self._soldier_visible_to(s, viewer)
                 )
-                if hidden and s.tile not in illuminated:
+                if hidden and (s.tile not in illuminated or s.tile in self._bunker_tile_set()):
                     continue
             task = None
             if s.current_task:
