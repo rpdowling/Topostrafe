@@ -146,6 +146,7 @@ class Projectile:
     remaining: float
     source: str
     origin_elevation: int = 0
+    will_hit: bool = True
 
 
 @dataclass
@@ -240,6 +241,17 @@ class DeathMark:
     y: float
     age: float = 0.0
     duration: float = 3.0
+
+
+@dataclass
+class MuzzleFlash:
+    x: float
+    y: float
+    dx: float
+    dy: float
+    owner: int
+    age: float = 0.0
+    duration: float = 0.18
 
 
 class PathfindingService:
@@ -393,6 +405,7 @@ class TopowarGameState:
         self.projectiles: list[Projectile] = []
         self.explosions: list[Explosion] = []
         self.death_marks: list[DeathMark] = []
+        self.muzzle_flashes: list[MuzzleFlash] = []
         self.last_tick_monotonic = 0.0
         self.grenade_tiles: dict[int, set[tuple[int, int]]] = {0: set(), 1: set()}
         self._name_pool: list[str] = []
@@ -712,6 +725,8 @@ class TopowarGameState:
             self.bunkers = {}
         if not hasattr(self, "build_bunkers_remaining"):
             self.build_bunkers_remaining = {0: 0, 1: 0}
+        if not hasattr(self, "muzzle_flashes"):
+            self.muzzle_flashes = []
 
     def _crew_positions_for_mg(self, mg: "MachineGun") -> list[tuple[int, int]]:
         """Tiles where crew can stand to operate this MG.
@@ -1711,8 +1726,9 @@ class TopowarGameState:
             chance = 0.25 if (is_moving and target_in_trench) else 0.5
 
             s.rifle_cooldown = 3.0
-            if self.random.random() <= chance:
-                self.projectiles.append(Projectile(s.owner, s.x, s.y, target_tile[0] - s.x, target_tile[1] - s.y, effective_range, "rifle", s_elev))
+            will_hit = self.random.random() <= chance
+            self.projectiles.append(Projectile(s.owner, s.x, s.y, target_tile[0] - s.x, target_tile[1] - s.y, effective_range, "rifle", s_elev, will_hit=will_hit))
+            self.muzzle_flashes.append(MuzzleFlash(s.x, s.y, target_tile[0] - s.x, target_tile[1] - s.y, s.owner))
 
     def _update_tasks(self, dt: float):
         occ = self._occupied_tiles()
@@ -1959,6 +1975,7 @@ class TopowarGameState:
                 spreadx = self.random.uniform(-0.3, 0.3)
                 spready = self.random.uniform(-0.3, 0.3)
                 self.projectiles.append(Projectile(mg.owner, float(sx), float(sy), target[0] - sx + spreadx, target[1] - sy + spready, 20.0, "mg", self.map.elevation_at(mg.tile)))
+                self.muzzle_flashes.append(MuzzleFlash(float(sx), float(sy), target[0] - sx + spreadx, target[1] - sy + spready, mg.owner))
 
     def _register_kill(self, victim: "Soldier", killer_owner: int):
         if victim.hp <= 0:
@@ -2298,6 +2315,9 @@ class TopowarGameState:
         for dm in self.death_marks:
             dm.age += dt
         self.death_marks = [dm for dm in self.death_marks if dm.age < dm.duration]
+        for mf in self.muzzle_flashes:
+            mf.age += dt
+        self.muzzle_flashes = [mf for mf in self.muzzle_flashes if mf.age < mf.duration]
 
     def _update_projectiles(self, dt: float):
         remaining: list[Projectile] = []
@@ -2323,6 +2343,8 @@ class TopowarGameState:
                 if s.hp <= 0 or s.owner == p.owner:
                     continue
                 if math.dist((p.x, p.y), (s.x, s.y)) <= 0.35:
+                    if not p.will_hit:
+                        continue  # miss — projectile flies through without effect
                     target_e = self.map.elevation_at(s.tile)
                     if p.source == "mg":
                         if target_e > p.origin_elevation:
@@ -2509,6 +2531,8 @@ class TopowarGameState:
         for b in self.bunkers.values():
             if b.hp <= 0:
                 continue
+            if viewer is not None and b.owner != viewer and in_build_phase and not self._on_owner_side(viewer, b.tile) and b.tile not in illuminated:
+                continue
             bunkers_out.append({
                 "structure_id": b.structure_id,
                 "owner": b.owner,
@@ -2565,6 +2589,7 @@ class TopowarGameState:
             "projectiles": [{"x": p.x, "y": p.y, "dx": p.dx, "dy": p.dy, "owner": p.owner, "source": p.source} for p in self.projectiles],
             "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration, "kill_radius": e.kill_radius, "landing_in_trench": e.landing_in_trench, "landing_elev": e.landing_elev, "collapsed_trenches": [list(t) for t in e.collapsed_trenches]} for e in self.explosions],
             "death_marks": [{"x": dm.x, "y": dm.y, "age": dm.age, "duration": dm.duration} for dm in self.death_marks],
+            "muzzle_flashes": [{"x": mf.x, "y": mf.y, "dx": mf.dx, "dy": mf.dy, "owner": mf.owner, "age": mf.age, "duration": mf.duration} for mf in self.muzzle_flashes],
             "time_elapsed": self.time_elapsed,
             "time_remaining": max(0.0, self.rules.match_time_seconds - self.time_elapsed),
             "recruit_timers": {

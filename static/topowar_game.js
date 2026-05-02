@@ -1785,6 +1785,38 @@ function draw() {
     }
   }
 
+  // Muzzle flashes
+  for (const mf of data.muzzle_flashes || []) {
+    const t = mf.age / mf.duration;
+    const alpha = (1 - t) * 0.95;
+    const norm = Math.hypot(mf.dx ?? 0, mf.dy ?? 0);
+    const fx = cpx(mf.x);
+    const fy = cpy(mf.y);
+    const dirX = norm > 0 ? mf.dx / norm : 1;
+    const dirY = norm > 0 ? mf.dy / norm : 0;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    // Bright core circle
+    const coreR = 4.5 * (1 - t * 0.5);
+    const grad = ctx.createRadialGradient(fx, fy, 0, fx, fy, coreR * 2);
+    grad.addColorStop(0, '#ffffc0');
+    grad.addColorStop(0.4, '#ffcc44');
+    grad.addColorStop(1, 'rgba(255,140,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(fx, fy, coreR * 2, 0, Math.PI * 2);
+    ctx.fill();
+    // Short directional streak
+    const streakLen = 9 * (1 - t);
+    ctx.strokeStyle = 'rgba(255,245,180,0.85)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(fx, fy);
+    ctx.lineTo(fx + dirX * streakLen, fy + dirY * streakLen);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // Explosions
   const trenchSet = new Set((data.map.trenches || []).map(t => `${t[0]},${t[1]}`));
   const hillSet = new Set((data.map.hills || []).map(t => `${t[0]},${t[1]}`));
