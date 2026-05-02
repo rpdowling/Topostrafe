@@ -1787,28 +1787,40 @@ function draw() {
 
   // Explosions
   const trenchSet = new Set((data.map.trenches || []).map(t => `${t[0]},${t[1]}`));
+  const hillSet = new Set((data.map.hills || []).map(t => `${t[0]},${t[1]}`));
+  const mountainSet = new Set((data.map.mountains || []).map(t => `${t[0]},${t[1]}`));
+  // Map numeric landing_elev values (server constants) to string labels used in JS
+  const ELEV_TRENCH_VAL = 2, ELEV_GROUND_VAL = 4, ELEV_HILL_VAL = 5, ELEV_MOUNTAIN_VAL = 6;
+  function tileElevStr(tx, ty) {
+    const key = `${tx},${ty}`;
+    if (trenchSet.has(key)) return 'trench';
+    if (hillSet.has(key)) return 'hill';
+    if (mountainSet.has(key)) return 'mountain';
+    return 'ground';
+  }
+  function elevNumToStr(n) {
+    if (n === ELEV_TRENCH_VAL) return 'trench';
+    if (n === ELEV_HILL_VAL) return 'hill';
+    if (n === ELEV_MOUNTAIN_VAL) return 'mountain';
+    return 'ground';
+  }
   for (const ex of data.explosions || []) {
     // Blast light flash: warm yellow-orange on tiles actually in the kill zone, fades over 1s
     const kr = ex.kill_radius || 0;
     if (kr > 0 && ex.age < 1.0) {
       const fadeAlpha = (1 - ex.age) * 0.42;
       const cx = Math.round(ex.x), cy = Math.round(ex.y);
-      const landingInTrench = ex.landing_in_trench ?? trenchSet.has(`${cx},${cy}`);
+      const landingElev = ex.landing_elev != null ? elevNumToStr(ex.landing_elev)
+        : (ex.landing_in_trench ? 'trench' : tileElevStr(cx, cy));
       ctx.fillStyle = `rgba(255,210,70,${fadeAlpha.toFixed(3)})`;
       for (let dy = -Math.ceil(kr); dy <= Math.ceil(kr); dy++) {
         for (let dx = -Math.ceil(kr); dx <= Math.ceil(kr); dx++) {
           if (Math.sqrt(dx * dx + dy * dy) > kr) continue;
           const tx = cx + dx, ty = cy + dy;
           if (tx < 0 || ty < 0 || tx >= data.map.width || ty >= data.map.height) continue;
-          const tileInTrench = trenchSet.has(`${tx},${ty}`);
-          if (landingInTrench) {
-            // Trench blast: only highlight trench tiles with LOS through the trench network
-            if (!tileInTrench) continue;
-            if (!hasTrenchLos(trenchSet, cx, cy, tx, ty)) continue;
-          } else {
-            // Open blast: trench tiles are at lower elevation — protected, skip them
-            if (tileInTrench) continue;
-          }
+          // Only highlight tiles at the same elevation as the impact
+          if (tileElevStr(tx, ty) !== landingElev) continue;
+          if (landingElev === 'trench' && !hasTrenchLos(trenchSet, cx, cy, tx, ty)) continue;
           ctx.fillRect(OX + tx * CELL, tileTop(ty), CELL - 1, CELL - 1);
         }
       }
