@@ -2060,14 +2060,18 @@ class TopowarGameState:
                 mortar.operators.clear()
 
         if airburst:
-            # Airburst: checkerboard kill zone at all elevations, no terrain damage,
-            # no bunker/sandbag interaction. Radius 3.5 gives a circular checkerboard
-            # footprint (includes (±3,±1) edge tiles that fill out the circle).
+            # Airburst: checkerboard kill zone at all elevations, no terrain damage.
+            # Soldiers inside a bunker are shielded from airburst.
+            # Radius 3.5 gives a circular checkerboard footprint (includes (±3,±1)
+            # edge tiles that fill out the circle).
             kill_radius = 3.5
+            bunker_tiles = self._bunker_tile_set()
             for s in self.soldiers.values():
                 if s.hp <= 0:
                     continue
                 tx, ty = s.tile
+                if (tx, ty) in bunker_tiles:
+                    continue
                 if math.dist((tx, ty), landing) > kill_radius:
                     continue
                 if (tx + ty) % 2 != (lx + ly) % 2:
@@ -2269,7 +2273,12 @@ class TopowarGameState:
                     and curr_tile != origin_tile
                     and curr_tile != shell.target
                     and curr_tile in self.map.mountains):
-                self._mortar_impact(curr_tile, shell.owner, airburst=is_airburst)
+                if is_airburst:
+                    # Airburst clipping a mountain en-route: detonate like a grenade
+                    # (2-tile same-elevation blast, no terrain damage).
+                    self._grenade_impact(curr_tile, shell.owner)
+                else:
+                    self._mortar_impact(curr_tile, shell.owner, airburst=False)
                 continue
             remaining.append(shell)
         self.mortar_shells = remaining
