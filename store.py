@@ -828,6 +828,7 @@ class GameStore:
                 "tw_assign_build_mortar",
                 "tw_fire_mortar",
                 "tw_set_mortar_target",
+                "tw_set_mortar_round",
                 "tw_toggle_mortar_autofire",
                 "tw_toggle_operate_mortar",
                 "tw_assign_build_sandbag",
@@ -850,6 +851,7 @@ class GameStore:
                     "facing",
                     "mg_id",
                     "mortar_id",
+                    "round_type",
                 ):
                     if key in action:
                         out[key] = action[key]
