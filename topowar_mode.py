@@ -161,6 +161,7 @@ class Mortar(Structure):
     operators: set[int] = field(default_factory=set)
     base_elevation: int = ELEV_GROUND
     operable: bool = True
+    round_type: str = 'he'     # 'he' or 'airburst'
 
 
 @dataclass
@@ -197,6 +198,7 @@ class MortarShell:
     target: tuple[int, int]           # actual (possibly scattered) landing tile
     intended_target: tuple[int, int]  # pre-scatter aim point — used for LOS rules
     speed: float = 5.0
+    round_type: str = 'he'            # 'he' or 'airburst'
 
 
 @dataclass
@@ -233,6 +235,7 @@ class Explosion:
     # Trench tiles adjacent to impact that were collapsed by this blast.
     # Sent to client so it can restore them for the highlight LOS check.
     collapsed_trenches: tuple = ()
+    airburst: bool = False
 
 
 @dataclass
@@ -1318,6 +1321,20 @@ class TopowarGameState:
             mortar.ready = False
             mortar.cooldown = 20.0
             return "Mortar retargeted (20 s cooldown)."
+        if t == "tw_set_mortar_round":
+            mid = int(action.get("mortar_id", -1))
+            mortar = self.mortars.get(mid)
+            if not mortar or mortar.owner != owner:
+                raise ValueError("Mortar not found.")
+            round_type = action.get("round_type", "he")
+            if round_type not in ("he", "airburst"):
+                raise ValueError("Invalid round type.")
+            if mortar.round_type == round_type:
+                return "Round type unchanged."
+            mortar.round_type = round_type
+            mortar.ready = False
+            mortar.cooldown = 20.0
+            return f"Round type set to {round_type} (20 s cooldown)."
         if t == "tw_toggle_operate_mortar":
             mid = int(action.get("mortar_id", -1))
             mortar = self.mortars.get(mid)
@@ -2022,11 +2039,12 @@ class TopowarGameState:
             float(mortar.tile[0]), float(mortar.tile[1]),
             (lx, ly),
             mortar.target,
+            round_type=mortar.round_type,
         ))
         mortar.ready = False
         mortar.cooldown = 20.0
 
-    def _mortar_impact(self, landing: tuple[int, int], owner: int):
+    def _mortar_impact(self, landing: tuple[int, int], owner: int, airburst: bool = False):
         lx, ly = landing
         wire_by_tile = {w.tile: w for w in self.barbed_wire.values() if w.hp > 0}
         for tx, ty in [(lx, ly), (lx+1, ly), (lx-1, ly), (lx, ly+1), (lx, ly-1)]:
@@ -2038,6 +2056,28 @@ class TopowarGameState:
             if mortar.hp > 0 and mortar.tile == landing:
                 mortar.hp = 0
                 mortar.operators.clear()
+
+        if airburst:
+            # Airburst: checkerboard kill zone at all elevations, no terrain damage,
+            # no bunker/sandbag interaction.
+            kill_radius = 3.0
+            for s in self.soldiers.values():
+                if s.hp <= 0:
+                    continue
+                tx, ty = s.tile
+                if math.dist((tx, ty), landing) > kill_radius:
+                    continue
+                if (tx + ty) % 2 != (lx + ly) % 2:
+                    continue
+                self._register_kill(s, owner)
+            self.explosions.append(Explosion(
+                float(lx), float(ly),
+                kill_radius=kill_radius,
+                landing_elev=self.map.elevation_at(landing),
+                airburst=True,
+            ))
+            return
+
         direct_sandbag = next(
             (sb for sb in self.sandbags.values() if sb.hp > 0 and sb.built and sb.tile == landing), None
         )
@@ -2185,8 +2225,9 @@ class TopowarGameState:
             dy = ty - shell.y
             dist = math.hypot(dx, dy)
             step = shell.speed * dt
+            is_airburst = (shell.round_type == 'airburst')
             if dist <= step:
-                self._mortar_impact(shell.target, shell.owner)
+                self._mortar_impact(shell.target, shell.owner, airburst=is_airburst)
                 continue
             shell.x += dx / dist * step
             shell.y += dy / dist * step
@@ -2203,7 +2244,7 @@ class TopowarGameState:
                     and curr_tile != origin_tile
                     and curr_tile != shell.target
                     and curr_tile in self.map.mountains):
-                self._mortar_impact(curr_tile, shell.owner)
+                self._mortar_impact(curr_tile, shell.owner, airburst=is_airburst)
                 continue
             remaining.append(shell)
         self.mortar_shells = remaining
@@ -2514,6 +2555,7 @@ class TopowarGameState:
                 "operable": mortar.operable,
                 "cooldown": mortar.cooldown,
                 "operators": sorted(list(mortar.operators)),
+                "round_type": mortar.round_type,
             })
         sandbags_out = []
         for sb in self.sandbags.values():
@@ -2588,10 +2630,10 @@ class TopowarGameState:
             "flares_remaining": {"0": self.flares_remaining.get(0, 0), "1": self.flares_remaining.get(1, 0)},
             "build_sandbags_remaining": self.build_sandbags_remaining.get(viewer, 0) if viewer is not None else None,
             "build_wire_remaining": self.build_wire_remaining.get(viewer, 0) if viewer is not None else None,
-            "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "intended_target": list(ms.intended_target), "owner": ms.owner} for ms in self.mortar_shells],
+            "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "intended_target": list(ms.intended_target), "owner": ms.owner, "round_type": ms.round_type} for ms in self.mortar_shells],
             "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
             "projectiles": [{"x": p.x, "y": p.y, "dx": p.dx, "dy": p.dy, "owner": p.owner, "source": p.source} for p in self.projectiles],
-            "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration, "kill_radius": e.kill_radius, "landing_in_trench": e.landing_in_trench, "landing_elev": e.landing_elev, "collapsed_trenches": [list(t) for t in e.collapsed_trenches]} for e in self.explosions],
+            "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration, "kill_radius": e.kill_radius, "landing_in_trench": e.landing_in_trench, "landing_elev": e.landing_elev, "collapsed_trenches": [list(t) for t in e.collapsed_trenches], "airburst": e.airburst} for e in self.explosions],
             "death_marks": [{"x": dm.x, "y": dm.y, "age": dm.age, "duration": dm.duration} for dm in self.death_marks],
             "muzzle_flashes": [{"x": mf.x, "y": mf.y, "dx": mf.dx, "dy": mf.dy, "owner": mf.owner, "age": mf.age, "duration": mf.duration} for mf in self.muzzle_flashes],
             "time_elapsed": self.time_elapsed,

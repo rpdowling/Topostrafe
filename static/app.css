@@ -1452,6 +1452,32 @@ body.info-modal-open {
   background: #2b3a4d;
   border: 1px solid #41526a;
 }
+.selection-panel .sel-ammo-btns {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+}
+.selection-panel .sel-ammo-btn {
+  flex: 1;
+  padding: 3px 0;
+  font-size: 12px;
+  font-weight: 700;
+  background: #1e2d3d;
+  border: 1px solid #3d576e;
+  border-radius: 4px;
+  color: #93a2b3;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+}
+.selection-panel .sel-ammo-btn:hover {
+  background: #2a3e52;
+  color: #c8d8e8;
+}
+.selection-panel .sel-ammo-btn.active {
+  background: rgba(244,160,32,0.18);
+  border-color: #f4a020;
+  color: #f4c060;
+}
 .quick-rules {
   margin: 0;
   padding-left: 18px;

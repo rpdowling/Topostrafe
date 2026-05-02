@@ -26,6 +26,7 @@ let mouseCanvas = { x: 0, y: 0 };
 let lastStateTime = performance.now();
 let smokeParticles = [];
 let lastSmokeTick = performance.now();
+let poppedAirburstShells = new Set();
 let elevMap = new Map();
 
 const CELL = 24;
@@ -159,7 +160,29 @@ function connect() {
       if (prevTw && newTw) {
         const prevPos = new Set((prevTw.explosions || []).map(e => `${Math.round(e.x)},${Math.round(e.y)}`));
         for (const ex of newTw.explosions || []) {
-          if (!prevPos.has(`${Math.round(ex.x)},${Math.round(ex.y)}`)) spawnSmoke(ex.x, ex.y);
+          if (!prevPos.has(`${Math.round(ex.x)},${Math.round(ex.y)}`)) {
+            if (ex.airburst) {
+              const kr = ex.kill_radius || 3.0;
+              const cx = Math.round(ex.x), cy = Math.round(ex.y);
+              for (let dy = -Math.ceil(kr); dy <= Math.ceil(kr); dy++) {
+                for (let dx = -Math.ceil(kr); dx <= Math.ceil(kr); dx++) {
+                  if (Math.sqrt(dx * dx + dy * dy) > kr) continue;
+                  const tx = cx + dx, ty = cy + dy;
+                  if ((tx + ty) % 2 !== (cx + cy) % 2) continue;
+                  spawnAirburstTileSmoke(tx + 0.5, ty + 0.5);
+                }
+              }
+            } else {
+              spawnSmoke(ex.x, ex.y);
+            }
+          }
+        }
+        // Clean up popped-shell keys for shells that are no longer in flight
+        const activeShellKeys = new Set(
+          (newTw.mortar_shells || []).map(ms => `${ms.sx},${ms.sy},${ms.target[0]},${ms.target[1]}`)
+        );
+        for (const k of poppedAirburstShells) {
+          if (!activeShellKeys.has(k)) poppedAirburstShells.delete(k);
         }
       }
       reconcilePendingBuildState();
@@ -811,6 +834,40 @@ function spawnSmoke(gx, gy) {
       age: 0,
       maxAge: 2.8 + Math.random() * 2.2,
       r: 0.14 + Math.random() * 0.22,
+    });
+  }
+}
+
+function spawnAirburstPop(gx, gy) {
+  const count = 4 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const spd = 0.08 + Math.random() * 0.18;
+    smokeParticles.push({
+      x: gx + (Math.random() - 0.5) * 0.5,
+      y: gy + (Math.random() - 0.5) * 0.5,
+      vx: Math.cos(angle) * spd * 0.4 + 0.14,
+      vy: Math.sin(angle) * spd * 0.4 - 0.12,
+      alpha: 0.4 + Math.random() * 0.25,
+      age: 0,
+      maxAge: 1.6 + Math.random() * 1.0,
+      r: 0.09 + Math.random() * 0.13,
+    });
+  }
+}
+
+function spawnAirburstTileSmoke(gx, gy) {
+  const count = 1 + Math.floor(Math.random() * 2);
+  for (let i = 0; i < count; i++) {
+    smokeParticles.push({
+      x: gx + (Math.random() - 0.5) * 0.6,
+      y: gy + (Math.random() - 0.5) * 0.6,
+      vx: 0.08 + Math.random() * 0.14,
+      vy: -0.04 + (Math.random() - 0.5) * 0.08,
+      alpha: 0.28 + Math.random() * 0.18,
+      age: 0,
+      maxAge: 2.2 + Math.random() * 1.4,
+      r: 0.05 + Math.random() * 0.09,
     });
   }
 }
@@ -1674,6 +1731,22 @@ function draw() {
       const totalDist = Math.hypot(ms.target[0] - ms.sx, ms.target[1] - ms.sy);
       const traveledDist = Math.hypot(ex - ms.sx, ey - ms.sy);
       const progress = totalDist > 0 ? Math.min(1, traveledDist / totalDist) : 0;
+
+      if (ms.round_type === 'airburst') {
+        if (progress >= 0.75) {
+          // Shell has "popped" — spawn smoke once at the 75% position then stop rendering
+          const popKey = `${ms.sx},${ms.sy},${ms.target[0]},${ms.target[1]}`;
+          if (!poppedAirburstShells.has(popKey)) {
+            poppedAirburstShells.add(popKey);
+            // Compute the 75% position for the smoke
+            const pop75x = ms.sx + (ms.target[0] - ms.sx) * 0.75;
+            const pop75y = ms.sy + (ms.target[1] - ms.sy) * 0.75;
+            spawnAirburstPop(pop75x, pop75y);
+          }
+          continue;
+        }
+      }
+
       const arcHeight = Math.sin(progress * Math.PI);
       const radius = 2 + arcHeight * 5;
       const alpha = 0.5 + arcHeight * 0.5;
@@ -1853,38 +1926,58 @@ function draw() {
   }
 
   for (const ex of data.explosions || []) {
-    // Blast light flash: warm yellow-orange on tiles in the kill zone, fades over 1s
     const kr = ex.kill_radius || 0;
-    if (kr > 0 && ex.age < 1.0) {
-      const fadeAlpha = (1 - ex.age) * 0.42;
-      const cx = Math.round(ex.x), cy = Math.round(ex.y);
-      const landingElev = ex.landing_elev != null ? elevNumToStr(ex.landing_elev)
-        : (ex.landing_in_trench ? 'trench' : tileElevStr(trenchSet, hillSet, mountainSet, cx, cy));
-      // For trench blasts, augment the trench set with tiles that were collapsed by this blast
-      // so the LOS check uses the pre-impact trench network.
-      let losSet = trenchSet;
-      if (landingElev === 'trench' && ex.collapsed_trenches && ex.collapsed_trenches.length) {
-        losSet = new Set(trenchSet);
-        for (const ct of ex.collapsed_trenches) losSet.add(`${ct[0]},${ct[1]}`);
-      }
-      ctx.fillStyle = `rgba(255,210,70,${fadeAlpha.toFixed(3)})`;
-      for (let dy = -Math.ceil(kr); dy <= Math.ceil(kr); dy++) {
-        for (let dx = -Math.ceil(kr); dx <= Math.ceil(kr); dx++) {
-          if (Math.sqrt(dx * dx + dy * dy) > kr) continue;
-          const tx = cx + dx, ty = cy + dy;
-          if (tx < 0 || ty < 0 || tx >= data.map.width || ty >= data.map.height) continue;
-          // Only highlight tiles at the same elevation as the impact
-          if (tileElevStr(trenchSet, hillSet, mountainSet, tx, ty) !== landingElev) continue;
-          if (landingElev === 'trench') {
-            if (!hasTrenchLos(losSet, cx, cy, tx, ty)) continue;
-          } else {
-            if (hasCoverBetween(sandbagTileSet, cx, cy, tx, ty)) continue;
-            if (hasCoverBetween(bunkerTileSetBlast, cx, cy, tx, ty)) continue;
+
+    if (ex.airburst) {
+      // Airburst: checkerboard highlight at all elevations, no cover/elevation check
+      if (kr > 0 && ex.age < 1.0) {
+        const fadeAlpha = (1 - ex.age) * 0.42;
+        const cx = Math.round(ex.x), cy = Math.round(ex.y);
+        ctx.fillStyle = `rgba(255,210,70,${fadeAlpha.toFixed(3)})`;
+        for (let dy = -Math.ceil(kr); dy <= Math.ceil(kr); dy++) {
+          for (let dx = -Math.ceil(kr); dx <= Math.ceil(kr); dx++) {
+            if (Math.sqrt(dx * dx + dy * dy) > kr) continue;
+            const tx = cx + dx, ty = cy + dy;
+            if (tx < 0 || ty < 0 || tx >= data.map.width || ty >= data.map.height) continue;
+            if ((tx + ty) % 2 !== (cx + cy) % 2) continue;
+            ctx.fillRect(OX + tx * CELL, tileTop(ty), CELL - 1, CELL - 1);
           }
-          ctx.fillRect(OX + tx * CELL, tileTop(ty), CELL - 1, CELL - 1);
+        }
+      }
+    } else {
+      // HE: Blast light flash on same-elevation tiles in kill zone, fades over 1s
+      if (kr > 0 && ex.age < 1.0) {
+        const fadeAlpha = (1 - ex.age) * 0.42;
+        const cx = Math.round(ex.x), cy = Math.round(ex.y);
+        const landingElev = ex.landing_elev != null ? elevNumToStr(ex.landing_elev)
+          : (ex.landing_in_trench ? 'trench' : tileElevStr(trenchSet, hillSet, mountainSet, cx, cy));
+        // For trench blasts, augment the trench set with tiles that were collapsed by this blast
+        // so the LOS check uses the pre-impact trench network.
+        let losSet = trenchSet;
+        if (landingElev === 'trench' && ex.collapsed_trenches && ex.collapsed_trenches.length) {
+          losSet = new Set(trenchSet);
+          for (const ct of ex.collapsed_trenches) losSet.add(`${ct[0]},${ct[1]}`);
+        }
+        ctx.fillStyle = `rgba(255,210,70,${fadeAlpha.toFixed(3)})`;
+        for (let dy = -Math.ceil(kr); dy <= Math.ceil(kr); dy++) {
+          for (let dx = -Math.ceil(kr); dx <= Math.ceil(kr); dx++) {
+            if (Math.sqrt(dx * dx + dy * dy) > kr) continue;
+            const tx = cx + dx, ty = cy + dy;
+            if (tx < 0 || ty < 0 || tx >= data.map.width || ty >= data.map.height) continue;
+            // Only highlight tiles at the same elevation as the impact
+            if (tileElevStr(trenchSet, hillSet, mountainSet, tx, ty) !== landingElev) continue;
+            if (landingElev === 'trench') {
+              if (!hasTrenchLos(losSet, cx, cy, tx, ty)) continue;
+            } else {
+              if (hasCoverBetween(sandbagTileSet, cx, cy, tx, ty)) continue;
+              if (hasCoverBetween(bunkerTileSetBlast, cx, cy, tx, ty)) continue;
+            }
+            ctx.fillRect(OX + tx * CELL, tileTop(ty), CELL - 1, CELL - 1);
+          }
         }
       }
     }
+
     const t = ex.age / ex.duration;
     const alpha = 1 - t;
     const radius = (0.5 + t * 3) * CELL;
@@ -1958,6 +2051,11 @@ function draw() {
 
 // === SELECTION PANEL ===
 
+function setMortarRound(roundType) {
+  if (selectedMortar === null) return;
+  send({ type: 'tw_set_mortar_round', mortar_id: selectedMortar, round_type: roundType });
+}
+
 function updateSelectionPanel() {
   const panel = el('selection-panel');
   if (!panel) return;
@@ -2022,6 +2120,12 @@ function updateSelectionPanel() {
       : `Reloading ${mortar.cooldown.toFixed(1)}s`;
     const tgt = mortar.target ? `(${mortar.target[0]}, ${mortar.target[1]})` : '—';
     const operableTag = mortar.operable === false ? '<span class="sel-blocked">Inoperable: restore 3×3 ground</span>' : '';
+    const isAirburst = mortar.round_type === 'airburst';
+    const ammoRow = mortar.built && mortar.owner === mySeat() ? `
+      <div class="sel-ammo-btns">
+        <button class="sel-ammo-btn${!isAirburst ? ' active' : ''}" onclick="setMortarRound('he')">HE</button>
+        <button class="sel-ammo-btn${isAirburst ? ' active' : ''}" onclick="setMortarRound('airburst')">Airburst</button>
+      </div>` : '';
     panel.innerHTML = `
       <div class="sel-grid">
         <span class="sel-label">Side</span><span class="sel-val">${side}</span>
@@ -2029,7 +2133,7 @@ function updateSelectionPanel() {
         <span class="sel-label">Crew</span><span class="sel-val">${ops}/2</span>
         <span class="sel-label">Target</span><span class="sel-val">${tgt}</span>
         <span class="sel-label">State</span><span class="sel-val">${stateStr}</span>
-      </div>${operableTag}`;
+      </div>${ammoRow}${operableTag}`;
   }
 }
 
