@@ -229,6 +229,9 @@ class Explosion:
     kill_radius: float = 0.0
     landing_in_trench: bool = False
     landing_elev: int = ELEV_GROUND
+    # Trench tiles adjacent to impact that were collapsed by this blast.
+    # Sent to client so it can restore them for the highlight LOS check.
+    collapsed_trenches: tuple = ()
 
 
 @dataclass
@@ -655,6 +658,13 @@ class TopowarGameState:
             if self.map.elevation_at(mortar.tile) != mortar.base_elevation:
                 mortar.hp = 0
                 mortar.operators.clear()
+                continue
+            # Evict any crew whose tile is no longer at the mortar's elevation.
+            mortar_elev = self.map.elevation_at(mortar.tile)
+            mortar.operators = {
+                uid for uid in mortar.operators
+                if uid in self.soldiers and self.map.elevation_at(self.soldiers[uid].tile) == mortar_elev
+            }
 
     def _ensure_runtime_compat(self):
         """Backfill fields when loading older saved Topowar states."""
@@ -996,6 +1006,30 @@ class TopowarGameState:
             if (cx, cy) == (x1, y1):
                 return False
             if (cx, cy) != a and (cx, cy) in sandbags:
+                return True
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                cx += sx
+            if e2 < dx:
+                err += dx
+                cy += sy
+
+    def _has_bunker_cover_between(self, a: tuple[int, int], b: tuple[int, int]) -> bool:
+        """True if a live bunker tile lies strictly between endpoints on Bresenham path."""
+        x0, y0 = a
+        x1, y1 = b
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x1 >= x0 else -1
+        sy = 1 if y1 >= y0 else -1
+        err = dx - dy
+        cx, cy = x0, y0
+        bunkers = self._bunker_tile_set()
+        while True:
+            if (cx, cy) == (x1, y1):
+                return False
+            if (cx, cy) != a and (cx, cy) in bunkers:
                 return True
             e2 = 2 * err
             if e2 > -dy:
@@ -2033,8 +2067,11 @@ class TopowarGameState:
                 if landing_elev == ELEV_TRENCH:
                     if not self._has_los_through_trenches(landing, s.tile):
                         continue
-                elif self._has_sandbag_cover_between(landing, s.tile):
-                    continue
+                else:
+                    if self._has_sandbag_cover_between(landing, s.tile):
+                        continue
+                    if self._has_bunker_cover_between(landing, s.tile):
+                        continue
                 self._register_kill(s, owner)
             self.explosions.append(Explosion(float(lx), float(ly), kill_radius=kill_radius, landing_elev=landing_elev))
             return
@@ -2068,12 +2105,32 @@ class TopowarGameState:
             if landing_elev == ELEV_TRENCH:
                 if not self._has_los_through_trenches(landing, s.tile):
                     continue
-            elif self._has_sandbag_cover_between(landing, s.tile):
-                continue
+            else:
+                if self._has_sandbag_cover_between(landing, s.tile):
+                    continue
+                if self._has_bunker_cover_between(landing, s.tile):
+                    continue
             self._register_kill(s, owner)
 
+        # Pre-capture which adjacent trench tiles will be collapsed so the client
+        # can restore them for the blast-highlight LOS check (post-deformation map
+        # would otherwise block LOS through freshly collapsed tiles).
+        bunker_tiles = self._bunker_tile_set()
+        will_collapse: list[tuple[int, int]] = []
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            adj = (lx + dx, ly + dy)
+            if not self.map.in_bounds(adj):
+                continue
+            if self.map.elevation_at(adj) != ELEV_TRENCH:
+                continue
+            if adj in bunker_tiles:
+                continue
+            has_sb = any(sb.hp > 0 and sb.built and sb.tile == adj for sb in self.sandbags.values())
+            if not has_sb:
+                will_collapse.append(adj)
+
         # Terrain deformation: landing tile degrades one level (mountain→hill→ground→trench).
-        # Adjacent tiles: trench tiles collapse back to open ground (old toggle behavior);
+        # Adjacent tiles: trench tiles collapse back to open ground;
         # hills/mountains/ground degrade one level normally.
         self._degrade_tile(landing)
         for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
@@ -2090,7 +2147,7 @@ class TopowarGameState:
                 continue
             if self.map.elevation_at(adj) == ELEV_TRENCH:
                 # Bunker protects its tile from trench collapse.
-                if adj in self._bunker_tile_set():
+                if adj in bunker_tiles:
                     continue
                 # Trench collapses back to open ground — crush anyone inside.
                 self.map.trenches.discard(adj)
@@ -2098,10 +2155,22 @@ class TopowarGameState:
                     if s.hp > 0 and s.tile == adj:
                         self._register_kill(s, owner)
             else:
+                old_elev = self.map.elevation_at(adj)
                 self._degrade_tile(adj)
+                # Kill anyone whose tile just changed elevation under them.
+                if self.map.elevation_at(adj) != old_elev:
+                    for s in self.soldiers.values():
+                        if s.hp > 0 and s.tile == adj:
+                            self._register_kill(s, owner)
 
         self._enforce_structure_ground_integrity()
-        self.explosions.append(Explosion(float(lx), float(ly), kill_radius=kill_radius, landing_in_trench=(landing_elev == ELEV_TRENCH), landing_elev=landing_elev))
+        self.explosions.append(Explosion(
+            float(lx), float(ly),
+            kill_radius=kill_radius,
+            landing_in_trench=(landing_elev == ELEV_TRENCH),
+            landing_elev=landing_elev,
+            collapsed_trenches=tuple(will_collapse),
+        ))
 
     def _update_mortars(self, dt: float):
         for mortar in self.mortars.values():
@@ -2163,8 +2232,11 @@ class TopowarGameState:
             if landing_elev == ELEV_TRENCH:
                 if not self._has_los_through_trenches(landing, s.tile):
                     continue
-            elif self._has_sandbag_cover_between(landing, s.tile):
-                continue
+            else:
+                if self._has_sandbag_cover_between(landing, s.tile):
+                    continue
+                if self._has_bunker_cover_between(landing, s.tile):
+                    continue
             self._register_kill(s, owner)
         self.explosions.append(Explosion(float(landing[0]), float(landing[1]), kill_radius=kill_radius, landing_in_trench=(landing_elev == ELEV_TRENCH), landing_elev=landing_elev))
 
@@ -2520,7 +2592,7 @@ class TopowarGameState:
             "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "intended_target": list(ms.intended_target), "owner": ms.owner} for ms in self.mortar_shells],
             "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
             "projectiles": [{"x": p.x, "y": p.y, "dx": p.dx, "dy": p.dy, "owner": p.owner, "source": p.source} for p in self.projectiles],
-            "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration, "kill_radius": e.kill_radius, "landing_in_trench": e.landing_in_trench, "landing_elev": e.landing_elev} for e in self.explosions],
+            "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration, "kill_radius": e.kill_radius, "landing_in_trench": e.landing_in_trench, "landing_elev": e.landing_elev, "collapsed_trenches": [list(t) for t in e.collapsed_trenches]} for e in self.explosions],
             "death_marks": [{"x": dm.x, "y": dm.y, "age": dm.age, "duration": dm.duration} for dm in self.death_marks],
             "time_elapsed": self.time_elapsed,
             "time_remaining": max(0.0, self.rules.match_time_seconds - self.time_elapsed),
