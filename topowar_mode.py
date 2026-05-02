@@ -1931,6 +1931,8 @@ class TopowarGameState:
                     sv_elev = self.map.elevation_at(sv.tile)
                     if sv_elev > mg_elev:
                         continue  # MG cannot fire at higher elevation
+                    if sv_elev == ELEV_TRENCH and mg_elev > ELEV_TRENCH:
+                        continue  # open-ground MG cannot see into trenches
                     if not self._has_combat_los(mg.tile, sv.tile):
                         continue  # blocked by terrain above target's elevation
                     if not self._soldier_visible_to(sv, mg.owner):
@@ -1962,7 +1964,9 @@ class TopowarGameState:
             # Guard: only fire if elevation and LOS allow it.
             # This applies to both auto-targeted and force-targeted shots.
             tgt_elev = self.map.elevation_at(target)
-            can_fire = tgt_elev <= mg_elev and self._has_combat_los(mg.tile, target)
+            can_fire = (tgt_elev <= mg_elev
+                        and not (tgt_elev == ELEV_TRENCH and mg_elev > ELEV_TRENCH)
+                        and self._has_combat_los(mg.tile, target))
             # Start a new burst cycle when cooldown expires
             if can_fire and mg.cooldown <= 0 and mg.burst_left <= 0:
                 mg.burst_left = 3
