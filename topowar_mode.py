@@ -594,11 +594,9 @@ class TopowarGameState:
                 cx = (base_x + sign * delta) % self.map.width
                 tile = (cx, back_y)
                 if tile not in occ and self.map.in_bounds(tile):
-                    live_officers = sum(1 for s in self.soldiers.values() if s.owner == owner and s.hp > 0 and s.is_officer)
                     live_grenadiers = sum(1 for s in self.soldiers.values() if s.owner == owner and s.hp > 0 and s.is_grenadier)
-                    is_officer = live_officers < 1
-                    is_grenadier = not is_officer and live_grenadiers < 2
-                    self._spawn_soldier(owner, tile, is_grenadier=is_grenadier, is_officer=is_officer)
+                    is_grenadier = live_grenadiers < 2
+                    self._spawn_soldier(owner, tile, is_grenadier=is_grenadier, is_officer=False)
                     return
 
     def _try_spawn_recruits(self):
@@ -2479,7 +2477,20 @@ class TopowarGameState:
         self._update_effects(dt)
         alive0 = sum(1 for s in self.soldiers.values() if s.owner == 0 and s.hp > 0)
         alive1 = sum(1 for s in self.soldiers.values() if s.owner == 1 and s.hp > 0)
-        if alive0 == 0 or alive1 == 0:
+        officer0_alive = any(s.owner == 0 and s.hp > 0 and s.is_officer for s in self.soldiers.values())
+        officer1_alive = any(s.owner == 1 and s.hp > 0 and s.is_officer for s in self.soldiers.values())
+        officer0_existed = any(s.owner == 0 and s.is_officer for s in self.soldiers.values())
+        officer1_existed = any(s.owner == 1 and s.is_officer for s in self.soldiers.values())
+        if officer0_existed and not officer0_alive and officer1_existed and not officer1_alive:
+            self.winner = None
+            self.win_reason = "Mutual officer elimination."
+        elif officer0_existed and not officer0_alive:
+            self.winner = 1
+            self.win_reason = "Officer eliminated."
+        elif officer1_existed and not officer1_alive:
+            self.winner = 0
+            self.win_reason = "Officer eliminated."
+        elif alive0 == 0 or alive1 == 0:
             self.winner = 0 if alive0 > alive1 else 1 if alive1 > alive0 else None
             self.win_reason = "Elimination." if self.winner is not None else "Mutual elimination."
         elif self.time_elapsed >= self.rules.match_time_seconds:

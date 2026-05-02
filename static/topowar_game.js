@@ -1481,6 +1481,13 @@ function draw() {
       ctx.lineWidth = 1;
       ctx.stroke();
       ctx.lineWidth = 1;
+      // Circle border in the same fill color as the star
+      ctx.beginPath();
+      ctx.arc(scx, scy, 10, 0, Math.PI * 2);
+      ctx.strokeStyle = s.owner === 0 ? '#f5e642' : '#22d4c8';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.lineWidth = 1;
     } else {
       if (s.is_grenadier) ctx.fillStyle = s.owner === 0 ? '#ff9f1a' : '#1fc7b6';
       else ctx.fillStyle = s.owner === 0 ? '#e83030' : '#3d6cdf';
