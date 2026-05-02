@@ -199,6 +199,8 @@ class MortarShell:
     intended_target: tuple[int, int]  # pre-scatter aim point — used for LOS rules
     speed: float = 5.0
     round_type: str = 'he'            # 'he' or 'airburst'
+    popped: bool = False              # airburst: True once shell has "popped" at 75%
+    detonate_after: float = 0.0      # airburst: seconds until detonation after pop
 
 
 @dataclass
@@ -2059,8 +2061,9 @@ class TopowarGameState:
 
         if airburst:
             # Airburst: checkerboard kill zone at all elevations, no terrain damage,
-            # no bunker/sandbag interaction.
-            kill_radius = 3.0
+            # no bunker/sandbag interaction. Radius 3.5 gives a circular checkerboard
+            # footprint (includes (±3,±1) edge tiles that fill out the circle).
+            kill_radius = 3.5
             for s in self.soldiers.values():
                 if s.hp <= 0:
                     continue
@@ -2220,17 +2223,39 @@ class TopowarGameState:
         remaining: list[MortarShell] = []
         start_tile = lambda s: (int(round(s.sx)), int(round(s.sy)))
         for shell in self.mortar_shells:
+            is_airburst = (shell.round_type == 'airburst')
+
+            # Airburst: count down detonation delay after the shell has popped.
+            if is_airburst and shell.popped:
+                shell.detonate_after = max(0.0, shell.detonate_after - dt)
+                if shell.detonate_after <= 0.0:
+                    self._mortar_impact(shell.target, shell.owner, airburst=True)
+                else:
+                    remaining.append(shell)
+                continue
+
             tx, ty = shell.target
             dx = tx - shell.x
             dy = ty - shell.y
             dist = math.hypot(dx, dy)
             step = shell.speed * dt
-            is_airburst = (shell.round_type == 'airburst')
             if dist <= step:
                 self._mortar_impact(shell.target, shell.owner, airburst=is_airburst)
                 continue
             shell.x += dx / dist * step
             shell.y += dy / dist * step
+
+            # Airburst: pop at 75% of total flight distance, then wait 0.5 s.
+            if is_airburst:
+                total_dist = math.hypot(shell.target[0] - shell.sx, shell.target[1] - shell.sy)
+                if total_dist > 0:
+                    traveled = math.hypot(shell.x - shell.sx, shell.y - shell.sy)
+                    if traveled / total_dist >= 0.75:
+                        shell.popped = True
+                        shell.detonate_after = 0.5
+                        remaining.append(shell)
+                        continue
+
             # Intercept: shell hits an intermediate mountain tile only when
             # both the origin AND target are non-mountain.  If either endpoint
             # is a mountain the shell arcs over the terrain (targeting a
@@ -2630,7 +2655,7 @@ class TopowarGameState:
             "flares_remaining": {"0": self.flares_remaining.get(0, 0), "1": self.flares_remaining.get(1, 0)},
             "build_sandbags_remaining": self.build_sandbags_remaining.get(viewer, 0) if viewer is not None else None,
             "build_wire_remaining": self.build_wire_remaining.get(viewer, 0) if viewer is not None else None,
-            "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "intended_target": list(ms.intended_target), "owner": ms.owner, "round_type": ms.round_type} for ms in self.mortar_shells],
+            "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "intended_target": list(ms.intended_target), "owner": ms.owner, "round_type": ms.round_type, "popped": ms.popped} for ms in self.mortar_shells],
             "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
             "projectiles": [{"x": p.x, "y": p.y, "dx": p.dx, "dy": p.dy, "owner": p.owner, "source": p.source} for p in self.projectiles],
             "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration, "kill_radius": e.kill_radius, "landing_in_trench": e.landing_in_trench, "landing_elev": e.landing_elev, "collapsed_trenches": [list(t) for t in e.collapsed_trenches], "airburst": e.airburst} for e in self.explosions],

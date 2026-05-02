@@ -178,6 +178,20 @@ function connect() {
             }
           }
         }
+        // Detect airburst shells newly popped server-side and spawn pop smoke.
+        const prevShellMap = new Map(
+          (prevTw.mortar_shells || [])
+            .filter(ms => ms.round_type === 'airburst')
+            .map(ms => [`${ms.sx},${ms.sy},${ms.target[0]},${ms.target[1]}`, ms])
+        );
+        for (const ms of (newTw.mortar_shells || [])) {
+          if (ms.round_type !== 'airburst' || !ms.popped) continue;
+          const popKey = `${ms.sx},${ms.sy},${ms.target[0]},${ms.target[1]}`;
+          if (!poppedAirburstShells.has(popKey)) {
+            poppedAirburstShells.add(popKey);
+            spawnAirburstPop(ms.x, ms.y);
+          }
+        }
         // Clean up popped-shell keys for shells that are no longer in flight
         const activeShellKeys = new Set(
           (newTw.mortar_shells || []).map(ms => `${ms.sx},${ms.sy},${ms.target[0]},${ms.target[1]}`)
@@ -1734,12 +1748,14 @@ function draw() {
       const progress = totalDist > 0 ? Math.min(1, traveledDist / totalDist) : 0;
 
       if (ms.round_type === 'airburst') {
+        const popKey = `${ms.sx},${ms.sy},${ms.target[0]},${ms.target[1]}`;
+        // Server is authoritative: if popped flag is set, stop rendering.
+        if (ms.popped) continue;
+        // Client-side fallback: hide and spawn smoke once dead-reckoned progress ≥ 75%
+        // (covers the brief window before the server state confirms the pop).
         if (progress >= 0.75) {
-          // Shell has "popped" — spawn smoke once at the 75% position then stop rendering
-          const popKey = `${ms.sx},${ms.sy},${ms.target[0]},${ms.target[1]}`;
           if (!poppedAirburstShells.has(popKey)) {
             poppedAirburstShells.add(popKey);
-            // Compute the 75% position for the smoke
             const pop75x = ms.sx + (ms.target[0] - ms.sx) * 0.75;
             const pop75y = ms.sy + (ms.target[1] - ms.sy) * 0.75;
             spawnAirburstPop(pop75x, pop75y);
