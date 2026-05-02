@@ -228,6 +228,7 @@ class Explosion:
     duration: float = 0.8
     kill_radius: float = 0.0
     landing_in_trench: bool = False
+    landing_elev: int = ELEV_GROUND
 
 
 @dataclass
@@ -1611,6 +1612,11 @@ class TopowarGameState:
             s.path = []
             s.move_cooldown = 0.0
             return
+        # Bunker tiles can only be exited to a trench or another bunker tile.
+        if s.tile in self._bunker_tile_set() and target not in self.map.trenches and target not in self._bunker_tile_set():
+            s.path = []
+            s.move_cooldown = 0.0
+            return
         occ = self._occupied_tiles()
         # Bunker tiles are traversable (entry restricted by the check above); exclude them here.
         structure_tiles = (self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()) | self._wire_tile_set()
@@ -2022,12 +2028,15 @@ class TopowarGameState:
                     continue
                 if math.dist(s.tile, landing) > kill_radius:
                     continue
-                if self.map.elevation_at(s.tile) < landing_elev:
-                    continue  # Lower-elevation node (e.g. trench) is naturally protected
-                if self._has_sandbag_cover_between(landing, s.tile):
+                if self.map.elevation_at(s.tile) != landing_elev:
+                    continue
+                if landing_elev == ELEV_TRENCH:
+                    if not self._has_los_through_trenches(landing, s.tile):
+                        continue
+                elif self._has_sandbag_cover_between(landing, s.tile):
                     continue
                 self._register_kill(s, owner)
-            self.explosions.append(Explosion(float(lx), float(ly), kill_radius=kill_radius))
+            self.explosions.append(Explosion(float(lx), float(ly), kill_radius=kill_radius, landing_elev=landing_elev))
             return
 
         direct_bunker = next(
@@ -2046,7 +2055,7 @@ class TopowarGameState:
             self.explosions.append(Explosion(float(lx), float(ly), kill_radius=0.0, landing_in_trench=True))
             return
 
-        # Blast kill radius
+        # Blast kill radius — only tiles at the same elevation as the impact tile are in the kill zone.
         landing_elev = self.map.elevation_at(landing)
         kill_radius = 3.0
         for s in self.soldiers.values():
@@ -2054,16 +2063,14 @@ class TopowarGameState:
                 continue
             if math.dist(s.tile, landing) > kill_radius:
                 continue
-            s_in_trench = self.map.elevation_at(s.tile) == ELEV_TRENCH
+            if self.map.elevation_at(s.tile) != landing_elev:
+                continue
             if landing_elev == ELEV_TRENCH:
-                if s_in_trench:
-                    if self._has_los_through_trenches(landing, s.tile):
-                        self._register_kill(s, owner)
-                else:
-                    self._register_kill(s, owner)
-            else:
-                if not s_in_trench and not self._has_sandbag_cover_between(landing, s.tile):
-                    self._register_kill(s, owner)
+                if not self._has_los_through_trenches(landing, s.tile):
+                    continue
+            elif self._has_sandbag_cover_between(landing, s.tile):
+                continue
+            self._register_kill(s, owner)
 
         # Terrain deformation: landing tile degrades one level (mountain→hill→ground→trench).
         # Adjacent tiles: trench tiles collapse back to open ground (old toggle behavior);
@@ -2094,7 +2101,7 @@ class TopowarGameState:
                 self._degrade_tile(adj)
 
         self._enforce_structure_ground_integrity()
-        self.explosions.append(Explosion(float(lx), float(ly), kill_radius=kill_radius, landing_in_trench=(landing_elev == ELEV_TRENCH)))
+        self.explosions.append(Explosion(float(lx), float(ly), kill_radius=kill_radius, landing_in_trench=(landing_elev == ELEV_TRENCH), landing_elev=landing_elev))
 
     def _update_mortars(self, dt: float):
         for mortar in self.mortars.values():
@@ -2144,24 +2151,22 @@ class TopowarGameState:
         for w in self.barbed_wire.values():
             if w.hp > 0 and w.tile == landing:
                 w.hp = 0
-        target_in_trench = landing in self.map.trenches
+        landing_elev = self.map.elevation_at(landing)
         kill_radius = 2.0
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
             if math.dist(s.tile, landing) > kill_radius:
                 continue
-            s_in_trench = s.tile in self.map.trenches
-            if target_in_trench:
-                if s_in_trench:
-                    if self._has_los_through_trenches(landing, s.tile):
-                        self._register_kill(s, owner)
-                else:
-                    self._register_kill(s, owner)
-            else:
-                if not s_in_trench and not self._has_sandbag_cover_between(landing, s.tile):
-                    self._register_kill(s, owner)
-        self.explosions.append(Explosion(float(landing[0]), float(landing[1]), kill_radius=kill_radius))
+            if self.map.elevation_at(s.tile) != landing_elev:
+                continue
+            if landing_elev == ELEV_TRENCH:
+                if not self._has_los_through_trenches(landing, s.tile):
+                    continue
+            elif self._has_sandbag_cover_between(landing, s.tile):
+                continue
+            self._register_kill(s, owner)
+        self.explosions.append(Explosion(float(landing[0]), float(landing[1]), kill_radius=kill_radius, landing_in_trench=(landing_elev == ELEV_TRENCH), landing_elev=landing_elev))
 
     def _update_grenade_shells(self, dt: float):
         remaining: list[GrenadeShell] = []
@@ -2515,7 +2520,7 @@ class TopowarGameState:
             "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "intended_target": list(ms.intended_target), "owner": ms.owner} for ms in self.mortar_shells],
             "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
             "projectiles": [{"x": p.x, "y": p.y, "dx": p.dx, "dy": p.dy, "owner": p.owner, "source": p.source} for p in self.projectiles],
-            "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration, "kill_radius": e.kill_radius, "landing_in_trench": e.landing_in_trench} for e in self.explosions],
+            "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration, "kill_radius": e.kill_radius, "landing_in_trench": e.landing_in_trench, "landing_elev": e.landing_elev} for e in self.explosions],
             "death_marks": [{"x": dm.x, "y": dm.y, "age": dm.age, "duration": dm.duration} for dm in self.death_marks],
             "time_elapsed": self.time_elapsed,
             "time_remaining": max(0.0, self.rules.match_time_seconds - self.time_elapsed),
