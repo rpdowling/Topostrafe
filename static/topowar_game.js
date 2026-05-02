@@ -27,6 +27,7 @@ let lastStateTime = performance.now();
 let smokeParticles = [];
 let lastSmokeTick = performance.now();
 let poppedAirburstShells = new Set();
+let lastPanelHtml = '';
 let elevMap = new Map();
 
 const CELL = 24;
@@ -2064,17 +2065,16 @@ function updateSelectionPanel() {
   const mg = getSelectedMg();
   const mortar = getSelectedMortar();
 
+  let html = '';
+
   if (!soldier && !mg && !mortar) {
     if (selectedUnits.size > 1) {
       const alive = [...selectedUnits].filter(uid => (tw()?.soldiers || []).some(s => s.unit_id === uid));
-      panel.innerHTML = `<div class="sel-row"><strong>${alive.length}</strong>&nbsp;soldiers selected</div>`;
-      return;
+      html = `<div class="sel-row"><strong>${alive.length}</strong>&nbsp;soldiers selected</div>`;
+    } else {
+      html = '<div class="muted">Nothing selected.</div>';
     }
-    panel.innerHTML = '<div class="muted">Nothing selected.</div>';
-    return;
-  }
-
-  if (soldier) {
+  } else if (soldier) {
     const modeLabel = { select: '—', move: 'Move' };
     const taskLabel = { dig: 'Digging', build_mg: 'Building MG', operate_mg: 'Crewing MG', move: 'Moving' };
     const side = soldier.owner === 0 ? 'Red' : 'Blue';
@@ -2084,7 +2084,7 @@ function updateSelectionPanel() {
     const rangeRow = !soldier.is_grenadier
       ? `<span class="sel-label">Range</span><span class="sel-val">${soldier.range ?? RIFLE_RANGE}</span>`
       : '';
-    panel.innerHTML = `
+    html = `
       <div class="sel-grid">
         <span class="sel-label">Side</span><span class="sel-val">${side}</span>
         <span class="sel-label">Role</span><span class="sel-val">${soldier.is_grenadier ? 'Grenadier' : 'Rifleman'}</span>
@@ -2093,25 +2093,19 @@ function updateSelectionPanel() {
         <span class="sel-label">Mode</span><span class="sel-val">${modeLabel[soldier.mode] || soldier.mode}</span>
         <span class="sel-label">Task</span><span class="sel-val">${tsk}</span>
       </div>${blockedTag}`;
-    return;
-  }
-
-  if (mg) {
+  } else if (mg) {
     const side = mg.owner === 0 ? 'Red' : 'Blue';
     const hp = Math.round((mg.hp / (mg.hp_max || 20)) * 100);
     const ops = (mg.operators || []).length;
     const ffTag = mg.force_target ? '<span class="sel-blocked">Force-fire active</span>' : '';
-    panel.innerHTML = `
+    html = `
       <div class="sel-grid">
         <span class="sel-label">Side</span><span class="sel-val">${side}</span>
         <span class="sel-label">HP</span><span class="sel-val">${hp}%</span>
         <span class="sel-label">Built</span><span class="sel-val">${mg.built ? 'Yes' : 'No'}</span>
         <span class="sel-label">Crew</span><span class="sel-val">${ops}/1</span>
       </div>${ffTag}`;
-    return;
-  }
-
-  if (mortar) {
+  } else if (mortar) {
     const side = mortar.owner === 0 ? 'Red' : 'Blue';
     const hp = Math.round((mortar.hp / (mortar.hp_max || 10)) * 100);
     const ops = (mortar.operators || []).length;
@@ -2126,7 +2120,7 @@ function updateSelectionPanel() {
         <button class="sel-ammo-btn${!isAirburst ? ' active' : ''}" onclick="setMortarRound('he')">HE</button>
         <button class="sel-ammo-btn${isAirburst ? ' active' : ''}" onclick="setMortarRound('airburst')">Airburst</button>
       </div>` : '';
-    panel.innerHTML = `
+    html = `
       <div class="sel-grid">
         <span class="sel-label">Side</span><span class="sel-val">${side}</span>
         <span class="sel-label">HP</span><span class="sel-val">${hp}%</span>
@@ -2134,6 +2128,13 @@ function updateSelectionPanel() {
         <span class="sel-label">Target</span><span class="sel-val">${tgt}</span>
         <span class="sel-label">State</span><span class="sel-val">${stateStr}</span>
       </div>${ammoRow}${operableTag}`;
+  }
+
+  // Only replace DOM when content has actually changed — avoids destroying
+  // button elements mid-click in the 60 fps render loop.
+  if (html !== lastPanelHtml) {
+    lastPanelHtml = html;
+    panel.innerHTML = html;
   }
 }
 
