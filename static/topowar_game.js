@@ -25,6 +25,7 @@ let mouseCanvas = { x: 0, y: 0 };
 
 let lastStateTime = performance.now();
 let smokeParticles = [];
+let smokeLayer = null;  // offscreen canvas for mortar puffs — caps stacking opacity
 let lastSmokeTick = performance.now();
 let poppedAirburstShells = new Set();
 let lastPanelHtml = '';
@@ -2020,7 +2021,7 @@ function draw() {
 
   // Smoke-round zone overlays — grow east then fade from the west
   {
-    const GROW_SPEED = 0.70, FADE_START = 22.0, FADE_SPEED = 1.125;
+    const GROW_SPEED = 0.70, FADE_START = 12.0, FADE_SPEED = 1.125;
     for (const src of data.smoke_sources || []) {
       const { origin_x, origin_y, age, duration } = src;
       if (age >= duration) continue;
@@ -2039,15 +2040,17 @@ function draw() {
     }
   }
 
-  // Smoke particles from mortar/grenade impacts
+  // Smoke particles — explosion/airburst drawn directly; mortar puffs go through an
+  // offscreen canvas so the composite alpha caps at 0.45 regardless of stacking.
   if (smokeParticles.length) {
     ctx.save();
+    // Explosion/airburst smoke: draw directly (brief, stacking is fine)
     for (const p of smokeParticles) {
+      if (p.no_wind) continue;
       const t = p.age / p.maxAge;
       const a = p.alpha * (1 - t * t);
       if (a < 0.015) continue;
-      const dist = p.ox != null ? Math.max(0, p.x - p.ox) / 9 : t;
-      const r = p.r * CELL * (1 + dist * (p.r_grow ?? 1.8));
+      const r = p.r * CELL * (1 + t * (p.r_grow ?? 1.8));
       ctx.globalAlpha = a * 0.7;
       ctx.fillStyle = '#b8a898';
       ctx.beginPath();
@@ -2055,6 +2058,34 @@ function draw() {
       ctx.fill();
     }
     ctx.restore();
+
+    // Mortar smoke puffs: render to offscreen layer, then composite at capped alpha
+    const mortarPuffs = smokeParticles.filter(p => p.no_wind);
+    if (mortarPuffs.length) {
+      if (!smokeLayer || smokeLayer.width !== board.width || smokeLayer.height !== board.height) {
+        smokeLayer = document.createElement('canvas');
+        smokeLayer.width = board.width;
+        smokeLayer.height = board.height;
+      }
+      const sctx = smokeLayer.getContext('2d');
+      sctx.clearRect(0, 0, smokeLayer.width, smokeLayer.height);
+      for (const p of mortarPuffs) {
+        const t = p.age / p.maxAge;
+        const a = p.alpha * (1 - t * t);
+        if (a < 0.015) continue;
+        const dist = Math.max(0, p.x - p.ox) / 9;
+        const r = p.r * CELL * (1 + dist * (p.r_grow ?? 1.8));
+        sctx.globalAlpha = a;
+        sctx.fillStyle = '#b8a898';
+        sctx.beginPath();
+        sctx.arc(cpx(p.x), cpy(p.y), r, 0, Math.PI * 2);
+        sctx.fill();
+      }
+      ctx.save();
+      ctx.globalAlpha = 0.45;
+      ctx.drawImage(smokeLayer, 0, 0);
+      ctx.restore();
+    }
   }
 
   // Death crosses
@@ -2367,7 +2398,7 @@ function updateSmoke() {
   updateSmoke();
   // Spawn billowy puffs from the impact origin; their velocity carries them east to cover the zone.
   // Stop spawning once the fade phase starts — existing long-lived puffs handle the tail.
-  const FADE_START = 22.0;
+  const FADE_START = 12.0;
   for (const src of tw()?.smoke_sources || []) {
     if (src.age >= FADE_START) continue;
     if (Math.random() > 0.10) continue;
