@@ -2434,9 +2434,11 @@ class TopowarGameState:
     def _mortar_smoke_impact(self, landing: tuple[int, int], owner: int):
         """Handle a smoke mortar round landing: kill anyone on the exact tile, then create a smoke source."""
         lx, ly = landing
-        for s in self.soldiers.values():
-            if s.hp > 0 and s.owner != owner and s.tile == landing:
-                self._register_kill(s, owner)
+        bunker_tiles = self._bunker_tile_set()
+        if landing not in bunker_tiles:
+            for s in self.soldiers.values():
+                if s.hp > 0 and s.owner != owner and s.tile == landing:
+                    self._register_kill(s, owner)
         self.smoke_sources.append(SmokeSource(float(lx), float(ly)))
         self.explosions.append(Explosion(float(lx), float(ly), kill_radius=0.0, landing_elev=self.map.elevation_at(landing)))
 
