@@ -2321,16 +2321,23 @@ setupBoardZoomControl();
 applyBoardZoom();
 setInterval(() => send({ type: 'ping' }), 200);
 
+// Mortar smoke puffs — large, billow outward from the impact point.
+// damp_x: 0.05 → max east travel ≈ vx / 0.05 tiles (vx 0.1–0.9 → 2–18 tiles).
+// damp_y: 0.25 → max N/S travel ≈ ±1.6 tiles, covering the ±1 tile zone.
+// no_wind: true → skip the shared eastward wind acceleration.
 function spawnSmokeMortarPuff(gx, gy) {
   smokeParticles.push({
-    x: gx + (Math.random() - 0.5) * 0.8,
-    y: gy + (Math.random() - 0.5) * 0.8,
-    vx: 0.06 + Math.random() * 0.10,
-    vy: (Math.random() - 0.5) * 0.08,
-    alpha: 0.38 + Math.random() * 0.22,
+    x: gx + (Math.random() - 0.5) * 0.4,
+    y: gy + (Math.random() - 0.5) * 0.4,
+    vx: 0.1 + Math.random() * 0.8,
+    vy: (Math.random() - 0.5) * 0.8,
+    alpha: 0.40 + Math.random() * 0.22,
     age: 0,
-    maxAge: 6 + Math.random() * 4,
-    r: 0.45 + Math.random() * 0.40,
+    maxAge: 15 + Math.random() * 8,
+    r: 0.48 + Math.random() * 0.38,
+    damp_x: 0.05,
+    damp_y: 0.25,
+    no_wind: true,
   });
 }
 
@@ -2339,11 +2346,11 @@ function updateSmoke() {
   const dt = Math.min(0.1, (now - lastSmokeTick) / 1000);
   lastSmokeTick = now;
   for (const p of smokeParticles) {
-    p.vx += 0.9 * dt;   // eastward wind
+    if (!p.no_wind) p.vx += 0.9 * dt;
     p.x += p.vx * dt;
     p.y += p.vy * dt;
-    p.vx *= 1 - 3 * dt;
-    p.vy *= 1 - 2 * dt;
+    p.vx *= 1 - (p.damp_x ?? 3) * dt;
+    p.vy *= 1 - (p.damp_y ?? 2) * dt;
     p.age += dt;
   }
   smokeParticles = smokeParticles.filter(p => p.age < p.maxAge);
@@ -2351,20 +2358,13 @@ function updateSmoke() {
 
 (function rafLoop() {
   updateSmoke();
-  // Spawn large billowy puffs from the active (grown) portion of each smoke zone
-  const GROW_SPEED = 2.0, FADE_START = 22.0, FADE_SPEED = 1.25;
+  // Spawn billowy puffs from the impact origin; their velocity carries them east to cover the zone.
+  // Stop spawning once the fade phase starts — existing long-lived puffs handle the tail.
+  const FADE_START = 22.0;
   for (const src of tw()?.smoke_sources || []) {
-    if (src.age >= src.duration) continue;
-    if (Math.random() > 0.4) continue;
-    const grown = Math.min(10, Math.floor(src.age * GROW_SPEED) + 1);
-    const faded = src.age > FADE_START ? Math.min(grown, Math.floor((src.age - FADE_START) * FADE_SPEED)) : 0;
-    const active = grown - faded;
-    if (active <= 0) continue;
-    const x0 = Math.round(src.origin_x) + faded;
-    const yCtr = Math.round(src.origin_y);
-    const px = x0 + Math.random() * active;
-    const py = yCtr + (Math.random() * 3 - 1.5);
-    spawnSmokeMortarPuff(px + 0.5, py + 0.5);
+    if (src.age >= FADE_START) continue;
+    if (Math.random() > 0.35) continue;
+    spawnSmokeMortarPuff(src.origin_x + 0.5, src.origin_y + 0.5);
   }
   if (state) render();
   requestAnimationFrame(rafLoop);
