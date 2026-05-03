@@ -34,11 +34,11 @@ SOLDIER_NAMES = [
 
 @dataclass
 class RulesConfig:
-    map_width: int = 40
+    map_width: int = 60
     map_height: int = 40
     default_elevation: int = 4
     tick_rate: int = 20
-    dig_seconds_per_tile: float = 5.0
+    dig_seconds_per_tile: float = 4.0
     mg_build_seconds: float = 30.0
     match_time_seconds: int = 1200
     build_phase_seconds: int = 180
@@ -161,7 +161,7 @@ class Mortar(Structure):
     operators: set[int] = field(default_factory=set)
     base_elevation: int = ELEV_GROUND
     operable: bool = True
-    round_type: str = 'he'     # 'he' or 'airburst'
+    round_type: str = 'he'     # 'he', 'airburst', or 'smoke'
 
 
 @dataclass
@@ -198,7 +198,7 @@ class MortarShell:
     target: tuple[int, int]           # actual (possibly scattered) landing tile
     intended_target: tuple[int, int]  # pre-scatter aim point — used for LOS rules
     speed: float = 5.0
-    round_type: str = 'he'            # 'he' or 'airburst'
+    round_type: str = 'he'            # 'he', 'airburst', or 'smoke'
     popped: bool = False              # airburst: True once shell has "popped" at 75%
     detonate_after: float = 0.0      # airburst: seconds until detonation after pop
 
@@ -223,6 +223,15 @@ class FlareShell:
     sy: float
     target: tuple[int, int]
     speed: float = 2.5
+
+
+@dataclass
+class SmokeSource:
+    origin_x: float
+    origin_y: float
+    ns_offset: float   # total N/S drift in tiles (+south / −north), reached after 10 s
+    age: float = 0.0
+    duration: float = 30.0
 
 
 @dataclass
@@ -404,6 +413,7 @@ class TopowarGameState:
         self.mortar_shells: list[MortarShell] = []
         self.grenade_shells: list[GrenadeShell] = []
         self.flare_shells: list[FlareShell] = []
+        self.smoke_sources: list[SmokeSource] = []
         self.flares_remaining: dict[int, int] = {0: 5, 1: 5}
         self.build_sandbags_remaining: dict[int, int] = {0: 30, 1: 30}
         self.build_wire_remaining: dict[int, int] = {0: 40, 1: 40}
@@ -730,6 +740,8 @@ class TopowarGameState:
             self.build_bunkers_remaining = {0: 0, 1: 0}
         if not hasattr(self, "muzzle_flashes"):
             self.muzzle_flashes = []
+        if not hasattr(self, "smoke_sources"):
+            self.smoke_sources = []
 
     def _crew_positions_for_mg(self, mg: "MachineGun") -> list[tuple[int, int]]:
         """Tiles where crew can stand to operate this MG.
@@ -1327,7 +1339,7 @@ class TopowarGameState:
             if not mortar or mortar.owner != owner:
                 raise ValueError("Mortar not found.")
             round_type = action.get("round_type", "he")
-            if round_type not in ("he", "airburst"):
+            if round_type not in ("he", "airburst", "smoke"):
                 raise ValueError("Invalid round type.")
             if mortar.round_type == round_type:
                 return "Round type unchanged."
@@ -1408,7 +1420,7 @@ class TopowarGameState:
                 raise ValueError("Invalid flare target.")
             src = (float(officer.tile[0]), float(officer.tile[1]))
             dist = math.dist(src, target)
-            scatter_radius = 3.0 + max(0.0, math.floor(max(0.0, dist - 10.0) / 5.0))
+            scatter_radius = 2.0 + max(0.0, math.floor(max(0.0, dist - 10.0) / 5.0))
             angle = self.random.uniform(0.0, 2.0 * math.pi)
             scatter = self.random.uniform(0.0, scatter_radius)
             lx = int(round(target[0] + math.cos(angle) * scatter))
@@ -1695,6 +1707,7 @@ class TopowarGameState:
     def _rifle_combat(self, dt: float):
         if self.time_elapsed < self.rules.build_phase_seconds:
             return
+        smoke_tiles = self._smoke_blocked_tiles()
         for s in self.soldiers.values():
             if s.hp <= 0 or s.is_grenadier:
                 continue
@@ -1712,6 +1725,7 @@ class TopowarGameState:
                     and s2.tile not in self.map.trenches
                     and math.dist(s.tile, s2.tile) <= self._soldier_effective_range(s, s2.tile)
                     and self._has_combat_los(s.tile, s2.tile)
+                    and not self._has_smoke_between(s.tile, s2.tile, smoke_tiles)
                     for s2 in self.soldiers.values()
                 )
                 s.combat_halt = open_enemy_near
@@ -1734,6 +1748,8 @@ class TopowarGameState:
                 continue
             s_elev = self.map.elevation_at(s.tile)
             if not self._has_combat_los(s.tile, target_tile):
+                continue
+            if self._has_smoke_between(s.tile, target_tile, smoke_tiles):
                 continue
 
             # Hit chance: 25% when moving through open ground toward a trench enemy;
@@ -1928,6 +1944,7 @@ class TopowarGameState:
     def _update_mgs(self, dt: float):
         if self.time_elapsed < self.rules.build_phase_seconds:
             return
+        smoke_tiles = self._smoke_blocked_tiles()
         for mg in self.mgs.values():
             if mg.hp <= 0 or not mg.built:
                 continue
@@ -1952,6 +1969,8 @@ class TopowarGameState:
                         continue  # open-ground MG cannot see into trenches
                     if not self._has_combat_los(mg.tile, sv.tile):
                         continue  # blocked by terrain above target's elevation
+                    if self._has_smoke_between(mg.tile, sv.tile, smoke_tiles):
+                        continue  # blocked by smoke
                     if not self._soldier_visible_to(sv, mg.owner):
                         continue
                     d = math.dist(sv.tile, mg.tile)
@@ -1983,7 +2002,8 @@ class TopowarGameState:
             tgt_elev = self.map.elevation_at(target)
             can_fire = (tgt_elev <= mg_elev
                         and not (tgt_elev == ELEV_TRENCH and mg_elev > ELEV_TRENCH)
-                        and self._has_combat_los(mg.tile, target))
+                        and self._has_combat_los(mg.tile, target)
+                        and not self._has_smoke_between(mg.tile, target, smoke_tiles))
             # Start a new burst cycle when cooldown expires
             if can_fire and mg.cooldown <= 0 and mg.burst_left <= 0:
                 mg.burst_left = 3
@@ -2242,7 +2262,10 @@ class TopowarGameState:
             dist = math.hypot(dx, dy)
             step = shell.speed * dt
             if dist <= step:
-                self._mortar_impact(shell.target, shell.owner, airburst=is_airburst)
+                if shell.round_type == 'smoke':
+                    self._mortar_smoke_impact(shell.target, shell.owner)
+                else:
+                    self._mortar_impact(shell.target, shell.owner, airburst=is_airburst)
                 continue
             shell.x += dx / dist * step
             shell.y += dy / dist * step
@@ -2271,7 +2294,9 @@ class TopowarGameState:
                     and curr_tile != origin_tile
                     and curr_tile != shell.target
                     and curr_tile in self.map.mountains):
-                if is_airburst:
+                if shell.round_type == 'smoke':
+                    self._mortar_smoke_impact(curr_tile, shell.owner)
+                elif is_airburst:
                     # Airburst clipping a mountain en-route: detonate like a grenade
                     # (2-tile same-elevation blast, no terrain damage).
                     self._grenade_impact(curr_tile, shell.owner)
@@ -2352,6 +2377,67 @@ class TopowarGameState:
                 ))
                 s.grenade_target = None
                 s.grenade_windup = 0.0
+
+    _SMOKE_DRIFT_SPEED = 0.3  # tiles per second eastward
+
+    def _smoke_blocked_tiles(self) -> set[tuple[int, int]]:
+        """Tiles currently obscured by smoke-round sources (blocks rifle/MG LOS)."""
+        result: set[tuple[int, int]] = set()
+        for src in self.smoke_sources:
+            drift_x = src.age * self._SMOKE_DRIFT_SPEED
+            ns_frac = min(src.age / 10.0, 1.0)
+            center_y = src.origin_y + src.ns_offset * ns_frac
+            x0 = int(math.floor(src.origin_x + drift_x))
+            y_center = int(round(center_y))
+            for x in range(x0, x0 + 10):
+                for y in range(y_center - 1, y_center + 2):
+                    if self.map.in_bounds((x, y)):
+                        result.add((x, y))
+        return result
+
+    def _has_smoke_between(self, a: tuple[int, int], b: tuple[int, int], smoke_tiles: set[tuple[int, int]]) -> bool:
+        """True if the Bresenham line from a to b (inclusive) passes through a smoke tile."""
+        if not smoke_tiles:
+            return False
+        x0, y0 = a
+        x1, y1 = b
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x1 >= x0 else -1
+        sy = 1 if y1 >= y0 else -1
+        err = dx - dy
+        cx, cy = x0, y0
+        while True:
+            if (cx, cy) in smoke_tiles:
+                return True
+            if (cx, cy) == (x1, y1):
+                return False
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                cx += sx
+            if e2 < dx:
+                err += dx
+                cy += sy
+
+    def _update_smoke_sources(self, dt: float):
+        remaining = []
+        for src in self.smoke_sources:
+            src.age += dt
+            if src.age < src.duration:
+                remaining.append(src)
+        self.smoke_sources = remaining
+
+    def _mortar_smoke_impact(self, landing: tuple[int, int], owner: int):
+        """Handle a smoke mortar round landing: kill anyone on the exact tile, then create a smoke source."""
+        lx, ly = landing
+        for s in self.soldiers.values():
+            if s.hp > 0 and s.owner != owner and s.tile == landing:
+                self._register_kill(s, owner)
+        ns_mag = self.random.uniform(1.0, 2.0)
+        ns_offset = ns_mag * self.random.choice([-1.0, 1.0])
+        self.smoke_sources.append(SmokeSource(float(lx), float(ly), ns_offset))
+        self.explosions.append(Explosion(float(lx), float(ly), kill_radius=0.0, landing_elev=self.map.elevation_at(landing)))
 
     def _illuminated_tiles(self) -> set[tuple[int, int]]:
         """Tiles currently lit by in-flight flares (for fog-of-war override)."""
@@ -2473,6 +2559,7 @@ class TopowarGameState:
         self._update_grenadiers(dt)
         self._update_grenade_shells(dt)
         self._update_flare_shells(dt)
+        self._update_smoke_sources(dt)
         self._update_projectiles(dt)
         self._update_effects(dt)
         alive0 = sum(1 for s in self.soldiers.values() if s.owner == 0 and s.hp > 0)
@@ -2681,6 +2768,7 @@ class TopowarGameState:
             "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration, "kill_radius": e.kill_radius, "landing_in_trench": e.landing_in_trench, "landing_elev": e.landing_elev, "collapsed_trenches": [list(t) for t in e.collapsed_trenches], "airburst": e.airburst} for e in self.explosions],
             "death_marks": [{"x": dm.x, "y": dm.y, "age": dm.age, "duration": dm.duration} for dm in self.death_marks],
             "muzzle_flashes": [{"x": mf.x, "y": mf.y, "dx": mf.dx, "dy": mf.dy, "owner": mf.owner, "age": mf.age, "duration": mf.duration} for mf in self.muzzle_flashes],
+            "smoke_sources": [{"origin_x": ss.origin_x, "origin_y": ss.origin_y, "ns_offset": ss.ns_offset, "age": ss.age, "duration": ss.duration} for ss in self.smoke_sources],
             "time_elapsed": self.time_elapsed,
             "time_remaining": max(0.0, self.rules.match_time_seconds - self.time_elapsed),
             "recruit_timers": {
