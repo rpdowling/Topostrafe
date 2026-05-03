@@ -229,7 +229,6 @@ class FlareShell:
 class SmokeSource:
     origin_x: float
     origin_y: float
-    ns_offset: float   # total N/S drift in tiles (+south / −north), reached after 10 s
     age: float = 0.0
     duration: float = 30.0
 
@@ -2378,18 +2377,22 @@ class TopowarGameState:
                 s.grenade_target = None
                 s.grenade_windup = 0.0
 
-    _SMOKE_DRIFT_SPEED = 0.3  # tiles per second eastward
+    # Smoke zone grows east at 2 tiles/sec (full 10 tiles in ~5 s), starts at 1 tile.
+    # Fade starts at 22 s and clears tiles from the west at 1.25 tiles/sec (done by 30 s).
+    _SMOKE_GROW_SPEED = 2.0
+    _SMOKE_FADE_START = 22.0
+    _SMOKE_FADE_SPEED = 1.25
 
     def _smoke_blocked_tiles(self) -> set[tuple[int, int]]:
         """Tiles currently obscured by smoke-round sources (blocks rifle/MG LOS)."""
         result: set[tuple[int, int]] = set()
         for src in self.smoke_sources:
-            drift_x = src.age * self._SMOKE_DRIFT_SPEED
-            ns_frac = min(src.age / 10.0, 1.0)
-            center_y = src.origin_y + src.ns_offset * ns_frac
-            x0 = int(math.floor(src.origin_x + drift_x))
-            y_center = int(round(center_y))
-            for x in range(x0, x0 + 10):
+            grown = min(10, int(src.age * self._SMOKE_GROW_SPEED) + 1)
+            faded = min(grown, int((src.age - self._SMOKE_FADE_START) * self._SMOKE_FADE_SPEED)) \
+                if src.age > self._SMOKE_FADE_START else 0
+            x0 = int(round(src.origin_x))
+            y_center = int(round(src.origin_y))
+            for x in range(x0 + faded, x0 + grown):
                 for y in range(y_center - 1, y_center + 2):
                     if self.map.in_bounds((x, y)):
                         result.add((x, y))
@@ -2434,9 +2437,7 @@ class TopowarGameState:
         for s in self.soldiers.values():
             if s.hp > 0 and s.owner != owner and s.tile == landing:
                 self._register_kill(s, owner)
-        ns_mag = self.random.uniform(1.0, 2.0)
-        ns_offset = ns_mag * self.random.choice([-1.0, 1.0])
-        self.smoke_sources.append(SmokeSource(float(lx), float(ly), ns_offset))
+        self.smoke_sources.append(SmokeSource(float(lx), float(ly)))
         self.explosions.append(Explosion(float(lx), float(ly), kill_radius=0.0, landing_elev=self.map.elevation_at(landing)))
 
     def _illuminated_tiles(self) -> set[tuple[int, int]]:
@@ -2768,7 +2769,7 @@ class TopowarGameState:
             "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration, "kill_radius": e.kill_radius, "landing_in_trench": e.landing_in_trench, "landing_elev": e.landing_elev, "collapsed_trenches": [list(t) for t in e.collapsed_trenches], "airburst": e.airburst} for e in self.explosions],
             "death_marks": [{"x": dm.x, "y": dm.y, "age": dm.age, "duration": dm.duration} for dm in self.death_marks],
             "muzzle_flashes": [{"x": mf.x, "y": mf.y, "dx": mf.dx, "dy": mf.dy, "owner": mf.owner, "age": mf.age, "duration": mf.duration} for mf in self.muzzle_flashes],
-            "smoke_sources": [{"origin_x": ss.origin_x, "origin_y": ss.origin_y, "ns_offset": ss.ns_offset, "age": ss.age, "duration": ss.duration} for ss in self.smoke_sources],
+            "smoke_sources": [{"origin_x": ss.origin_x, "origin_y": ss.origin_y, "age": ss.age, "duration": ss.duration} for ss in self.smoke_sources],
             "time_elapsed": self.time_elapsed,
             "time_remaining": max(0.0, self.rules.match_time_seconds - self.time_elapsed),
             "recruit_timers": {
