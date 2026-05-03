@@ -2018,23 +2018,21 @@ function draw() {
     ctx.globalAlpha = 1;
   }
 
-  // Smoke-round zone overlays (server-driven, tile-accurate)
+  // Smoke-round zone overlays — grow east then fade from the west
   {
-    const SMOKE_DRIFT_SPEED = 0.3;
+    const GROW_SPEED = 2.0, FADE_START = 22.0, FADE_SPEED = 1.25;
     for (const src of data.smoke_sources || []) {
-      const { origin_x, origin_y, ns_offset, age, duration } = src;
+      const { origin_x, origin_y, age, duration } = src;
       if (age >= duration) continue;
-      const driftX = age * SMOKE_DRIFT_SPEED;
-      const nsFrac = Math.min(age / 10.0, 1.0);
-      const centerY = origin_y + ns_offset * nsFrac;
-      const x0 = Math.floor(origin_x + driftX);
-      const yCtr = Math.round(centerY);
-      const fadeStart = duration - 8;
-      const alpha = age > fadeStart ? 0.52 * (1 - (age - fadeStart) / 8) : 0.52;
+      const grown = Math.min(10, Math.floor(age * GROW_SPEED) + 1);
+      const faded = age > FADE_START ? Math.min(grown, Math.floor((age - FADE_START) * FADE_SPEED)) : 0;
+      if (grown <= faded) continue;
+      const x0 = Math.round(origin_x);
+      const yCtr = Math.round(origin_y);
       ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = '#d0d0c8';
-      for (let x = x0; x < x0 + 10; x++) {
+      ctx.globalAlpha = 0.13;
+      ctx.fillStyle = '#c8c8be';
+      for (let x = x0 + faded; x < x0 + grown; x++) {
         for (let y = yCtr - 1; y <= yCtr + 1; y++) {
           ctx.fillRect(OX + x * CELL, tileTop(y), CELL, CELL);
         }
@@ -2323,6 +2321,19 @@ setupBoardZoomControl();
 applyBoardZoom();
 setInterval(() => send({ type: 'ping' }), 200);
 
+function spawnSmokeMortarPuff(gx, gy) {
+  smokeParticles.push({
+    x: gx + (Math.random() - 0.5) * 0.8,
+    y: gy + (Math.random() - 0.5) * 0.8,
+    vx: 0.06 + Math.random() * 0.10,
+    vy: (Math.random() - 0.5) * 0.08,
+    alpha: 0.38 + Math.random() * 0.22,
+    age: 0,
+    maxAge: 6 + Math.random() * 4,
+    r: 0.45 + Math.random() * 0.40,
+  });
+}
+
 function updateSmoke() {
   const now = performance.now();
   const dt = Math.min(0.1, (now - lastSmokeTick) / 1000);
@@ -2340,19 +2351,20 @@ function updateSmoke() {
 
 (function rafLoop() {
   updateSmoke();
-  // Spawn drifting particles from active server-side smoke zones
-  const SMOKE_DRIFT_SPEED = 0.3;
+  // Spawn large billowy puffs from the active (grown) portion of each smoke zone
+  const GROW_SPEED = 2.0, FADE_START = 22.0, FADE_SPEED = 1.25;
   for (const src of tw()?.smoke_sources || []) {
     if (src.age >= src.duration) continue;
     if (Math.random() > 0.4) continue;
-    const driftX = src.age * SMOKE_DRIFT_SPEED;
-    const nsFrac = Math.min(src.age / 10.0, 1.0);
-    const centerY = src.origin_y + src.ns_offset * nsFrac;
-    const x0 = Math.floor(src.origin_x + driftX);
-    const yCtr = Math.round(centerY);
-    const px = x0 + Math.random() * 10;
+    const grown = Math.min(10, Math.floor(src.age * GROW_SPEED) + 1);
+    const faded = src.age > FADE_START ? Math.min(grown, Math.floor((src.age - FADE_START) * FADE_SPEED)) : 0;
+    const active = grown - faded;
+    if (active <= 0) continue;
+    const x0 = Math.round(src.origin_x) + faded;
+    const yCtr = Math.round(src.origin_y);
+    const px = x0 + Math.random() * active;
     const py = yCtr + (Math.random() * 3 - 1.5);
-    spawnAirburstTileSmoke(px + 0.5, py + 0.5);
+    spawnSmokeMortarPuff(px + 0.5, py + 0.5);
   }
   if (state) render();
   requestAnimationFrame(rafLoop);
