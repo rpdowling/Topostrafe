@@ -2320,23 +2320,23 @@ applyBoardZoom();
 setInterval(() => send({ type: 'ping' }), 200);
 
 // Mortar smoke puffs — originate at impact, drift east to fill the 1×9 zone.
-// r_grow: 0.4  → max size = r * CELL * 1.4 (vs default 2.8), keeps puffs narrow.
-// damp_x: 0.05 → max east travel ≈ vx / 0.05 tiles (vx 0.1–0.9 → 2–18 tiles).
-// damp_y: 0.6  → max N/S travel < 0.05 tiles — puffs stay on the row.
+// r_grow: 0.6  → max size = r * CELL * 1.6, gives billowy expansion.
+// damp_x: 0.10 → max east travel ≈ vx / 0.10 tiles (vx 0.5–1.7 → 5–17 tiles).
+// damp_y: 0.9  → strong vertical damping keeps puffs on the row.
 // no_wind: true → skip the shared eastward wind acceleration.
 function spawnSmokeMortarPuff(gx, gy) {
   smokeParticles.push({
-    x: gx + (Math.random() - 0.5) * 0.1,
-    y: gy + (Math.random() - 0.5) * 0.1,
-    vx: 0.3 + Math.random() * 0.8,
-    vy: (Math.random() - 0.5) * 0.05,
-    alpha: 0.07 + Math.random() * 0.07,
+    x: gx + (Math.random() - 0.5) * 0.2,
+    y: gy + (Math.random() - 0.5) * 0.2,
+    vx: 0.5 + Math.random() * 1.2,
+    vy: (Math.random() - 0.5) * 0.10,
+    alpha: 0.18 + Math.random() * 0.12,
     age: 0,
-    maxAge: 8 + Math.random() * 5,
-    r: 0.07 + Math.random() * 0.05,
-    r_grow: 0.4,
-    damp_x: 0.05,
-    damp_y: 0.6,
+    maxAge: 10 + Math.random() * 5,
+    r: 0.28 + Math.random() * 0.18,
+    r_grow: 0.6,
+    damp_x: 0.10,
+    damp_y: 0.9,
     no_wind: true,
   });
 }
@@ -2363,7 +2363,7 @@ function updateSmoke() {
   const FADE_START = 22.0;
   for (const src of tw()?.smoke_sources || []) {
     if (src.age >= FADE_START) continue;
-    if (Math.random() > 0.05) continue;
+    if (Math.random() > 0.10) continue;
     spawnSmokeMortarPuff(src.origin_x + 0.5, src.origin_y + 0.5);
   }
   if (state) render();
