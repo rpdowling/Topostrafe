@@ -1816,11 +1816,28 @@ class TopowarGameState:
                 if not in_position:
                     if not s.path:
                         goals = [t for t in adj4_tgt if self.map.in_bounds(t)]
-                        if goals:
-                            goal = min(goals, key=lambda g: math.dist(s.tile, g))
-                            s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
-                        else:
+                        if not goals:
                             s.current_task = None
+                        else:
+                            # Try all adjacent goals (nearest first); skip tile if none reachable
+                            best = None
+                            for g in sorted(goals, key=lambda g: math.dist(s.tile, g)):
+                                p = self.path.find_path(s.tile, g, trench_only=False, blocked=blocked_keys - {s.tile})
+                                if p:
+                                    best = p
+                                    break
+                            if best:
+                                s.path = best
+                            else:
+                                # All approaches blocked — skip this dig tile and move to next
+                                plan = task.get("plan", [])
+                                if plan:
+                                    plan.pop(0)
+                                if not plan:
+                                    s.current_task = None
+                                else:
+                                    task["target"] = list(plan[0])
+                                    task["progress"] = 0.0
                     continue
                 task["progress"] = task.get("progress", 0.0) + dt
                 if task["progress"] >= self.rules.dig_seconds_per_tile:
@@ -1855,7 +1872,19 @@ class TopowarGameState:
                     continue
                 build_tile = tuple(task.get("build_tile", s.tile))
                 if s.tile != build_tile:
-                    s.path = self.path.find_path(s.tile, build_tile, trench_only=False, blocked=blocked_keys - {s.tile})
+                    if not s.path:
+                        s.path = self.path.find_path(s.tile, build_tile, trench_only=False, blocked=blocked_keys - {s.tile})
+                        if not s.path:
+                            # Primary build position unreachable — try alternatives
+                            for spot in sorted(self._build_positions_for_mg(mg.tile),
+                                               key=lambda g: math.dist(s.tile, g)):
+                                if list(spot) == task.get("build_tile"):
+                                    continue
+                                p = self.path.find_path(s.tile, spot, trench_only=False, blocked=blocked_keys - {s.tile})
+                                if p:
+                                    task["build_tile"] = list(spot)
+                                    s.path = p
+                                    break
                 adj = [u for u in self.soldiers.values() if u.hp > 0 and u.owner == mg.owner and 0 < math.dist(u.tile, mg.tile) <= 1.5]
                 if len(adj) >= mg.required_staff:
                     mg.build_progress += dt

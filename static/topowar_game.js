@@ -30,6 +30,8 @@ let lastSmokeTick = performance.now();
 let poppedAirburstShells = new Set();
 let lastPanelHtml = '';
 let elevMap = new Map();
+const pendingWaypoints = new Map(); // unit_id → [[x,y],...] queued after current path
+let planDragging = false;
 
 const CELL = 24;
 const OX = 20;
@@ -202,6 +204,18 @@ function connect() {
         }
       }
       reconcilePendingBuildState();
+      // Drain waypoint queues: send next waypoint when a unit finishes its current path
+      for (const s of state?.topowar?.soldiers || []) {
+        if (s.owner !== mySeat()) continue;
+        const queue = pendingWaypoints.get(s.unit_id);
+        if (!queue || queue.length === 0) continue;
+        const idle = (!s.path || s.path.length === 0) &&
+                     (!s.current_task || s.current_task.type === 'move');
+        if (idle) {
+          const next = queue.shift();
+          send({ type: 'tw_move_unit', unit_id: s.unit_id, tile: next });
+        }
+      }
       render();
     } else if (payload.type === 'error') {
       pendingMgDispatch = false;
@@ -493,9 +507,21 @@ board.addEventListener('click', (evt) => {
         // Clicking a friendly soldier: change selection instead of moving
         selectedUnits = new Set([myS[0].unit_id]);
       } else if (soldiersAt(tile).length === 0 && !tileHasEquipment(tile)) {
-        // Empty tile: send move orders
-        for (const uid of selectedUnits) send({ type: 'tw_move_unit', unit_id: uid, tile });
-        selectedUnits = new Set();
+        if (evt.shiftKey) {
+          // Shift+click: queue a waypoint — unit will move here after completing current path
+          for (const uid of selectedUnits) {
+            if (!pendingWaypoints.has(uid)) pendingWaypoints.set(uid, []);
+            pendingWaypoints.get(uid).push(tile);
+          }
+          // Keep selection so the player can keep queueing further waypoints
+        } else {
+          // Regular click: immediate move order, clear any queued waypoints
+          for (const uid of selectedUnits) {
+            send({ type: 'tw_move_unit', unit_id: uid, tile });
+            pendingWaypoints.delete(uid);
+          }
+          selectedUnits = new Set();
+        }
       }
     } else if (myS.length) {
       // Nothing selected (or Ctrl held): click to select/toggle
@@ -522,10 +548,7 @@ board.addEventListener('click', (evt) => {
       selectedUnits = new Set([uid]);
       if (plan.length) { send({ type: 'tw_assign_dig', unit_id: uid, plan: [...plan] }); plan = []; }
     } else {
-      const last = plan[plan.length - 1];
-      if (!last || Math.abs(last[0]-tile[0]) + Math.abs(last[1]-tile[1]) === 1) {
-        if (!last || last[0] !== tile[0] || last[1] !== tile[1]) plan.push(tile);
-      }
+      addToPlan(tile);
     }
 
   } else if (mode === 'build') {
@@ -783,10 +806,37 @@ board.addEventListener('contextmenu', (evt) => {
   }
 });
 
+// Adds a tile to the plan, walking tile-by-tile from the last entry so the
+// chain is always 4-connected (handles fast drags that skip tiles).
+function addToPlan(tile) {
+  const last = plan[plan.length - 1];
+  if (!last) { plan.push(tile); return; }
+  if (last[0] === tile[0] && last[1] === tile[1]) return;
+  // Walk from last to tile: horizontal first, then vertical
+  let cx = last[0], cy = last[1];
+  const tx = tile[0], ty = tile[1];
+  while (cx !== tx || cy !== ty) {
+    if (cx !== tx) cx += (tx > cx ? 1 : -1);
+    else cy += (ty > cy ? 1 : -1);
+    const prev = plan[plan.length - 1];
+    if (prev[0] === cx && prev[1] === cy) continue;
+    plan.push([cx, cy]);
+  }
+}
+
+board.addEventListener('mousedown', (evt) => {
+  if (mode === 'plan' && evt.button === 0) planDragging = true;
+});
+board.addEventListener('mouseup', () => { planDragging = false; });
+
 board.addEventListener('mousemove', (evt) => {
   const r = board.getBoundingClientRect();
   mouseCanvas.x = (evt.clientX - r.left) * (board.width / r.width);
   mouseCanvas.y = (evt.clientY - r.top) * (board.height / r.height);
+  if (mode === 'plan' && planDragging) {
+    const tile = tileFromEvent(evt);
+    if (tile) { addToPlan(tile); render(); }
+  }
   if (mode === 'build' && pendingBuildTile && pendingBuildFacing === null) render();
   if (mode === 'mortar' && pendingMortarTile && !pendingMortarTarget) render();
   if (retargetMortarId !== null) render();
@@ -1507,6 +1557,27 @@ function draw() {
       for (const p of s.path) ctx.lineTo(cpx(p[0]), cpy(p[1]));
       ctx.stroke();
       ctx.setLineDash([]);
+    }
+    // Queued waypoints: fainter chain continuing from path end
+    if (s.owner === mySeat()) {
+      const queue = pendingWaypoints.get(s.unit_id);
+      if (queue && queue.length) {
+        const last = s.path && s.path.length ? s.path[s.path.length - 1] : s.tile;
+        ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 5]);
+        ctx.beginPath();
+        ctx.moveTo(cpx(last[0]), cpy(last[1]));
+        for (const wp of queue) ctx.lineTo(cpx(wp[0]), cpy(wp[1]));
+        ctx.stroke();
+        ctx.setLineDash([]);
+        for (const wp of queue) {
+          ctx.fillStyle = 'rgba(255,255,255,0.4)';
+          ctx.beginPath();
+          ctx.arc(cpx(wp[0]), cpy(wp[1]), 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
     }
 
     // Selection box
