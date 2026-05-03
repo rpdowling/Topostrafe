@@ -2328,7 +2328,7 @@ function spawnSmokeMortarPuff(gx, gy) {
   smokeParticles.push({
     x: gx + (Math.random() - 0.5) * 0.1,
     y: gy + (Math.random() - 0.5) * 0.1,
-    vx: 0.1 + Math.random() * 0.8,
+    vx: 0.3 + Math.random() * 0.8,
     vy: (Math.random() - 0.5) * 0.05,
     alpha: 0.07 + Math.random() * 0.07,
     age: 0,
@@ -2363,7 +2363,7 @@ function updateSmoke() {
   const FADE_START = 22.0;
   for (const src of tw()?.smoke_sources || []) {
     if (src.age >= FADE_START) continue;
-    if (Math.random() > 0.35) continue;
+    if (Math.random() > 0.05) continue;
     spawnSmokeMortarPuff(src.origin_x + 0.5, src.origin_y + 0.5);
   }
   if (state) render();
