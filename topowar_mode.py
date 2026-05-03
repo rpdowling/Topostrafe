@@ -2439,7 +2439,8 @@ class TopowarGameState:
                 if s.hp > 0 and s.owner != owner and s.tile == landing:
                     self._register_kill(s, owner)
         self.smoke_sources.append(SmokeSource(float(lx), float(ly)))
-        self.explosions.append(Explosion(float(lx), float(ly), kill_radius=0.0, landing_elev=self.map.elevation_at(landing)))
+        # No Explosion record: the growing smoke_sources zone is the visual feedback.
+        # Adding one would trigger spawnSmoke() on the client which floods large opaque particles.
 
     def _illuminated_tiles(self) -> set[tuple[int, int]]:
         """Tiles currently lit by in-flight flares (for fog-of-war override)."""
