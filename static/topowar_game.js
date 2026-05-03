@@ -2020,22 +2020,20 @@ function draw() {
 
   // Smoke-round zone overlays — grow east then fade from the west
   {
-    const GROW_SPEED = 2.0, FADE_START = 22.0, FADE_SPEED = 1.25;
+    const GROW_SPEED = 2.0, FADE_START = 22.0, FADE_SPEED = 1.125;
     for (const src of data.smoke_sources || []) {
       const { origin_x, origin_y, age, duration } = src;
       if (age >= duration) continue;
-      const grown = Math.min(10, Math.floor(age * GROW_SPEED) + 1);
+      const grown = Math.min(9, Math.floor(age * GROW_SPEED) + 1);
       const faded = age > FADE_START ? Math.min(grown, Math.floor((age - FADE_START) * FADE_SPEED)) : 0;
       if (grown <= faded) continue;
       const x0 = Math.round(origin_x);
       const yCtr = Math.round(origin_y);
       ctx.save();
-      ctx.globalAlpha = 0.13;
+      ctx.globalAlpha = 0.10;
       ctx.fillStyle = '#c8c8be';
       for (let x = x0 + faded; x < x0 + grown; x++) {
-        for (let y = yCtr - 1; y <= yCtr + 1; y++) {
-          ctx.fillRect(OX + x * CELL, tileTop(y), CELL, CELL);
-        }
+        ctx.fillRect(OX + x * CELL, tileTop(yCtr), CELL, CELL);
       }
       ctx.restore();
     }
@@ -2323,15 +2321,15 @@ setInterval(() => send({ type: 'ping' }), 200);
 
 // Mortar smoke puffs — large, billow outward from the impact point.
 // damp_x: 0.05 → max east travel ≈ vx / 0.05 tiles (vx 0.1–0.9 → 2–18 tiles).
-// damp_y: 0.25 → max N/S travel ≈ ±1.6 tiles, covering the ±1 tile zone.
+// damp_y: 0.25 → max N/S travel ≈ ±1 tile around the single-row zone.
 // no_wind: true → skip the shared eastward wind acceleration.
 function spawnSmokeMortarPuff(gx, gy) {
   smokeParticles.push({
     x: gx + (Math.random() - 0.5) * 0.4,
     y: gy + (Math.random() - 0.5) * 0.4,
     vx: 0.1 + Math.random() * 0.8,
-    vy: (Math.random() - 0.5) * 0.8,
-    alpha: 0.40 + Math.random() * 0.22,
+    vy: (Math.random() - 0.5) * 0.5,
+    alpha: 0.22 + Math.random() * 0.14,
     age: 0,
     maxAge: 15 + Math.random() * 8,
     r: 0.48 + Math.random() * 0.38,

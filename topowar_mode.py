@@ -2377,25 +2377,24 @@ class TopowarGameState:
                 s.grenade_target = None
                 s.grenade_windup = 0.0
 
-    # Smoke zone grows east at 2 tiles/sec (full 10 tiles in ~5 s), starts at 1 tile.
-    # Fade starts at 22 s and clears tiles from the west at 1.25 tiles/sec (done by 30 s).
+    # Smoke zone grows east at 2 tiles/sec (full 9 tiles in ~4.5 s), starts at 1 tile.
+    # Fade starts at 22 s and clears tiles from the west at 1.125 tiles/sec (done by 30 s).
     _SMOKE_GROW_SPEED = 2.0
     _SMOKE_FADE_START = 22.0
-    _SMOKE_FADE_SPEED = 1.25
+    _SMOKE_FADE_SPEED = 1.125
 
     def _smoke_blocked_tiles(self) -> set[tuple[int, int]]:
         """Tiles currently obscured by smoke-round sources (blocks rifle/MG LOS)."""
         result: set[tuple[int, int]] = set()
         for src in self.smoke_sources:
-            grown = min(10, int(src.age * self._SMOKE_GROW_SPEED) + 1)
+            grown = min(9, int(src.age * self._SMOKE_GROW_SPEED) + 1)
             faded = min(grown, int((src.age - self._SMOKE_FADE_START) * self._SMOKE_FADE_SPEED)) \
                 if src.age > self._SMOKE_FADE_START else 0
             x0 = int(round(src.origin_x))
             y_center = int(round(src.origin_y))
             for x in range(x0 + faded, x0 + grown):
-                for y in range(y_center - 1, y_center + 2):
-                    if self.map.in_bounds((x, y)):
-                        result.add((x, y))
+                if self.map.in_bounds((x, y_center)):
+                    result.add((x, y_center))
         return result
 
     def _has_smoke_between(self, a: tuple[int, int], b: tuple[int, int], smoke_tiles: set[tuple[int, int]]) -> bool:
