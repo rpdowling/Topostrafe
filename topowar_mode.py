@@ -2377,9 +2377,10 @@ class TopowarGameState:
                 s.grenade_target = None
                 s.grenade_windup = 0.0
 
-    # Smoke zone grows east at 2 tiles/sec (full 9 tiles in ~4.5 s), starts at 1 tile.
-    # Fade starts at 22 s and clears tiles from the west at 1.125 tiles/sec (done by 30 s).
-    _SMOKE_GROW_SPEED = 2.0
+    # Smoke zone grows east at 0.6 tiles/sec, matching the visible leading edge of
+    # particles (fastest puff vx=0.9, damp=0.05 → x≈18*(1-e^(-0.05t)) ≈ 0.6t early on).
+    # Full 9 tiles reached in ~15 s; fade starts at 22 s, clears in 8 s.
+    _SMOKE_GROW_SPEED = 0.6
     _SMOKE_FADE_START = 22.0
     _SMOKE_FADE_SPEED = 1.125
 

@@ -2020,7 +2020,7 @@ function draw() {
 
   // Smoke-round zone overlays — grow east then fade from the west
   {
-    const GROW_SPEED = 2.0, FADE_START = 22.0, FADE_SPEED = 1.125;
+    const GROW_SPEED = 0.6, FADE_START = 22.0, FADE_SPEED = 1.125;
     for (const src of data.smoke_sources || []) {
       const { origin_x, origin_y, age, duration } = src;
       if (age >= duration) continue;
@@ -2319,22 +2319,23 @@ setupBoardZoomControl();
 applyBoardZoom();
 setInterval(() => send({ type: 'ping' }), 200);
 
-// Mortar smoke puffs — large, billow outward from the impact point.
+// Mortar smoke puffs — originate at impact, drift east to fill the 1×9 zone.
 // damp_x: 0.05 → max east travel ≈ vx / 0.05 tiles (vx 0.1–0.9 → 2–18 tiles).
-// damp_y: 0.25 → max N/S travel ≈ ±1 tile around the single-row zone.
+// damp_y: 0.5  → max N/S travel ≈ ±0.1 tiles — keeps puffs in the single row.
 // no_wind: true → skip the shared eastward wind acceleration.
+// Small r (0.12–0.20 tiles) prevents radius from ballooning beyond the row.
 function spawnSmokeMortarPuff(gx, gy) {
   smokeParticles.push({
-    x: gx + (Math.random() - 0.5) * 0.4,
-    y: gy + (Math.random() - 0.5) * 0.4,
+    x: gx + (Math.random() - 0.5) * 0.2,
+    y: gy + (Math.random() - 0.5) * 0.2,
     vx: 0.1 + Math.random() * 0.8,
-    vy: (Math.random() - 0.5) * 0.5,
-    alpha: 0.22 + Math.random() * 0.14,
+    vy: (Math.random() - 0.5) * 0.08,
+    alpha: 0.15 + Math.random() * 0.12,
     age: 0,
-    maxAge: 15 + Math.random() * 8,
-    r: 0.48 + Math.random() * 0.38,
+    maxAge: 8 + Math.random() * 5,
+    r: 0.12 + Math.random() * 0.08,
     damp_x: 0.05,
-    damp_y: 0.25,
+    damp_y: 0.5,
     no_wind: true,
   });
 }
