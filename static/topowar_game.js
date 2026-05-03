@@ -2020,7 +2020,7 @@ function draw() {
 
   // Smoke-round zone overlays — grow east then fade from the west
   {
-    const GROW_SPEED = 0.35, FADE_START = 22.0, FADE_SPEED = 1.125;
+    const GROW_SPEED = 0.70, FADE_START = 22.0, FADE_SPEED = 1.125;
     for (const src of data.smoke_sources || []) {
       const { origin_x, origin_y, age, duration } = src;
       if (age >= duration) continue;
@@ -2046,7 +2046,8 @@ function draw() {
       const t = p.age / p.maxAge;
       const a = p.alpha * (1 - t * t);
       if (a < 0.015) continue;
-      const r = p.r * CELL * (1 + t * (p.r_grow ?? 1.8));
+      const dist = p.ox != null ? Math.max(0, p.x - p.ox) / 9 : t;
+      const r = p.r * CELL * (1 + dist * (p.r_grow ?? 1.8));
       ctx.globalAlpha = a * 0.7;
       ctx.fillStyle = '#b8a898';
       ctx.beginPath();
@@ -2328,13 +2329,14 @@ function spawnSmokeMortarPuff(gx, gy) {
   smokeParticles.push({
     x: gx + (Math.random() - 0.5) * 0.2,
     y: gy + (Math.random() - 0.5) * 0.2,
+    ox: gx,  // spawn x — used to scale radius by eastward distance
     vx: 0.5 + Math.random() * 1.2,
     vy: (Math.random() - 0.5) * 0.10,
     alpha: 0.18 + Math.random() * 0.12,
     age: 0,
     maxAge: 10 + Math.random() * 5,
-    r: 0.28 + Math.random() * 0.18,
-    r_grow: 0.6,
+    r: 0.14 + Math.random() * 0.08,  // small at origin; grows with distance
+    r_grow: 3.0,  // scale applied to distance: r * CELL * (1 + dist * r_grow)
     damp_x: 0.10,
     damp_y: 0.9,
     no_wind: true,
@@ -2364,7 +2366,7 @@ function updateSmoke() {
   for (const src of tw()?.smoke_sources || []) {
     if (src.age >= FADE_START) continue;
     if (Math.random() > 0.10) continue;
-    spawnSmokeMortarPuff(src.origin_x + 0.5, src.origin_y + 0.5);
+    spawnSmokeMortarPuff(src.origin_x + 0.5, src.origin_y);
   }
   if (state) render();
   requestAnimationFrame(rafLoop);
