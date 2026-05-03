@@ -1781,7 +1781,7 @@ function draw() {
       ctx.arc(sx, sy, 2, 0, Math.PI * 2);
       ctx.fill();
       ctx.globalAlpha = alpha;
-      ctx.fillStyle = ms.owner === 0 ? '#e05020' : '#5050e0';
+      ctx.fillStyle = ms.round_type === 'smoke' ? '#c8c8c8' : (ms.owner === 0 ? '#e05020' : '#5050e0');
       ctx.beginPath();
       ctx.arc(sx, sy - arcHeight * CELL * 0.8, radius, 0, Math.PI * 2);
       ctx.fill();
@@ -2018,6 +2018,31 @@ function draw() {
     ctx.globalAlpha = 1;
   }
 
+  // Smoke-round zone overlays (server-driven, tile-accurate)
+  {
+    const SMOKE_DRIFT_SPEED = 0.3;
+    for (const src of data.smoke_sources || []) {
+      const { origin_x, origin_y, ns_offset, age, duration } = src;
+      if (age >= duration) continue;
+      const driftX = age * SMOKE_DRIFT_SPEED;
+      const nsFrac = Math.min(age / 10.0, 1.0);
+      const centerY = origin_y + ns_offset * nsFrac;
+      const x0 = Math.floor(origin_x + driftX);
+      const yCtr = Math.round(centerY);
+      const fadeStart = duration - 8;
+      const alpha = age > fadeStart ? 0.52 * (1 - (age - fadeStart) / 8) : 0.52;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = '#d0d0c8';
+      for (let x = x0; x < x0 + 10; x++) {
+        for (let y = yCtr - 1; y <= yCtr + 1; y++) {
+          ctx.fillRect(OX + x * CELL, tileTop(y), CELL, CELL);
+        }
+      }
+      ctx.restore();
+    }
+  }
+
   // Smoke particles from mortar/grenade impacts
   if (smokeParticles.length) {
     ctx.save();
@@ -2138,10 +2163,12 @@ function updateSelectionPanel() {
     const tgt = mortar.target ? `(${mortar.target[0]}, ${mortar.target[1]})` : '—';
     const operableTag = mortar.operable === false ? '<span class="sel-blocked">Inoperable: restore 3×3 ground</span>' : '';
     const isAirburst = mortar.round_type === 'airburst';
+    const isSmoke = mortar.round_type === 'smoke';
     const ammoRow = mortar.built && mortar.owner === mySeat() ? `
       <div class="sel-ammo-btns">
-        <button class="sel-ammo-btn${!isAirburst ? ' active' : ''}" onclick="setMortarRound('he')">HE</button>
+        <button class="sel-ammo-btn${!isAirburst && !isSmoke ? ' active' : ''}" onclick="setMortarRound('he')">HE</button>
         <button class="sel-ammo-btn${isAirburst ? ' active' : ''}" onclick="setMortarRound('airburst')">Airburst</button>
+        <button class="sel-ammo-btn${isSmoke ? ' active' : ''}" onclick="setMortarRound('smoke')">Smoke</button>
       </div>` : '';
     html = `
       <div class="sel-grid">
@@ -2313,6 +2340,20 @@ function updateSmoke() {
 
 (function rafLoop() {
   updateSmoke();
+  // Spawn drifting particles from active server-side smoke zones
+  const SMOKE_DRIFT_SPEED = 0.3;
+  for (const src of tw()?.smoke_sources || []) {
+    if (src.age >= src.duration) continue;
+    if (Math.random() > 0.4) continue;
+    const driftX = src.age * SMOKE_DRIFT_SPEED;
+    const nsFrac = Math.min(src.age / 10.0, 1.0);
+    const centerY = src.origin_y + src.ns_offset * nsFrac;
+    const x0 = Math.floor(src.origin_x + driftX);
+    const yCtr = Math.round(centerY);
+    const px = x0 + Math.random() * 10;
+    const py = yCtr + (Math.random() * 3 - 1.5);
+    spawnAirburstTileSmoke(px + 0.5, py + 0.5);
+  }
   if (state) render();
   requestAnimationFrame(rafLoop);
 })();
