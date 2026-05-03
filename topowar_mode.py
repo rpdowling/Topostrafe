@@ -230,7 +230,7 @@ class SmokeSource:
     origin_x: float
     origin_y: float
     age: float = 0.0
-    duration: float = 30.0
+    duration: float = 20.0
 
 
 @dataclass
@@ -2379,7 +2379,7 @@ class TopowarGameState:
 
     # Smoke zone grows east at 0.70 tiles/sec; full 9 tiles reached after ~13 s.
     _SMOKE_GROW_SPEED = 0.70
-    _SMOKE_FADE_START = 22.0
+    _SMOKE_FADE_START = 12.0
     _SMOKE_FADE_SPEED = 1.125
 
     def _smoke_blocked_tiles(self) -> set[tuple[int, int]]:
