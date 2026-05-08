@@ -1328,6 +1328,36 @@ body.info-modal-open {
   color: #d8e5f4;
   line-height: 1;
 }
+.tw-zoom-divider {
+  width: 18px;
+  height: 1px;
+  background: rgba(180, 200, 220, 0.25);
+  margin: 2px 0;
+}
+.tw-music-btn {
+  width: 22px;
+  height: 22px;
+  min-width: 0;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(95, 120, 150, 0.45);
+  border: 1px solid rgba(180, 200, 220, 0.35);
+  color: #d8e5f4;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  transition: background 0.15s, opacity 0.15s;
+}
+.tw-music-btn:hover {
+  background: rgba(95, 120, 150, 0.75);
+}
+.tw-music-btn.off {
+  opacity: 0.38;
+  color: #8899aa;
+}
 .topowar-seat-row {
   display: flex;
   align-items: center;

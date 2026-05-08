@@ -1,5 +1,77 @@
 // === GLOBALS ===
 const gameId = window.TOPOS_GAME_ID;
+
+// === BUILD PHASE MUSIC ===
+let _bgMusic = null;
+let _musicEnabled = localStorage.getItem('tw_music_enabled') !== 'false';
+let _wasBuildPhase = false;
+let _musicPendingPlay = false;
+let _musicFading = false;
+let _musicFadeTimer = null;
+
+function _ensureBgMusic() {
+  if (_bgMusic) return;
+  _bgMusic = new Audio('/static/build_music.mp3');
+  _bgMusic.loop = true;
+  _bgMusic.volume = 0.6;
+  _bgMusic.preload = 'auto';
+}
+
+function startBuildMusic() {
+  if (!_musicEnabled) return;
+  _ensureBgMusic();
+  if (_musicFadeTimer) { clearInterval(_musicFadeTimer); _musicFadeTimer = null; }
+  _musicFading = false;
+  _bgMusic.volume = 0.6;
+  if (_bgMusic.paused) {
+    _bgMusic.play().then(() => { _musicPendingPlay = false; }).catch(() => { _musicPendingPlay = true; });
+  }
+}
+
+function fadeBuildMusic() {
+  if (!_bgMusic || _bgMusic.paused) return;
+  if (_musicFadeTimer) clearInterval(_musicFadeTimer);
+  _musicFading = true;
+  _musicFadeTimer = setInterval(() => {
+    if (!_bgMusic || _bgMusic.volume <= 0.03) {
+      if (_bgMusic) { _bgMusic.pause(); _bgMusic.volume = 0.6; }
+      clearInterval(_musicFadeTimer);
+      _musicFadeTimer = null;
+      _musicFading = false;
+      return;
+    }
+    _bgMusic.volume = Math.max(0, _bgMusic.volume - 0.025);
+  }, 80);
+}
+
+function updateMusicBtn() {
+  const btn = document.getElementById('tw-music-btn');
+  if (!btn) return;
+  btn.classList.toggle('off', !_musicEnabled);
+  btn.title = _musicEnabled ? 'Music: On (click to mute)' : 'Music: Off (click to unmute)';
+}
+
+function toggleBuildMusic() {
+  _musicEnabled = !_musicEnabled;
+  localStorage.setItem('tw_music_enabled', String(_musicEnabled));
+  if (!_musicEnabled) {
+    if (_musicFadeTimer) { clearInterval(_musicFadeTimer); _musicFadeTimer = null; }
+    if (_bgMusic) { _bgMusic.pause(); _bgMusic.volume = 0.6; }
+  } else if (_wasBuildPhase) {
+    startBuildMusic();
+  }
+  updateMusicBtn();
+}
+
+// Unlock deferred play after first user interaction
+document.addEventListener('pointerdown', () => {
+  if (_musicPendingPlay && _musicEnabled && _wasBuildPhase) {
+    _musicPendingPlay = false;
+    startBuildMusic();
+  }
+}, { capture: true });
+
+
 const playerKey = new URLSearchParams(window.location.search).get('player') || '';
 const board = document.getElementById('board');
 const boardScroll = document.getElementById('board-scroll');
@@ -204,6 +276,11 @@ function connect() {
         }
       }
       reconcilePendingBuildState();
+      // Track build phase transitions for background music
+      const _nowBuildPhase = (state?.topowar?.build_phase_remaining || 0) > 0;
+      if (_nowBuildPhase && !_wasBuildPhase) startBuildMusic();
+      if (!_nowBuildPhase && _wasBuildPhase) fadeBuildMusic();
+      _wasBuildPhase = _nowBuildPhase;
       // Drain waypoint queues: send next waypoint when a unit finishes its current path
       for (const s of state?.topowar?.soldiers || []) {
         if (s.owner !== mySeat()) continue;
@@ -2480,3 +2557,8 @@ function updateSmoke() {
 })();
 updateModeButtons();
 updateModeLabel();
+updateMusicBtn();
+(function() {
+  const musicBtn = document.getElementById('tw-music-btn');
+  if (musicBtn) musicBtn.addEventListener('click', toggleBuildMusic);
+})();
