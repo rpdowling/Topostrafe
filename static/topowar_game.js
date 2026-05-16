@@ -753,12 +753,8 @@ board.addEventListener('click', (evt) => {
     } else if (inBuildPhase && firstSelected() === null) {
       // Build-phase free instant placement (no soldier required)
       const sbRem = tw()?.build_sandbags_remaining ?? 0;
-      const sbTrenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
-      const sbKey = `${tile[0]},${tile[1]}`;
       if (sbRem <= 0) {
         setStatus('No build-phase sandbags remaining.', true);
-      } else if (sbTrenchSet.has(sbKey)) {
-        setStatus('Cannot place sandbag in a trench.', true);
       } else {
         send({ type: 'tw_build_phase_place_sandbag', tile });
       }
@@ -769,12 +765,10 @@ board.addEventListener('click', (evt) => {
         if (sol) {
           const dx = Math.abs(tile[0] - sol.tile[0]);
           const dy = Math.abs(tile[1] - sol.tile[1]);
-          const sbTrenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
-          const sbKey = `${tile[0]},${tile[1]}`;
-          if (Math.max(dx, dy) === 1 && !sbTrenchSet.has(sbKey)) {
+          if (Math.max(dx, dy) === 1) {
             send({ type: 'tw_assign_build_sandbag', unit_id: uid, tile });
           } else {
-            setStatus('Sandbag must be placed on a non-trench tile adjacent to the soldier.', true);
+            setStatus('Sandbag must be placed on a tile adjacent to the soldier.', true);
           }
         }
       }
@@ -849,11 +843,14 @@ board.addEventListener('click', (evt) => {
     } else {
       const bunkerRem = tw()?.build_bunkers_remaining ?? 0;
       const trenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
+      const sbSet = new Set((tw().sandbags || []).filter(s => s.hp > 0).map(s => `${s.tile[0]},${s.tile[1]}`));
       const bkey = `${tile[0]},${tile[1]}`;
       if (bunkerRem <= 0) {
         setStatus('No build-phase bunkers remaining.', true);
       } else if (!trenchSet.has(bkey)) {
         setStatus('Bunkers can only be placed on trench tiles.', true);
+      } else if (sbSet.has(bkey)) {
+        setStatus('Cannot place a bunker on a sandbag.', true);
       } else {
         send({ type: 'tw_build_phase_place_bunker', tile });
       }
@@ -1266,22 +1263,22 @@ function draw() {
     ctx.lineWidth = 1;
   }
 
-  // Sandbag mode: highlight valid adjacent non-trench tiles for selected soldier
+  // Sandbag mode: highlight valid adjacent tiles for selected soldier
   if (mode === 'sandbag') {
     const selSb = getSelectedSoldier();
     if (selSb) {
-      const trenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
       const structSet = new Set([
         ...(tw().machine_guns || []).filter(m => m.hp > 0).map(m => `${m.tile[0]},${m.tile[1]}`),
         ...(tw().mortars || []).filter(m => m.hp > 0).map(m => `${m.tile[0]},${m.tile[1]}`),
         ...(tw().sandbags || []).filter(s => s.hp > 0).map(s => `${s.tile[0]},${s.tile[1]}`),
+        ...(tw().bunkers || []).filter(b => b.hp > 0).map(b => `${b.tile[0]},${b.tile[1]}`),
       ]);
       for (let dx = -1; dx <= 1; dx++) {
         for (let dy = -1; dy <= 1; dy++) {
           if (dx === 0 && dy === 0) continue;
           const ax = selSb.tile[0] + dx, ay = selSb.tile[1] + dy;
           if (ax < 0 || ay < 0 || ax >= tw().map.width || ay >= tw().map.height) continue;
-          if (trenchSet.has(`${ax},${ay}`) || structSet.has(`${ax},${ay}`)) continue;
+          if (structSet.has(`${ax},${ay}`)) continue;
           ctx.fillStyle = 'rgba(180,160,100,0.30)';
           ctx.fillRect(OX + ax * CELL, tileTop(ay), CELL - 1, CELL - 1);
           ctx.strokeStyle = 'rgba(200,180,120,0.7)';
