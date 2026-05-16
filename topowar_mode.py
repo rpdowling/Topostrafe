@@ -1380,8 +1380,6 @@ class TopowarGameState:
                 raise ValueError("Invalid sandbag tile.")
             if max(abs(tile[0] - s.tile[0]), abs(tile[1] - s.tile[1])) != 1:
                 raise ValueError("Sandbag must be placed in a tile adjacent to the soldier.")
-            if self.map.elevation_at(tile) == ELEV_TRENCH:
-                raise ValueError("Sandbags cannot be built in a trench.")
             if tile in self._structure_tile_set():
                 raise ValueError("Tile already occupied by a structure.")
             mid = self.next_structure_id
@@ -1462,8 +1460,6 @@ class TopowarGameState:
                 raise ValueError("Invalid tile.")
             if not self._on_owner_side(owner, tile):
                 raise ValueError("Must place on your side of the map.")
-            if self.map.elevation_at(tile) == ELEV_TRENCH:
-                raise ValueError("Cannot place sandbags in a trench.")
             if tile in self._structure_tile_set():
                 raise ValueError("Tile already occupied by a structure.")
             rem = self.build_sandbags_remaining.get(owner, 0)
