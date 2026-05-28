@@ -162,6 +162,7 @@ class Mortar(Structure):
     base_elevation: int = ELEV_GROUND
     operable: bool = True
     round_type: str = 'he'     # 'he', 'airburst', or 'smoke'
+    hold_fire: bool = False    # When True, only fires on player click; default is auto-fire
 
 
 @dataclass
@@ -935,29 +936,55 @@ class TopowarGameState:
         return (cx, cy)
 
     def _soldier_effective_range(self, s: "Soldier", target_tile: tuple[int, int]) -> float:
-        """Rifle range based on how many elevation tiers the shooter is above the first
-        intermediate tile on the path to target: 5 + max(0, shooter_tier - first_tile_tier)."""
+        """Rifle range based on shooter elevation: mountain=7, hill=6, ground/trench=5."""
         s_elev = self.map.elevation_at(s.tile)
-        s_tier = _ELEV_TIER_ORDER.index(s_elev)
-        first = self._bresenham_first_step(s.tile, target_tile)
-        if first is None or not self.map.in_bounds(first):
-            return 5.0
-        first_tier = _ELEV_TIER_ORDER.index(self.map.elevation_at(first))
-        return 5.0 + max(0, s_tier - first_tier)
+        if s_elev == ELEV_MOUNTAIN:
+            return 7.0
+        if s_elev == ELEV_HILL:
+            return 6.0
+        return 5.0
 
     def _soldier_max_range(self, s: "Soldier") -> float:
-        """Maximum rifle range in any direction — used for UI display and open-ground spotting."""
-        s_elev = self.map.elevation_at(s.tile)
-        s_tier = _ELEV_TIER_ORDER.index(s_elev)
-        sx, sy = s.tile
-        adj4 = [(sx+1, sy), (sx-1, sy), (sx, sy+1), (sx, sy-1)]
-        min_adj_tier = s_tier
-        for t in adj4:
-            if self.map.in_bounds(t):
-                tier = _ELEV_TIER_ORDER.index(self.map.elevation_at(t))
-                if tier < min_adj_tier:
-                    min_adj_tier = tier
-        return 5.0 + max(0, s_tier - min_adj_tier)
+        """Maximum rifle range — used for UI display. Same as effective range (elevation-fixed)."""
+        return self._soldier_effective_range(s, s.tile)
+
+    def _is_concealed_by_elevation(self, shooter_tile: tuple[int, int], target_tile: tuple[int, int]) -> bool:
+        """Dead-ground concealment: target is concealed if it is adjacent to a tile at a higher
+        elevation than itself, and that tile is in the general direction of the shooter.
+        Only applies when shooter is at strictly higher elevation than target.
+        Exception: concealment does not apply if shooter is directly adjacent (8-connected) to target."""
+        s_elev = self.map.elevation_at(shooter_tile)
+        t_elev = self.map.elevation_at(target_tile)
+        if s_elev <= t_elev:
+            return False
+        tx, ty = target_tile
+        sx, sy = shooter_tile
+        # Adjacent shooter can always shoot over the slope edge
+        if max(abs(sx - tx), abs(sy - ty)) <= 1:
+            return False
+        dir_x = sx - tx
+        dir_y = sy - ty
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                adj = (tx + dx, ty + dy)
+                if not self.map.in_bounds(adj):
+                    continue
+                if self.map.elevation_at(adj) <= t_elev:
+                    continue
+                if dx * dir_x + dy * dir_y > 0:
+                    return True
+        return False
+
+    def _mg_effective_range(self, mg: "MachineGun") -> float:
+        """MG range based on elevation: mountain=20, hill=17, ground=15."""
+        mg_elev = self.map.elevation_at(mg.tile)
+        if mg_elev == ELEV_MOUNTAIN:
+            return 20.0
+        if mg_elev == ELEV_HILL:
+            return 17.0
+        return 15.0
 
     def _degrade_tile(self, tile: tuple[int, int]) -> bool:
         """Lower tile one elevation level. Returns True if it just became a trench (collapse)."""
@@ -1330,8 +1357,8 @@ class TopowarGameState:
                     raise ValueError("Target is blocked by a mountain.")
             mortar.target = new_target
             mortar.ready = False
-            mortar.cooldown = 20.0
-            return "Mortar retargeted (20 s cooldown)."
+            mortar.cooldown = 15.0
+            return "Mortar retargeted (15 s cooldown)."
         if t == "tw_set_mortar_round":
             mid = int(action.get("mortar_id", -1))
             mortar = self.mortars.get(mid)
@@ -1344,8 +1371,15 @@ class TopowarGameState:
                 return "Round type unchanged."
             mortar.round_type = round_type
             mortar.ready = False
-            mortar.cooldown = 20.0
-            return f"Round type set to {round_type} (20 s cooldown)."
+            mortar.cooldown = 15.0
+            return f"Round type set to {round_type} (15 s cooldown)."
+        if t == "tw_toggle_mortar_hold_fire":
+            mid = int(action.get("mortar_id", -1))
+            mortar = self.mortars.get(mid)
+            if not mortar or mortar.owner != owner:
+                raise ValueError("Mortar not found.")
+            mortar.hold_fire = not mortar.hold_fire
+            return f"Mortar hold fire {'on' if mortar.hold_fire else 'off'}."
         if t == "tw_toggle_operate_mortar":
             mid = int(action.get("mortar_id", -1))
             mortar = self.mortars.get(mid)
@@ -1720,6 +1754,7 @@ class TopowarGameState:
                     and s2.tile not in self.map.trenches
                     and math.dist(s.tile, s2.tile) <= self._soldier_effective_range(s, s2.tile)
                     and self._has_combat_los(s.tile, s2.tile)
+                    and not self._is_concealed_by_elevation(s.tile, s2.tile)
                     and not self._has_smoke_between(s.tile, s2.tile, smoke_tiles)
                     for s2 in self.soldiers.values()
                 )
@@ -1743,6 +1778,8 @@ class TopowarGameState:
                 continue
             s_elev = self.map.elevation_at(s.tile)
             if not self._has_combat_los(s.tile, target_tile):
+                continue
+            if self._is_concealed_by_elevation(s.tile, target_tile):
                 continue
             if self._has_smoke_between(s.tile, target_tile, smoke_tiles):
                 continue
@@ -1980,6 +2017,7 @@ class TopowarGameState:
             if len(live_ops) < 1:
                 continue
             mg_elev = self.map.elevation_at(mg.tile)
+            mg_range = self._mg_effective_range(mg)
             target = mg.force_target
             if target is None:
                 nearest = None
@@ -1993,12 +2031,14 @@ class TopowarGameState:
                         continue  # open-ground MG cannot see into trenches
                     if not self._has_combat_los(mg.tile, sv.tile):
                         continue  # blocked by terrain above target's elevation
+                    if self._is_concealed_by_elevation(mg.tile, sv.tile):
+                        continue  # target in dead ground (adjacent to higher elevation)
                     if self._has_smoke_between(mg.tile, sv.tile, smoke_tiles):
                         continue  # blocked by smoke
                     if not self._soldier_visible_to(sv, mg.owner):
                         continue
                     d = math.dist(sv.tile, mg.tile)
-                    if d > 20:
+                    if d > mg_range:
                         continue
                     target_angle = math.degrees(math.atan2(sv.tile[1] - mg.tile[1], sv.tile[0] - mg.tile[0])) % 360.0
                     if not self._is_angle_within_arc(target_angle, mg.arc_center, mg.arc_half):
@@ -2027,6 +2067,7 @@ class TopowarGameState:
             can_fire = (tgt_elev <= mg_elev
                         and not (tgt_elev == ELEV_TRENCH and mg_elev > ELEV_TRENCH)
                         and self._has_combat_los(mg.tile, target)
+                        and not self._is_concealed_by_elevation(mg.tile, target)
                         and not self._has_smoke_between(mg.tile, target, smoke_tiles))
             # Start a new burst cycle when cooldown expires
             if can_fire and mg.cooldown <= 0 and mg.burst_left <= 0:
@@ -2039,7 +2080,7 @@ class TopowarGameState:
                 mg.burst_shot_cooldown = 1.0 / 3.0
                 spreadx = self.random.uniform(-0.3, 0.3)
                 spready = self.random.uniform(-0.3, 0.3)
-                self.projectiles.append(Projectile(mg.owner, float(sx), float(sy), target[0] - sx + spreadx, target[1] - sy + spready, 20.0, "mg", self.map.elevation_at(mg.tile)))
+                self.projectiles.append(Projectile(mg.owner, float(sx), float(sy), target[0] - sx + spreadx, target[1] - sy + spready, mg_range, "mg", self.map.elevation_at(mg.tile)))
                 self.muzzle_flashes.append(MuzzleFlash(float(sx), float(sy), target[0] - sx + spreadx, target[1] - sy + spready, mg.owner))
 
     def _register_kill(self, victim: "Soldier", killer_owner: int):
@@ -2070,7 +2111,7 @@ class TopowarGameState:
         if not mortar.target or not mortar.ready:
             return
         dist = math.dist(mortar.tile, mortar.target)
-        scatter_radius = 3.0 + max(0.0, math.floor(max(0.0, dist - 10.0) / 5.0))
+        scatter_radius = 2.0 + max(0.0, math.floor(max(0.0, dist - 10.0) / 5.0))
         angle = self.random.uniform(0.0, 2.0 * math.pi)
         scatter = self.random.uniform(0.0, scatter_radius)
         lx = int(round(mortar.target[0] + math.cos(angle) * scatter))
@@ -2086,7 +2127,7 @@ class TopowarGameState:
             round_type=mortar.round_type,
         ))
         mortar.ready = False
-        mortar.cooldown = 20.0
+        mortar.cooldown = 15.0
 
     def _mortar_impact(self, landing: tuple[int, int], owner: int, airburst: bool = False):
         lx, ly = landing
@@ -2264,6 +2305,14 @@ class TopowarGameState:
             mortar.cooldown = max(0.0, mortar.cooldown - dt)
             if mortar.cooldown <= 0.0 and not mortar.ready:
                 mortar.ready = True
+            # Auto-fire when ready, target is set, and hold_fire is off
+            if (mortar.ready and not mortar.hold_fire and mortar.target
+                    and self.time_elapsed >= self.rules.build_phase_seconds):
+                live_crew = [s for s in self.soldiers.values()
+                             if s.hp > 0 and s.owner == mortar.owner
+                             and 0 < math.dist(s.tile, mortar.tile) <= 1.5]
+                if len(live_crew) >= 2:
+                    self._fire_mortar(mortar)
 
     def _update_mortar_shells(self, dt: float):
         remaining: list[MortarShell] = []
@@ -2689,6 +2738,7 @@ class TopowarGameState:
                 "facing": mg.facing,
                 "arc_center": mg.arc_center,
                 "arc_half": mg.arc_half,
+                "effective_range": self._mg_effective_range(mg),
             })
         mortars_out = []
         for mortar in self.mortars.values():
@@ -2715,6 +2765,7 @@ class TopowarGameState:
                 "cooldown": mortar.cooldown,
                 "operators": sorted(list(mortar.operators)),
                 "round_type": mortar.round_type,
+                "hold_fire": mortar.hold_fire,
             })
         sandbags_out = []
         for sb in self.sandbags.values():

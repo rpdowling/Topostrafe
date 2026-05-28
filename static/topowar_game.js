@@ -569,7 +569,7 @@ board.addEventListener('click', (evt) => {
       selectedMg = null; selectedMortar = null;
     } else if (myMortar) {
       selectedMortar = myMortar.structure_id; selectedMg = null; selectedUnits = new Set();
-      if (myMortar.built && myMortar.ready) {
+      if (myMortar.built && myMortar.ready && (myMortar.hold_fire ?? false)) {
         send({ type: 'tw_fire_mortar', mortar_id: myMortar.structure_id });
       }
     } else if (myMg) {
@@ -1311,6 +1311,9 @@ function draw() {
       previewAngle = Math.atan2(dy, dx);
     }
     const arcHalfRad = 45 * Math.PI / 180;
+    // MG range depends on elevation of build tile
+    const bElevTier = elevMap.get(`${bx},${by}`) ?? 1;
+    const mgBuildRange = bElevTier === 3 ? 20 : (bElevTier === 2 ? 17 : 15);
     // Arc sector fill
     const previewFill = mySeat() === 0 ? 'rgba(139,21,21,0.22)' : 'rgba(26,63,160,0.22)';
     ctx.beginPath();
@@ -1324,7 +1327,7 @@ function draw() {
     ctx.lineWidth = 1;
     ctx.setLineDash([5, 3]);
     ctx.beginPath();
-    ctx.arc(pmcx, pmcy, MG_RANGE * CELL, previewAngle - arcHalfRad, previewAngle + arcHalfRad);
+    ctx.arc(pmcx, pmcy, mgBuildRange * CELL, previewAngle - arcHalfRad, previewAngle + arcHalfRad);
     ctx.stroke();
     ctx.setLineDash([]);
     // Tile highlight
@@ -1375,12 +1378,13 @@ function draw() {
       ctx.lineWidth = 1;
 
       if (isSelected) {
-        // Range arc for selected MG (pinned to arc_center)
+        // Range arc for selected MG (pinned to arc_center, elevation-dependent)
+        const mgEffRange = (mg.effective_range ?? MG_RANGE);
         ctx.strokeStyle = 'rgba(255,220,80,0.75)';
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
-        ctx.arc(mcx, mcy, MG_RANGE * CELL, arcVa - arcHalfRad, arcVa + arcHalfRad);
+        ctx.arc(mcx, mcy, mgEffRange * CELL, arcVa - arcHalfRad, arcVa + arcHalfRad);
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.lineWidth = 1;
@@ -1720,7 +1724,7 @@ function draw() {
       const mcx = cpx(retargetMortar.tile[0]);
       const mcy = cpy(retargetMortar.tile[1]);
       const dTiles = Math.hypot(tcx - mcx, tcy - mcy) / CELL;
-      const previewScatterR = 3 + Math.max(0, Math.floor(Math.max(0, dTiles - 10) / 5));
+      const previewScatterR = 2 + Math.max(0, Math.floor(Math.max(0, dTiles - 10) / 5));
       ctx.setLineDash([4, 4]);
       ctx.strokeStyle = 'rgba(244,160,32,0.7)';
       ctx.lineWidth = 1.5;
@@ -1757,7 +1761,7 @@ function draw() {
       const [tx, ty] = pendingMortarTarget;
       const tcx = cpx(tx), tcy = cpy(ty);
       const buildDist = Math.hypot(tx - bx2, ty - by2);
-      const buildScatterR = 3 + Math.max(0, Math.floor(Math.max(0, buildDist - 10) / 5));
+      const buildScatterR = 2 + Math.max(0, Math.floor(Math.max(0, buildDist - 10) / 5));
       ctx.strokeStyle = '#f4a020';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
@@ -1777,7 +1781,7 @@ function draw() {
       const dx = mouseCanvas.x - cpx(bx), dy = mouseCanvas.y - cpy(by);
       const dPixels = Math.hypot(dx, dy);
       if (dPixels > CELL * 0.5) {
-        const previewScatterR = 3 + Math.max(0, Math.floor(Math.max(0, dPixels / CELL - 10) / 5));
+        const previewScatterR = 2 + Math.max(0, Math.floor(Math.max(0, dPixels / CELL - 10) / 5));
         ctx.setLineDash([4, 4]);
         ctx.strokeStyle = 'rgba(244,160,32,0.35)';
         ctx.lineWidth = 1;
@@ -1813,7 +1817,7 @@ function draw() {
       ctx.stroke();
       if (isSelected) {
         const tgtDist = Math.hypot(ttx - mx, tty - my);
-        const tgtScatterR = 3 + Math.max(0, Math.floor(Math.max(0, tgtDist - 10) / 5));
+        const tgtScatterR = 2 + Math.max(0, Math.floor(Math.max(0, tgtDist - 10) / 5));
         ctx.strokeStyle = 'rgba(244,160,32,0.35)';
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
@@ -1872,7 +1876,7 @@ function draw() {
       ctx.fillText('BUILD', mcx, tly + CELL - 2);
       ctx.textAlign = 'left';
     } else if (!mortar.ready) {
-      const cdFrac = 1 - mortar.cooldown / 20;
+      const cdFrac = 1 - mortar.cooldown / 15;
       ctx.fillStyle = '#222';
       ctx.fillRect(tlx + 2, tly + CELL + 1, CELL - 4, 3);
       ctx.fillStyle = '#f4a020';
@@ -2278,6 +2282,11 @@ function setMortarRound(roundType) {
   send({ type: 'tw_set_mortar_round', mortar_id: selectedMortar, round_type: roundType });
 }
 
+function toggleMortarHoldFire() {
+  if (selectedMortar === null) return;
+  send({ type: 'tw_toggle_mortar_hold_fire', mortar_id: selectedMortar });
+}
+
 function updateSelectionPanel() {
   const panel = el('selection-panel');
   if (!panel) return;
@@ -2330,9 +2339,17 @@ function updateSelectionPanel() {
     const side = mortar.owner === 0 ? 'Red' : 'Blue';
     const hp = Math.round((mortar.hp / (mortar.hp_max || 10)) * 100);
     const ops = (mortar.operators || []).length;
-    const stateStr = !mortar.built ? `Building ${Math.round((mortar.build_progress / (mortar.build_required || 60)) * 100)}%`
-      : mortar.ready ? '<span style="color:#f4a020">READY — click to fire</span>'
-      : `Reloading ${mortar.cooldown.toFixed(1)}s`;
+    const holdFire = mortar.hold_fire ?? false;
+    let stateStr;
+    if (!mortar.built) {
+      stateStr = `Building ${Math.round((mortar.build_progress / (mortar.build_required || 60)) * 100)}%`;
+    } else if (mortar.ready) {
+      stateStr = holdFire
+        ? '<span style="color:#f4a020">READY — click to fire</span>'
+        : '<span style="color:#65e06f">READY — auto-firing</span>';
+    } else {
+      stateStr = `Reloading ${mortar.cooldown.toFixed(1)}s`;
+    }
     const tgt = mortar.target ? `(${mortar.target[0]}, ${mortar.target[1]})` : '—';
     const operableTag = mortar.operable === false ? '<span class="sel-blocked">Inoperable: restore 3×3 ground</span>' : '';
     const isAirburst = mortar.round_type === 'airburst';
@@ -2342,6 +2359,7 @@ function updateSelectionPanel() {
         <button class="sel-ammo-btn${!isAirburst && !isSmoke ? ' active' : ''}" onclick="setMortarRound('he')">HE</button>
         <button class="sel-ammo-btn${isAirburst ? ' active' : ''}" onclick="setMortarRound('airburst')">Airburst</button>
         <button class="sel-ammo-btn${isSmoke ? ' active' : ''}" onclick="setMortarRound('smoke')">Smoke</button>
+        <button class="sel-ammo-btn${holdFire ? ' active' : ''}" onclick="toggleMortarHoldFire()">Hold Fire</button>
       </div>` : '';
     html = `
       <div class="sel-grid">
