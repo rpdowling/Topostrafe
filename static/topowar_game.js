@@ -1876,7 +1876,7 @@ function draw() {
       ctx.fillText('BUILD', mcx, tly + CELL - 2);
       ctx.textAlign = 'left';
     } else if (!mortar.ready) {
-      const cdFrac = 1 - mortar.cooldown / 25;
+      const cdFrac = 1 - mortar.cooldown / 15;
       ctx.fillStyle = '#222';
       ctx.fillRect(tlx + 2, tly + CELL + 1, CELL - 4, 3);
       ctx.fillStyle = '#f4a020';

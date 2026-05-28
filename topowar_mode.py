@@ -951,13 +951,17 @@ class TopowarGameState:
     def _is_concealed_by_elevation(self, shooter_tile: tuple[int, int], target_tile: tuple[int, int]) -> bool:
         """Dead-ground concealment: target is concealed if it is adjacent to a tile at a higher
         elevation than itself, and that tile is in the general direction of the shooter.
-        Only applies when shooter is at strictly higher elevation than target."""
+        Only applies when shooter is at strictly higher elevation than target.
+        Exception: concealment does not apply if shooter is directly adjacent (8-connected) to target."""
         s_elev = self.map.elevation_at(shooter_tile)
         t_elev = self.map.elevation_at(target_tile)
         if s_elev <= t_elev:
             return False
         tx, ty = target_tile
         sx, sy = shooter_tile
+        # Adjacent shooter can always shoot over the slope edge
+        if max(abs(sx - tx), abs(sy - ty)) <= 1:
+            return False
         dir_x = sx - tx
         dir_y = sy - ty
         for dx in (-1, 0, 1):
@@ -1353,8 +1357,8 @@ class TopowarGameState:
                     raise ValueError("Target is blocked by a mountain.")
             mortar.target = new_target
             mortar.ready = False
-            mortar.cooldown = 25.0
-            return "Mortar retargeted (25 s cooldown)."
+            mortar.cooldown = 15.0
+            return "Mortar retargeted (15 s cooldown)."
         if t == "tw_set_mortar_round":
             mid = int(action.get("mortar_id", -1))
             mortar = self.mortars.get(mid)
@@ -1367,8 +1371,8 @@ class TopowarGameState:
                 return "Round type unchanged."
             mortar.round_type = round_type
             mortar.ready = False
-            mortar.cooldown = 25.0
-            return f"Round type set to {round_type} (25 s cooldown)."
+            mortar.cooldown = 15.0
+            return f"Round type set to {round_type} (15 s cooldown)."
         if t == "tw_toggle_mortar_hold_fire":
             mid = int(action.get("mortar_id", -1))
             mortar = self.mortars.get(mid)
@@ -2123,7 +2127,7 @@ class TopowarGameState:
             round_type=mortar.round_type,
         ))
         mortar.ready = False
-        mortar.cooldown = 25.0
+        mortar.cooldown = 15.0
 
     def _mortar_impact(self, landing: tuple[int, int], owner: int, airburst: bool = False):
         lx, ly = landing
