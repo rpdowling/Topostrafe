@@ -108,6 +108,7 @@ class Soldier(Unit):
     grenade_windup: float = 0.0
     sandbag_queue: list[int] = field(default_factory=list)
     wire_queue: list[int] = field(default_factory=list)
+    squad_id: int | None = None
 
 
 @dataclass
@@ -268,6 +269,17 @@ class MuzzleFlash:
     duration: float = 0.18
 
 
+SQUAD_COLORS = ['red', 'green', 'blue', 'purple', 'orange', 'white', 'black']
+
+
+@dataclass
+class Squad:
+    squad_id: int
+    owner: int
+    soldier_ids: list[int]
+    color: str  # one of SQUAD_COLORS or 'gold'
+
+
 class PathfindingService:
     def __init__(self, grid: GridMap):
         self.grid = grid
@@ -403,6 +415,8 @@ class TopowarGameState:
         self.kill_counts = {0: 0, 1: 0}
         self.next_unit_id = 1
         self.next_structure_id = 1
+        self.squads: dict[int, Squad] = {}
+        self.next_squad_id: int = 1
         self.soldiers: dict[int, Soldier] = {}
         self.mgs: dict[int, MachineGun] = {}
         self.mortars: dict[int, Mortar] = {}
