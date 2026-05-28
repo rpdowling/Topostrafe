@@ -108,6 +108,7 @@ class Soldier(Unit):
     grenade_windup: float = 0.0
     sandbag_queue: list[int] = field(default_factory=list)
     wire_queue: list[int] = field(default_factory=list)
+    squad_id: int | None = None
 
 
 @dataclass
@@ -268,6 +269,17 @@ class MuzzleFlash:
     duration: float = 0.18
 
 
+SQUAD_COLORS = ['red', 'green', 'blue', 'purple', 'orange', 'white', 'black']
+
+
+@dataclass
+class Squad:
+    squad_id: int
+    owner: int
+    soldier_ids: list[int]
+    color: str  # one of SQUAD_COLORS or 'gold'
+
+
 class PathfindingService:
     def __init__(self, grid: GridMap):
         self.grid = grid
@@ -403,6 +415,8 @@ class TopowarGameState:
         self.kill_counts = {0: 0, 1: 0}
         self.next_unit_id = 1
         self.next_structure_id = 1
+        self.squads: dict[int, Squad] = {}
+        self.next_squad_id: int = 1
         self.soldiers: dict[int, Soldier] = {}
         self.mgs: dict[int, MachineGun] = {}
         self.mortars: dict[int, Mortar] = {}
@@ -742,6 +756,13 @@ class TopowarGameState:
             self.muzzle_flashes = []
         if not hasattr(self, "smoke_sources"):
             self.smoke_sources = []
+        if not hasattr(self, "squads"):
+            self.squads = {}
+        if not hasattr(self, "next_squad_id"):
+            self.next_squad_id = 1
+        for s in self.soldiers.values():
+            if not hasattr(s, "squad_id"):
+                s.squad_id = None
 
     def _crew_positions_for_mg(self, mg: "MachineGun") -> list[tuple[int, int]]:
         """Tiles where crew can stand to operate this MG.
@@ -1111,6 +1132,39 @@ class TopowarGameState:
                 if math.dist(s.tile, target.tile) <= self._soldier_max_range(s):
                     return True
         return False
+
+    def _formation_positions(self, target: tuple[int, int], formation: str, count: int) -> list[tuple[int, int]]:
+        """Return count tile positions in the given formation centered near target."""
+        tx, ty = target
+        W, H = self.map.width, self.map.height
+        if formation == 'horizontal':
+            half = (count - 1) // 2
+            positions = [(tx - half + i, ty) for i in range(count)]
+        elif formation == 'vertical':
+            half = (count - 1) // 2
+            positions = [(tx, ty - half + i) for i in range(count)]
+        else:
+            positions = [target] * count
+        return [(max(0, min(W - 1, x)), max(0, min(H - 1, y))) for x, y in positions]
+
+    def _assign_soldiers_to_positions(
+        self,
+        soldiers: list,
+        positions: list[tuple[int, int]],
+    ) -> list[tuple]:
+        """Greedy assignment: each position gets the nearest unassigned soldier."""
+        unassigned = list(soldiers)
+        assignments = []
+        for pos in positions:
+            if not unassigned:
+                break
+            dists = [(math.dist(s.tile, pos), idx) for idx, s in enumerate(unassigned)]
+            min_dist = min(d for d, _ in dists)
+            tied = [idx for d, idx in dists if d == min_dist]
+            chosen_idx = self.random.choice(tied)
+            assignments.append((unassigned[chosen_idx], pos))
+            unassigned.pop(chosen_idx)
+        return assignments
 
     def command(self, owner: int, action: dict[str, Any]) -> str:
         self._ensure_runtime_compat()
@@ -1672,6 +1726,120 @@ class TopowarGameState:
             s.current_task = {"type": "build_mg", "mg_id": mid, "build_tile": list(best_spot)}
             s.path = best_path
             return "MG construction resumed."
+
+        if t == "tw_formation_move":
+            target = tuple(map(int, action.get("tile", [])))
+            if len(target) != 2 or not self.map.in_bounds(target):
+                raise ValueError("Invalid move target.")
+            count = max(1, min(4, int(action.get("count", 1))))
+            formation = action.get("formation", "horizontal")
+            squad_id_arg = action.get("squad_id")
+            unit_ids_arg = action.get("unit_ids")
+            scatter_positions = action.get("positions") or []
+
+            # Determine which soldiers to move
+            if unit_ids_arg:
+                soldiers_to_move = [
+                    self.soldiers[int(uid)]
+                    for uid in unit_ids_arg
+                    if int(uid) in self.soldiers
+                    and self.soldiers[int(uid)].owner == owner
+                    and self.soldiers[int(uid)].hp > 0
+                ]
+            elif squad_id_arg is not None:
+                squad = self.squads.get(int(squad_id_arg))
+                if not squad or squad.owner != owner:
+                    raise ValueError("Invalid squad.")
+                soldiers_to_move = [
+                    self.soldiers[uid]
+                    for uid in squad.soldier_ids
+                    if uid in self.soldiers and self.soldiers[uid].hp > 0
+                ]
+            else:
+                eligible = [
+                    s for s in self.soldiers.values()
+                    if s.owner == owner and s.hp > 0 and s.squad_id is None
+                ]
+                eligible.sort(key=lambda s: math.dist(s.tile, target))
+                soldiers_to_move = eligible[:count]
+
+            if not soldiers_to_move:
+                raise ValueError("No soldiers available to move.")
+
+            # Compute formation positions
+            if formation == 'scatter' and scatter_positions:
+                W, H = self.map.width, self.map.height
+                form_positions = [
+                    (max(0, min(W - 1, int(p[0]))), max(0, min(H - 1, int(p[1]))))
+                    for p in scatter_positions[:len(soldiers_to_move)]
+                ]
+            else:
+                form_positions = self._formation_positions(target, formation, len(soldiers_to_move))
+
+            # Assign soldiers to positions
+            assignments = self._assign_soldiers_to_positions(soldiers_to_move, form_positions)
+
+            # Issue move orders
+            occ = (
+                set(self._occupied_tiles().keys())
+                | self._mg_tile_set()
+                | self._mortar_tile_set()
+                | self._sandbag_tile_set()
+                | self._wire_tile_set()
+            )
+            for s, pos in assignments:
+                s.current_task = {"type": "move", "goal": list(pos)}
+                s.combat_halt = False
+                s.path = self.path.find_path(
+                    s.tile, pos, trench_only=False, blocked=occ - {s.tile}
+                )
+
+            # Squad management (only when NOT moving an existing squad)
+            if len(soldiers_to_move) > 1 and squad_id_arg is None:
+                # Remove soldiers from any existing squads
+                affected_old_squads: set[int] = set()
+                for s in soldiers_to_move:
+                    if s.squad_id is not None:
+                        affected_old_squads.add(s.squad_id)
+                        s.squad_id = None
+                for osqid in affected_old_squads:
+                    old_sq = self.squads.get(osqid)
+                    if old_sq:
+                        old_sq.soldier_ids = [
+                            uid for uid in old_sq.soldier_ids
+                            if self.soldiers.get(uid) and self.soldiers[uid].squad_id == osqid
+                        ]
+                        if len(old_sq.soldier_ids) <= 1:
+                            for uid in old_sq.soldier_ids:
+                                sol = self.soldiers.get(uid)
+                                if sol:
+                                    sol.squad_id = None
+                            self.squads.pop(osqid, None)
+
+                # Create new squad
+                has_officer = any(s.is_officer for s in soldiers_to_move)
+                color = 'gold' if has_officer else self.random.choice(SQUAD_COLORS)
+                sqid = self.next_squad_id
+                self.next_squad_id += 1
+                new_squad = Squad(sqid, owner, [s.unit_id for s in soldiers_to_move], color)
+                self.squads[sqid] = new_squad
+                for s in soldiers_to_move:
+                    s.squad_id = sqid
+
+            return f"{len(soldiers_to_move)} soldier(s) moving in {formation} formation."
+
+        if t == "tw_disband_squad":
+            sqid = int(action.get("squad_id", -1))
+            squad = self.squads.get(sqid)
+            if not squad or squad.owner != owner:
+                raise ValueError("Invalid squad.")
+            for uid in squad.soldier_ids:
+                sol = self.soldiers.get(uid)
+                if sol:
+                    sol.squad_id = None
+            self.squads.pop(sqid, None)
+            return "Squad disbanded."
+
         raise ValueError("Unknown Topowar action.")
 
     def _move_soldier(self, s: Soldier, dt: float):
@@ -2106,6 +2274,20 @@ class TopowarGameState:
             victim.grenade_target = None
             victim.grenade_windup = 0.0
             self._grenade_impact(victim.tile, victim.owner)
+        # Auto-disband squad if only 0 or 1 members alive after this kill
+        if getattr(victim, 'squad_id', None) is not None:
+            squad = self.squads.get(victim.squad_id)
+            if squad:
+                alive_count = sum(
+                    1 for sid in squad.soldier_ids
+                    if self.soldiers.get(sid) and self.soldiers[sid].hp > 0
+                )
+                if alive_count <= 1:
+                    for sid in squad.soldier_ids:
+                        sol = self.soldiers.get(sid)
+                        if sol:
+                            sol.squad_id = None
+                    self.squads.pop(victim.squad_id, None)
 
     def _fire_mortar(self, mortar: "Mortar"):
         if not mortar.target or not mortar.ready:
@@ -2716,6 +2898,7 @@ class TopowarGameState:
                 "combat_halt": s.combat_halt,
                 "is_grenadier": s.is_grenadier,
                 "is_officer": s.is_officer,
+                "squad_id": s.squad_id,
                 "range": self._soldier_max_range(s) if not s.is_grenadier else None,
             })
         mgs = []
@@ -2856,4 +3039,13 @@ class TopowarGameState:
             "winner": self.winner,
             "win_reason": self.win_reason,
             "kill_counts": {"0": self.kill_counts[0], "1": self.kill_counts[1]},
+            "squads": [
+                {
+                    "squad_id": sq.squad_id,
+                    "owner": sq.owner,
+                    "soldier_ids": list(sq.soldier_ids),
+                    "color": sq.color,
+                }
+                for sq in self.squads.values()
+            ],
         }

@@ -838,6 +838,8 @@ class GameStore:
                 "tw_build_phase_place_sandbag",
                 "tw_build_phase_place_wire",
                 "tw_build_phase_place_bunker",
+                "tw_formation_move",
+                "tw_disband_squad",
             }:
                 out = {"type": t}
                 for key in (
@@ -852,6 +854,10 @@ class GameStore:
                     "mg_id",
                     "mortar_id",
                     "round_type",
+                    "positions",
+                    "count",
+                    "formation",
+                    "squad_id",
                 ):
                     if key in action:
                         out[key] = action[key]
