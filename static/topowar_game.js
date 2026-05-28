@@ -104,6 +104,10 @@ let lastPanelHtml = '';
 let elevMap = new Map();
 const pendingWaypoints = new Map(); // unit_id → [[x,y],...] queued after current path
 let planDragging = false;
+let formationCount = 1;
+let formationShape = 'horizontal';
+let selectedSquad = null;
+let scatterPendingPositions = [];
 
 const CELL = 24;
 const OX = 20;
@@ -373,10 +377,50 @@ function getSelectedMortar() {
   return selectedMortar ? ((tw()?.mortars || []).find(m => m.structure_id === selectedMortar) || null) : null;
 }
 
+function getSquad(squadId) {
+  return (tw()?.squads || []).find(sq => sq.squad_id === squadId) || null;
+}
+
+function getSquadColor(color) {
+  const map = {
+    red: '#e03030', green: '#30c050', blue: '#3060d0',
+    purple: '#9030c0', orange: '#e07820', white: '#d8d8d8',
+    black: '#404048', gold: '#f0c030',
+  };
+  return map[color] || '#ffffff';
+}
+
+function selectSquad(squadId) {
+  selectedSquad = (selectedSquad === squadId) ? null : squadId;
+  render();
+}
+
+function disbandSquad(squadId) {
+  send({ type: 'tw_disband_squad', squad_id: squadId });
+  if (selectedSquad === squadId) selectedSquad = null;
+  render();
+}
+
+function getFormationPositions(targetTile, shape, count, mapData) {
+  const [tx, ty] = targetTile;
+  const W = mapData.width, H = mapData.height;
+  let positions = [];
+  if (shape === 'horizontal') {
+    const half = Math.floor((count - 1) / 2);
+    for (let i = 0; i < count; i++) positions.push([tx - half + i, ty]);
+  } else if (shape === 'vertical') {
+    const half = Math.floor((count - 1) / 2);
+    for (let i = 0; i < count; i++) positions.push([tx, ty - half + i]);
+  } else {
+    positions = [[tx, ty]];
+  }
+  return positions.map(([x, y]) => [Math.max(0, Math.min(W - 1, x)), Math.max(0, Math.min(H - 1, y))]);
+}
+
 // === MODE MANAGEMENT ===
 
 function updateModeButtons() {
-  const modes = ['select','move','dig','plan','build','operate','mortar','grenade','sandbag','wire','bunker','flare'];
+  const modes = ['select','move','dig','plan','build','operate','mortar','grenade','sandbag','wire','bunker','flare','formation-move'];
   for (const m of modes) {
     const btn = el('mode-' + m);
     if (btn) btn.classList.toggle('active', mode === m);
@@ -390,11 +434,14 @@ function setMode(m) {
     pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false;
     pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false;
     retargetMortarId = null;
+    scatterPendingPositions = [];
+    selectedSquad = null;
   } else {
     mode = m;
     if (m !== 'plan') plan = [];
     if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false; }
     if (m !== 'mortar') { pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false; }
+    if (m !== 'formation_move') { scatterPendingPositions = []; }
     if (m === 'build' || m === 'mortar' || m === 'sandbag' || m === 'wire' || m === 'bunker' || m === 'move') selectedUnits = new Set();
   }
   updateModeButtons();
@@ -405,7 +452,7 @@ function setMode(m) {
 function updateModeLabel() {
   const labels = {
     select: 'Select', move: 'Move',
-    dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew', mortar: 'Build Mortar', grenade: 'Grenade', sandbag: 'Build Sandbag', wire: 'Wire', bunker: 'Bunker', flare: 'Flare',
+    dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew', mortar: 'Build Mortar', grenade: 'Grenade', sandbag: 'Build Sandbag', wire: 'Wire', bunker: 'Bunker', flare: 'Flare', formation_move: 'Formation Move',
   };
   const e = el('mode-line');
   if (e) e.textContent = labels[mode] || 'Select';
@@ -509,7 +556,7 @@ document.addEventListener('keydown', (evt) => {
     return;
   }
 
-  const shortcutMap = { '1':'select','2':'move','D':'dig','P':'plan','B':'build','O':'operate','M':'mortar','N':'grenade','G':'sandbag','W':'wire','F':'flare' };
+  const shortcutMap = { '1':'select','2':'move','D':'dig','P':'plan','B':'build','O':'operate','M':'mortar','N':'grenade','G':'sandbag','W':'wire','F':'flare','V':'formation_move' };
   if (shortcutMap[key]) {
     evt.preventDefault();
     setMode(shortcutMap[key]);
@@ -855,6 +902,23 @@ board.addEventListener('click', (evt) => {
         send({ type: 'tw_build_phase_place_bunker', tile });
       }
     }
+  } else if (mode === 'formation_move') {
+    if (formationShape === 'scatter') {
+      // scatter uses right-click (contextmenu), left-click is ignored
+    } else {
+      // left-click: execute formation move to this tile
+      if (soldiersAt(tile).length === 0 && !tileHasEquipment(tile)) {
+        const payload = { type: 'tw_formation_move', tile, count: formationCount, formation: formationShape };
+        if (selectedSquad !== null) {
+          payload.squad_id = selectedSquad;
+          selectedSquad = null;
+        } else if (selectedUnits.size > 0) {
+          payload.unit_ids = [...selectedUnits];
+          selectedUnits = new Set();
+        }
+        send(payload);
+      }
+    }
   }
 
   render();
@@ -862,6 +926,34 @@ board.addEventListener('click', (evt) => {
 
 board.addEventListener('contextmenu', (evt) => {
   evt.preventDefault();
+  if (mode === 'formation_move' && formationShape === 'scatter') {
+    if (!tw() || mySeat() === null || state.status !== 'active') return;
+    const tile = tileFromEvent(evt);
+    if (!tile) return;
+    const targetCount = selectedSquad !== null
+      ? ((getSquad(selectedSquad)?.soldier_ids || []).filter(uid => {
+          const s = (tw().soldiers || []).find(s => s.unit_id === uid);
+          return s && s.hp > 0;
+        }).length || formationCount)
+      : formationCount;
+    scatterPendingPositions.push(tile);
+    if (scatterPendingPositions.length >= targetCount) {
+      const positions = [...scatterPendingPositions];
+      scatterPendingPositions = [];
+      const payload = {
+        type: 'tw_formation_move',
+        tile: positions[0],
+        count: formationCount,
+        formation: 'scatter',
+        positions,
+      };
+      if (selectedSquad !== null) { payload.squad_id = selectedSquad; selectedSquad = null; }
+      else if (selectedUnits.size > 0) { payload.unit_ids = [...selectedUnits]; selectedUnits = new Set(); }
+      send(payload);
+    }
+    render();
+    return;
+  }
   if (!tw() || mySeat() === null || state.status !== 'active') return;
   const tile = tileFromEvent(evt);
   if (!tile) return;
@@ -915,6 +1007,7 @@ board.addEventListener('mousemove', (evt) => {
   if (mode === 'mortar' && pendingMortarTile && !pendingMortarTarget) render();
   if (retargetMortarId !== null) render();
   if (mode === 'flare') render();
+  if (mode === 'formation_move') render();
 });
 
 // === DRAW ===
@@ -1714,6 +1807,72 @@ function draw() {
     if (onBunker) ctx.globalAlpha = 1.0;
   }
 
+  // Squad color dots on soldiers (drawn after all soldiers so dots appear on top)
+  const squadMap = new Map((data.squads || []).map(sq => [sq.squad_id, sq]));
+  for (const s of data.soldiers || []) {
+    if (s.squad_id === null || s.squad_id === undefined) continue;
+    const squad = squadMap.get(s.squad_id);
+    if (!squad) continue;
+    const scx = cpx(s.x);
+    const scy = cpy(s.y);
+    const color = getSquadColor(squad.color);
+    ctx.beginPath();
+    ctx.arc(scx + 7, scy - 7, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+
+  // Formation move preview
+  if (mode === 'formation_move' && formationShape !== 'scatter' && tw()) {
+    const hoverTile = tileFromCanvas(mouseCanvas.x, mouseCanvas.y);
+    if (hoverTile) {
+      let previewCount = formationCount;
+      if (selectedSquad !== null) {
+        const sq = getSquad(selectedSquad);
+        if (sq) previewCount = sq.soldier_ids.filter(uid => (tw().soldiers || []).find(s => s.unit_id === uid && s.hp > 0)).length;
+      }
+      const fPositions = getFormationPositions(hoverTile, formationShape, previewCount, tw().map);
+      ctx.save();
+      ctx.fillStyle = 'rgba(100, 210, 255, 0.22)';
+      ctx.strokeStyle = 'rgba(100, 210, 255, 0.8)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 3]);
+      for (const [px, py] of fPositions) {
+        const tlx = OX + px * CELL;
+        const tly = tileTop(py);
+        ctx.fillRect(tlx, tly, CELL - 1, CELL - 1);
+        ctx.strokeRect(tlx + 0.5, tly + 0.5, CELL - 2, CELL - 2);
+      }
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  }
+
+  // Scatter pending positions preview
+  if (mode === 'formation_move' && formationShape === 'scatter') {
+    for (let i = 0; i < scatterPendingPositions.length; i++) {
+      const [px, py] = scatterPendingPositions[i];
+      const tlx = OX + px * CELL;
+      const tly = tileTop(py);
+      ctx.save();
+      ctx.fillStyle = 'rgba(255, 175, 80, 0.28)';
+      ctx.strokeStyle = 'rgba(255, 175, 80, 0.9)';
+      ctx.lineWidth = 1.5;
+      ctx.fillRect(tlx, tly, CELL - 1, CELL - 1);
+      ctx.strokeRect(tlx + 0.5, tly + 0.5, CELL - 2, CELL - 2);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 9px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(i + 1), tlx + CELL / 2, tly + CELL / 2 + 3);
+      ctx.textAlign = 'left';
+      ctx.restore();
+    }
+  }
+
   // Mortars – retarget preview: snap to hovered tile, show line + crosshair + scatter ring
   if (retargetMortarId !== null) {
     const retargetMortar = (data.mortars || []).find(m => m.structure_id === retargetMortarId && m.owner === mySeat());
@@ -2379,12 +2538,39 @@ function updateSelectionPanel() {
   }
 }
 
+let _lastSquadHtml = '';
+function updateSquadWindow() {
+  const winEl = el('squad-window');
+  if (!winEl || !tw()) return;
+  const mySquads = (tw().squads || []).filter(sq => sq.owner === mySeat());
+  let html = '';
+  if (mySquads.length === 0) {
+    html = '<span class="squad-window-empty">No squads</span>';
+  } else {
+    for (const squad of mySquads) {
+      const aliveCount = (tw().soldiers || []).filter(s => s.squad_id === squad.squad_id).length;
+      const isSelected = selectedSquad === squad.squad_id;
+      const colorHex = getSquadColor(squad.color);
+      html += `<div class="squad-tab${isSelected ? ' selected' : ''}" onclick="selectSquad(${squad.squad_id})">` +
+        `<span class="squad-dot" style="background:${colorHex}"></span>` +
+        `<span class="squad-count">${aliveCount}</span>` +
+        `<button class="squad-disband" onclick="event.stopPropagation();disbandSquad(${squad.squad_id})">×</button>` +
+        `</div>`;
+    }
+  }
+  if (html !== _lastSquadHtml) {
+    _lastSquadHtml = html;
+    winEl.innerHTML = html;
+  }
+}
+
 // === RENDER ===
 
 function render() {
   if (!state) return;
   draw();
   updateSelectionPanel();
+  updateSquadWindow();
 
   if (state.status === 'open') {
     setStatus('Waiting for opponent…');
@@ -2431,6 +2617,17 @@ function render() {
     const rem = fr ? (fr[String(mySeat())] ?? 0) : 0;
     if (!myOfficer()) setStatus('Flare — unavailable (no living officer).', true);
     else setStatus(`Flare — click any tile to illuminate it (${rem} remaining). Reveals all units in radius.`);
+  } else if (mode === 'formation_move') {
+    const n = selectedSquad !== null
+      ? ((getSquad(selectedSquad)?.soldier_ids || []).filter(uid => (tw()?.soldiers || []).find(s => s.unit_id === uid)).length || formationCount)
+      : formationCount;
+    const sqLabel = selectedSquad !== null ? ` (squad selected)` : '';
+    if (formationShape === 'scatter') {
+      const remaining = n - scatterPendingPositions.length;
+      setStatus(`Formation Move — right-click ${remaining} more position${remaining !== 1 ? 's' : ''} for scatter${sqLabel}.`);
+    } else {
+      setStatus(`Formation Move — click a tile to move ${n} soldier${n !== 1 ? 's' : ''} in ${formationShape} formation${sqLabel}.`);
+    }
   } else {
     const bpr = tw()?.build_phase_remaining || 0;
     if (bpr > 0) setStatus(`Build phase: ${Math.ceil(bpr)}s (no firing / no crossing midline).`);
@@ -2484,6 +2681,30 @@ function render() {
 ].forEach(([id, m]) => {
   const btn = el(id);
   if (btn) btn.addEventListener('click', (evt) => { evt.stopPropagation(); setMode(m); render(); });
+});
+
+const fmBtn = el('mode-formation-move');
+if (fmBtn) fmBtn.addEventListener('click', (evt) => { evt.stopPropagation(); setMode('formation_move'); render(); });
+
+[1, 2, 3, 4].forEach(n => {
+  const btn = el(`fcount-${n}`);
+  if (btn) btn.addEventListener('click', () => {
+    formationCount = n;
+    document.querySelectorAll('.fcount-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    render();
+  });
+});
+
+['horizontal', 'vertical', 'scatter'].forEach(shape => {
+  const btn = el(`fshape-${shape}`);
+  if (btn) btn.addEventListener('click', () => {
+    formationShape = shape;
+    scatterPendingPositions = [];
+    document.querySelectorAll('.fshape-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    render();
+  });
 });
 
 el('cancel-task').addEventListener('click', () => {

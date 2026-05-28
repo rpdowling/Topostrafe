@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=60" />
+  <link rel="stylesheet" href="/static/app.css?v=61" />
 </head>
 <body>
   <div class="page game-layout topowar-layout">
@@ -97,6 +97,33 @@
         </div>
 
         <div>
+          <h2 class="section-title">Formation Move</h2>
+          <button id="mode-formation-move" class="cmd-btn cmd-attack formation-move-btn" title="Auto-move nearest soldiers in formation (V)">
+            <span class="cmd-key">V</span><span class="cmd-label">Move</span>
+          </button>
+          <div class="formation-controls top-8">
+            <div class="fcount-row">
+              <button id="fcount-1" class="fcount-btn active">1</button>
+              <button id="fcount-2" class="fcount-btn">2</button>
+              <button id="fcount-3" class="fcount-btn">3</button>
+              <button id="fcount-4" class="fcount-btn">4</button>
+            </div>
+            <div class="fshape-row top-6">
+              <button id="fshape-horizontal" class="fshape-btn active" title="Horizontal line formation">
+                <svg width="30" height="12" viewBox="0 0 30 12"><circle cx="5" cy="6" r="3.5" fill="currentColor"/><circle cx="15" cy="6" r="3.5" fill="currentColor"/><circle cx="25" cy="6" r="3.5" fill="currentColor"/></svg>
+              </button>
+              <button id="fshape-vertical" class="fshape-btn" title="Vertical line formation">
+                <svg width="12" height="30" viewBox="0 0 12 30"><circle cx="6" cy="5" r="3.5" fill="currentColor"/><circle cx="6" cy="15" r="3.5" fill="currentColor"/><circle cx="6" cy="25" r="3.5" fill="currentColor"/></svg>
+              </button>
+              <button id="fshape-scatter" class="fshape-btn" title="Scatter (right-click to place each position)">
+                <svg width="26" height="26" viewBox="0 0 26 26"><circle cx="4" cy="4" r="3.5" fill="currentColor"/><circle cx="22" cy="5" r="3.5" fill="currentColor"/><circle cx="7" cy="21" r="3.5" fill="currentColor"/><circle cx="21" cy="20" r="3.5" fill="currentColor"/></svg>
+              </button>
+            </div>
+          </div>
+          <div id="squad-window" class="squad-window top-8"></div>
+        </div>
+
+        <div>
           <h2 class="section-title">Selection</h2>
           <div id="selection-panel" class="selection-panel">
             <div class="muted">Nothing selected.</div>
@@ -152,6 +179,6 @@
     </section>
   </div>
   <script>window.TOPOS_GAME_ID = "{{ game_id }}";</script>
-  <script src="/static/topowar_game.js?v=23"></script>
+  <script src="/static/topowar_game.js?v=24"></script>
 </body>
 </html>

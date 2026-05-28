@@ -1624,3 +1624,128 @@ body.info-modal-open {
   background: rgba(180,42,42,0.94);
   color: #fff2f2;
 }
+
+/* === Formation Move + Squad System === */
+
+.formation-move-btn { width: 100%; }
+
+.formation-controls { display: flex; flex-direction: column; }
+
+.fcount-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.fcount-btn {
+  padding: 5px 2px;
+  border-radius: 7px;
+  border: 1px solid #2f3f52;
+  background: linear-gradient(180deg, #2c3a4d 0%, #1c2735 100%);
+  color: #f6f9fc;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  text-align: center;
+  transition: filter 0.08s;
+}
+.fcount-btn:hover { filter: brightness(1.15); }
+.fcount-btn.active {
+  outline: 2px solid #ffd45a;
+  outline-offset: 1px;
+  background: linear-gradient(180deg, #4d6680 0%, #2e425a 100%);
+}
+
+.top-6 { margin-top: 6px; }
+
+.fshape-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.fshape-btn {
+  padding: 6px 4px;
+  border-radius: 7px;
+  border: 1px solid #2f3f52;
+  background: linear-gradient(180deg, #2c3a4d 0%, #1c2735 100%);
+  color: #a8bad0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: filter 0.08s;
+}
+.fshape-btn:hover { filter: brightness(1.15); }
+.fshape-btn.active {
+  outline: 2px solid #ffd45a;
+  outline-offset: 1px;
+  color: #fff;
+}
+
+.squad-window {
+  background: rgba(8, 12, 18, 0.8);
+  border: 1px solid #26323f;
+  border-radius: 8px;
+  padding: 6px;
+  min-height: 38px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: flex-start;
+  align-content: flex-start;
+}
+
+.squad-window-empty {
+  color: #4a5a6c;
+  font-size: 11px;
+  padding: 2px 4px;
+  align-self: center;
+}
+
+.squad-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px 3px 5px;
+  border-radius: 6px;
+  border: 1px solid #2a3a4e;
+  background: rgba(28, 38, 52, 0.95);
+  cursor: pointer;
+  font-size: 12px;
+  color: #c8d8e8;
+  user-select: none;
+  transition: filter 0.08s;
+}
+.squad-tab:hover { filter: brightness(1.18); }
+.squad-tab.selected {
+  outline: 2px solid #ffd45a;
+  outline-offset: 1px;
+  background: rgba(50, 65, 85, 0.95);
+}
+
+.squad-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.55);
+  flex-shrink: 0;
+}
+
+.squad-count {
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.squad-disband {
+  background: none;
+  border: none;
+  color: #607080;
+  font-size: 13px;
+  padding: 0 1px;
+  cursor: pointer;
+  line-height: 1;
+  margin-left: 1px;
+  transition: color 0.1s;
+}
+.squad-disband:hover { color: #ff6868; }
