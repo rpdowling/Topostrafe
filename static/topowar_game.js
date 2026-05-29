@@ -108,6 +108,8 @@ let formationCount = 1;
 let formationShape = 'horizontal';
 let selectedSquad = null;
 let scatterPendingPositions = [];
+let buildFlyoutOpen = false;
+const BUILD_MODES = new Set(['build', 'mortar', 'sandbag', 'wire', 'bunker']);
 
 const CELL = 24;
 const OX = 20;
@@ -404,26 +406,62 @@ function disbandSquad(squadId) {
 function getFormationPositions(targetTile, shape, count, mapData) {
   const [tx, ty] = targetTile;
   const W = mapData.width, H = mapData.height;
-  let positions = [];
+  let raw = [];
   if (shape === 'horizontal') {
     const half = Math.floor((count - 1) / 2);
-    for (let i = 0; i < count; i++) positions.push([tx - half + i, ty]);
+    for (let i = 0; i < count; i++) raw.push([tx - half + i, ty]);
   } else if (shape === 'vertical') {
     const half = Math.floor((count - 1) / 2);
-    for (let i = 0; i < count; i++) positions.push([tx, ty - half + i]);
+    for (let i = 0; i < count; i++) raw.push([tx, ty - half + i]);
   } else {
-    positions = [[tx, ty]];
+    raw = [[tx, ty]];
   }
-  return positions.map(([x, y]) => [Math.max(0, Math.min(W - 1, x)), Math.max(0, Math.min(H - 1, y))]);
+  // Clamp into bounds and de-duplicate so no two preview tiles overlap (mirrors backend).
+  const used = new Set();
+  const result = [];
+  for (let [x, y] of raw) {
+    let cx = Math.max(0, Math.min(W - 1, x)), cy = Math.max(0, Math.min(H - 1, y));
+    if (used.has(`${cx},${cy}`)) [cx, cy] = nearestUnusedTile(cx, cy, used, W, H);
+    used.add(`${cx},${cy}`);
+    result.push([cx, cy]);
+  }
+  return result;
+}
+
+function nearestUnusedTile(sx, sy, used, W, H) {
+  const seen = new Set([`${sx},${sy}`]);
+  const queue = [[sx, sy]];
+  while (queue.length) {
+    const [x, y] = queue.shift();
+    if (x >= 0 && x < W && y >= 0 && y < H && !used.has(`${x},${y}`)) return [x, y];
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, ny = y + dy, k = `${nx},${ny}`;
+      if (!seen.has(k) && nx >= 0 && nx < W && ny >= 0 && ny < H) { seen.add(k); queue.push([nx, ny]); }
+    }
+  }
+  return [sx, sy];
 }
 
 // === MODE MANAGEMENT ===
 
 function updateModeButtons() {
-  const modes = ['select','dig','build','operate','mortar','grenade','sandbag','wire','bunker','flare','formation-move'];
+  const modes = ['select','dig','build','operate','mortar','grenade','sandbag','wire','bunker','flare'];
   for (const m of modes) {
     const btn = el('mode-' + m);
     if (btn) btn.classList.toggle('active', mode === m);
+  }
+  applyBuildFlyout();
+}
+
+function applyBuildFlyout() {
+  const fl = el('build-flyout');
+  const tg = el('build-flyout-toggle');
+  const inBuild = BUILD_MODES.has(mode);
+  const open = buildFlyoutOpen || inBuild;
+  if (fl) fl.classList.toggle('open', open);
+  if (tg) {
+    tg.classList.toggle('open', open);
+    tg.classList.toggle('active', inBuild);
   }
 }
 
@@ -441,9 +479,11 @@ function setMode(m) {
     if (m !== 'dig') plan = [];
     if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false; }
     if (m !== 'mortar') { pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false; }
-    if (m !== 'formation_move') { scatterPendingPositions = []; }
-    if (m === 'build' || m === 'mortar' || m === 'sandbag' || m === 'wire' || m === 'bunker') selectedUnits = new Set();
+    if (m !== 'select') { scatterPendingPositions = []; }
+    if (BUILD_MODES.has(m)) selectedUnits = new Set();
   }
+  // Keep the build flyout open while a build mode is active; collapse otherwise.
+  buildFlyoutOpen = BUILD_MODES.has(mode);
   updateModeButtons();
   updateModeLabel();
   if (mode === 'build') refreshBuildStatus();
@@ -451,11 +491,11 @@ function setMode(m) {
 
 function updateModeLabel() {
   const labels = {
-    select: 'Select',
-    dig: 'Dig/Plan', build: 'Build MG', operate: 'Crew MG', mortar: 'Build Mortar', grenade: 'Grenade', sandbag: 'Build Sandbag', wire: 'Wire', bunker: 'Bunker', flare: 'Flare', formation_move: 'Formation Move',
+    select: 'Select / Move',
+    dig: 'Dig/Plan', build: 'Build MG', operate: 'Crew MG', mortar: 'Build Mortar', grenade: 'Grenade', sandbag: 'Build Sandbag', wire: 'Wire', bunker: 'Bunker', flare: 'Flare',
   };
   const e = el('mode-line');
-  if (e) e.textContent = labels[mode] || 'Select';
+  if (e) e.textContent = labels[mode] || 'Select / Move';
 }
 
 function clearPendingMgBuild() {
@@ -556,7 +596,7 @@ document.addEventListener('keydown', (evt) => {
     return;
   }
 
-  const shortcutMap = { '1':'select','D':'dig','B':'build','O':'operate','M':'mortar','N':'grenade','G':'sandbag','W':'wire','U':'bunker','F':'flare','V':'formation_move' };
+  const shortcutMap = { '1':'select','V':'select','D':'dig','B':'build','O':'operate','M':'mortar','N':'grenade','G':'sandbag','W':'wire','U':'bunker','F':'flare' };
   if (shortcutMap[key]) {
     evt.preventDefault();
     setMode(shortcutMap[key]);
@@ -606,6 +646,7 @@ board.addEventListener('click', (evt) => {
 
   if (mode === 'select') {
     if (myS.length) {
+      // Left-click own soldier: select (Ctrl toggles for multi-select)
       const uid = myS[0].unit_id;
       if (evt.ctrlKey) {
         if (selectedUnits.has(uid)) selectedUnits.delete(uid);
@@ -613,7 +654,7 @@ board.addEventListener('click', (evt) => {
       } else {
         selectedUnits = new Set([uid]);
       }
-      selectedMg = null; selectedMortar = null;
+      selectedMg = null; selectedMortar = null; selectedSquad = null;
     } else if (myMortar) {
       selectedMortar = myMortar.structure_id; selectedMg = null; selectedUnits = new Set();
       if (myMortar.built && myMortar.ready && (myMortar.hold_fire ?? false)) {
@@ -621,8 +662,23 @@ board.addEventListener('click', (evt) => {
       }
     } else if (myMg) {
       selectedMg = myMg.structure_id; selectedMortar = null; selectedUnits = new Set();
-    } else {
-      selectedUnits = new Set(); selectedMg = null; selectedMortar = null;
+    } else if (selectedMg !== null || selectedMortar !== null) {
+      // A structure was selected; clicking empty ground just deselects it (no move).
+      selectedMg = null; selectedMortar = null;
+    } else if (formationShape === 'scatter') {
+      // Scatter uses right-click to place each position; left-click on ground is a no-op.
+    } else if (soldiersAt(tile).length === 0 && !tileHasEquipment(tile)) {
+      // Left-click ground = MOVE. Move the current selection / squad in formation;
+      // with nothing selected, auto-grab the nearest `count` free soldiers.
+      const payload = { type: 'tw_formation_move', tile, count: formationCount, formation: formationShape };
+      if (selectedSquad !== null) {
+        payload.squad_id = selectedSquad;
+        selectedSquad = null;
+      } else if (selectedUnits.size > 0) {
+        payload.unit_ids = [...selectedUnits];
+        selectedUnits = new Set();
+      }
+      send(payload);
     }
 
   } else if (mode === 'dig') {
@@ -869,23 +925,6 @@ board.addEventListener('click', (evt) => {
         send({ type: 'tw_build_phase_place_bunker', tile });
       }
     }
-  } else if (mode === 'formation_move') {
-    if (formationShape === 'scatter') {
-      // scatter uses right-click (contextmenu), left-click is ignored
-    } else {
-      // left-click: execute formation move to this tile
-      if (soldiersAt(tile).length === 0 && !tileHasEquipment(tile)) {
-        const payload = { type: 'tw_formation_move', tile, count: formationCount, formation: formationShape };
-        if (selectedSquad !== null) {
-          payload.squad_id = selectedSquad;
-          selectedSquad = null;
-        } else if (selectedUnits.size > 0) {
-          payload.unit_ids = [...selectedUnits];
-          selectedUnits = new Set();
-        }
-        send(payload);
-      }
-    }
   }
 
   render();
@@ -897,14 +936,17 @@ board.addEventListener('contextmenu', (evt) => {
   const tile = tileFromEvent(evt);
   if (!tile) return;
 
-  // Scatter formation: right-click places positions (takes priority)
-  if (mode === 'formation_move' && formationShape === 'scatter') {
+  const myS = mySoldiersAt(tile);
+
+  // Scatter formation (in Select/Move mode): right-click empty ground places each
+  // position. Right-clicking a soldier still cancels (handled below).
+  if (mode === 'select' && formationShape === 'scatter' && !myS.length && !tileHasEquipment(tile)) {
     const targetCount = selectedSquad !== null
       ? ((getSquad(selectedSquad)?.soldier_ids || []).filter(uid => {
           const s = (tw().soldiers || []).find(s => s.unit_id === uid);
           return s && s.hp > 0;
         }).length || formationCount)
-      : formationCount;
+      : (selectedUnits.size > 0 ? selectedUnits.size : formationCount);
     scatterPendingPositions.push(tile);
     if (scatterPendingPositions.length >= targetCount) {
       const positions = [...scatterPendingPositions];
@@ -924,8 +966,7 @@ board.addEventListener('contextmenu', (evt) => {
     return;
   }
 
-  // Right-click own soldier: cancel their task immediately (any other mode)
-  const myS = mySoldiersAt(tile);
+  // Right-click own soldier: cancel their task immediately (any mode)
   if (myS.length) {
     send({ type: 'tw_cancel_task', unit_id: myS[0].unit_id });
     setStatus('Task cancelled.');
@@ -983,7 +1024,7 @@ board.addEventListener('mousemove', (evt) => {
   if (mode === 'mortar' && pendingMortarTile && !pendingMortarTarget) render();
   if (retargetMortarId !== null) render();
   if (mode === 'flare') render();
-  if (mode === 'formation_move') render();
+  if (mode === 'select') render();
 });
 
 // === DRAW ===
@@ -1802,14 +1843,18 @@ function draw() {
     ctx.lineWidth = 1;
   }
 
-  // Formation move preview
-  if (mode === 'formation_move' && formationShape !== 'scatter' && tw()) {
+  // Formation move preview (Select/Move mode, hovering ground)
+  if (mode === 'select' && formationShape !== 'scatter' && tw()) {
     const hoverTile = tileFromCanvas(mouseCanvas.x, mouseCanvas.y);
-    if (hoverTile) {
+    const overEquip = hoverTile && (soldiersAt(hoverTile).length > 0 || tileHasEquipment(hoverTile));
+    // Only preview when the click would actually issue a move (not over a unit/structure).
+    if (hoverTile && !overEquip && selectedMg === null && selectedMortar === null) {
       let previewCount = formationCount;
       if (selectedSquad !== null) {
         const sq = getSquad(selectedSquad);
         if (sq) previewCount = sq.soldier_ids.filter(uid => (tw().soldiers || []).find(s => s.unit_id === uid && s.hp > 0)).length;
+      } else if (selectedUnits.size > 0) {
+        previewCount = selectedUnits.size;
       }
       const fPositions = getFormationPositions(hoverTile, formationShape, previewCount, tw().map);
       ctx.save();
@@ -1829,7 +1874,7 @@ function draw() {
   }
 
   // Scatter pending positions preview
-  if (mode === 'formation_move' && formationShape === 'scatter') {
+  if (mode === 'select' && formationShape === 'scatter') {
     for (let i = 0; i < scatterPendingPositions.length; i++) {
       const [px, py] = scatterPendingPositions[i];
       const tlx = OX + px * CELL;
@@ -2594,16 +2639,21 @@ function render() {
     const rem = fr ? (fr[String(mySeat())] ?? 0) : 0;
     if (!myOfficer()) setStatus('Flare — unavailable (no living officer).', true);
     else setStatus(`Flare — click any tile to illuminate it (${rem} remaining). Reveals all units in radius.`);
-  } else if (mode === 'formation_move') {
-    const n = selectedSquad !== null
-      ? ((getSquad(selectedSquad)?.soldier_ids || []).filter(uid => (tw()?.soldiers || []).find(s => s.unit_id === uid)).length || formationCount)
-      : formationCount;
-    const sqLabel = selectedSquad !== null ? ` (squad selected)` : '';
+  } else if (mode === 'select') {
+    let n = formationCount;
+    let who = `${n} nearest`;
+    if (selectedSquad !== null) {
+      n = (getSquad(selectedSquad)?.soldier_ids || []).filter(uid => (tw()?.soldiers || []).find(s => s.unit_id === uid)).length || 1;
+      who = `squad (${n})`;
+    } else if (selectedUnits.size > 0) {
+      n = selectedUnits.size;
+      who = `${n} selected`;
+    }
     if (formationShape === 'scatter') {
-      const remaining = n - scatterPendingPositions.length;
-      setStatus(`Formation Move — right-click ${remaining} more position${remaining !== 1 ? 's' : ''} for scatter${sqLabel}.`);
+      const remaining = Math.max(0, n - scatterPendingPositions.length);
+      setStatus(`Select/Move — right-click ${remaining} more scatter position${remaining !== 1 ? 's' : ''} (moving ${who}).`);
     } else {
-      setStatus(`Formation Move — click a tile to move ${n} soldier${n !== 1 ? 's' : ''} in ${formationShape} formation${sqLabel}.`);
+      setStatus(`Select/Move — left-click a soldier to select, or left-click ground to move ${who} in ${formationShape} formation.`);
     }
   } else {
     const bpr = tw()?.build_phase_remaining || 0;
@@ -2660,8 +2710,14 @@ function render() {
   if (btn) btn.addEventListener('click', (evt) => { evt.stopPropagation(); setMode(m); render(); });
 });
 
-const fmBtn = el('mode-formation-move');
-if (fmBtn) fmBtn.addEventListener('click', (evt) => { evt.stopPropagation(); setMode('formation_move'); render(); });
+const buildToggle = el('build-flyout-toggle');
+if (buildToggle) buildToggle.addEventListener('click', (evt) => {
+  evt.stopPropagation();
+  // If a build mode is active, the flyout is forced open; clicking returns to Select/Move.
+  if (BUILD_MODES.has(mode)) { setMode('select'); render(); return; }
+  buildFlyoutOpen = !buildFlyoutOpen;
+  applyBuildFlyout();
+});
 
 [1, 2, 3, 4].forEach(n => {
   const btn = el(`fcount-${n}`);

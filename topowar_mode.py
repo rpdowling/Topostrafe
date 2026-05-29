@@ -1134,18 +1134,48 @@ class TopowarGameState:
         return False
 
     def _formation_positions(self, target: tuple[int, int], formation: str, count: int) -> list[tuple[int, int]]:
-        """Return count tile positions in the given formation centered near target."""
+        """Return count distinct tile positions in the given formation centered near target.
+
+        Positions are clamped into the map; if clamping (or a scatter target) makes two
+        positions land on the same tile, collisions are nudged to the nearest free tile so
+        no two soldiers are ever assigned the same destination.
+        """
         tx, ty = target
         W, H = self.map.width, self.map.height
         if formation == 'horizontal':
             half = (count - 1) // 2
-            positions = [(tx - half + i, ty) for i in range(count)]
+            raw = [(tx - half + i, ty) for i in range(count)]
         elif formation == 'vertical':
             half = (count - 1) // 2
-            positions = [(tx, ty - half + i) for i in range(count)]
+            raw = [(tx, ty - half + i) for i in range(count)]
         else:
-            positions = [target] * count
-        return [(max(0, min(W - 1, x)), max(0, min(H - 1, y))) for x, y in positions]
+            raw = [target] * count
+        used: set[tuple[int, int]] = set()
+        result: list[tuple[int, int]] = []
+        for x, y in raw:
+            cx, cy = max(0, min(W - 1, x)), max(0, min(H - 1, y))
+            if (cx, cy) in used:
+                cx, cy = self._nearest_unused_tile((cx, cy), used, W, H)
+            used.add((cx, cy))
+            result.append((cx, cy))
+        return result
+
+    def _nearest_unused_tile(
+        self, start: tuple[int, int], used: set[tuple[int, int]], W: int, H: int
+    ) -> tuple[int, int]:
+        """BFS outward from start for the closest in-bounds tile not already in used."""
+        seen = {start}
+        queue = deque([start])
+        while queue:
+            x, y = queue.popleft()
+            if 0 <= x < W and 0 <= y < H and (x, y) not in used:
+                return (x, y)
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx, ny = x + dx, y + dy
+                if (nx, ny) not in seen and 0 <= nx < W and 0 <= ny < H:
+                    seen.add((nx, ny))
+                    queue.append((nx, ny))
+        return start
 
     def _assign_soldiers_to_positions(
         self,
