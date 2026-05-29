@@ -420,7 +420,7 @@ function getFormationPositions(targetTile, shape, count, mapData) {
 // === MODE MANAGEMENT ===
 
 function updateModeButtons() {
-  const modes = ['select','move','dig','plan','build','operate','mortar','grenade','sandbag','wire','bunker','flare','formation-move'];
+  const modes = ['select','dig','build','operate','mortar','grenade','sandbag','wire','bunker','flare','formation-move'];
   for (const m of modes) {
     const btn = el('mode-' + m);
     if (btn) btn.classList.toggle('active', mode === m);
@@ -438,11 +438,11 @@ function setMode(m) {
     selectedSquad = null;
   } else {
     mode = m;
-    if (m !== 'plan') plan = [];
+    if (m !== 'dig') plan = [];
     if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false; }
     if (m !== 'mortar') { pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false; }
     if (m !== 'formation_move') { scatterPendingPositions = []; }
-    if (m === 'build' || m === 'mortar' || m === 'sandbag' || m === 'wire' || m === 'bunker' || m === 'move') selectedUnits = new Set();
+    if (m === 'build' || m === 'mortar' || m === 'sandbag' || m === 'wire' || m === 'bunker') selectedUnits = new Set();
   }
   updateModeButtons();
   updateModeLabel();
@@ -451,8 +451,8 @@ function setMode(m) {
 
 function updateModeLabel() {
   const labels = {
-    select: 'Select', move: 'Move',
-    dig: 'Dig', plan: 'Plan Dig', build: 'Build MG', operate: 'Crew', mortar: 'Build Mortar', grenade: 'Grenade', sandbag: 'Build Sandbag', wire: 'Wire', bunker: 'Bunker', flare: 'Flare', formation_move: 'Formation Move',
+    select: 'Select',
+    dig: 'Dig/Plan', build: 'Build MG', operate: 'Crew MG', mortar: 'Build Mortar', grenade: 'Grenade', sandbag: 'Build Sandbag', wire: 'Wire', bunker: 'Bunker', flare: 'Flare', formation_move: 'Formation Move',
   };
   const e = el('mode-line');
   if (e) e.textContent = labels[mode] || 'Select';
@@ -556,7 +556,7 @@ document.addEventListener('keydown', (evt) => {
     return;
   }
 
-  const shortcutMap = { '1':'select','2':'move','D':'dig','P':'plan','B':'build','O':'operate','M':'mortar','N':'grenade','G':'sandbag','W':'wire','F':'flare','V':'formation_move' };
+  const shortcutMap = { '1':'select','D':'dig','B':'build','O':'operate','M':'mortar','N':'grenade','G':'sandbag','W':'wire','U':'bunker','F':'flare','V':'formation_move' };
   if (shortcutMap[key]) {
     evt.preventDefault();
     setMode(shortcutMap[key]);
@@ -625,54 +625,21 @@ board.addEventListener('click', (evt) => {
       selectedUnits = new Set(); selectedMg = null; selectedMortar = null;
     }
 
-  } else if (mode === 'move') {
-    if (selectedUnits.size && !evt.ctrlKey) {
-      if (myS.length) {
-        // Clicking a friendly soldier: change selection instead of moving
-        selectedUnits = new Set([myS[0].unit_id]);
-      } else if (soldiersAt(tile).length === 0 && !tileHasEquipment(tile)) {
-        if (evt.shiftKey) {
-          // Shift+click: queue a waypoint — unit will move here after completing current path
-          for (const uid of selectedUnits) {
-            if (!pendingWaypoints.has(uid)) pendingWaypoints.set(uid, []);
-            pendingWaypoints.get(uid).push(tile);
-          }
-          // Keep selection so the player can keep queueing further waypoints
-        } else {
-          // Regular click: immediate move order, clear any queued waypoints
-          for (const uid of selectedUnits) {
-            send({ type: 'tw_move_unit', unit_id: uid, tile });
-            pendingWaypoints.delete(uid);
-          }
-          selectedUnits = new Set();
-        }
-      }
-    } else if (myS.length) {
-      // Nothing selected (or Ctrl held): click to select/toggle
-      const uid = myS[0].unit_id;
-      if (evt.ctrlKey) {
-        if (selectedUnits.has(uid)) selectedUnits.delete(uid);
-        else selectedUnits.add(uid);
-      } else {
-        selectedUnits = new Set([uid]);
-      }
-    }
-
   } else if (mode === 'dig') {
     if (myS.length) {
-      selectedUnits = new Set([myS[0].unit_id]);
-    } else {
-      const uid = firstSelected();
-      if (uid !== null) send({ type: 'tw_assign_dig', unit_id: uid, plan: [tile] });
-    }
-
-  } else if (mode === 'plan') {
-    if (myS.length) {
+      // Click own soldier: select it; if a plan was traced, assign it immediately
       const uid = myS[0].unit_id;
       selectedUnits = new Set([uid]);
       if (plan.length) { send({ type: 'tw_assign_dig', unit_id: uid, plan: [...plan] }); plan = []; }
     } else {
-      addToPlan(tile);
+      const uid = firstSelected();
+      if (uid !== null && plan.length === 0) {
+        // Soldier selected, no plan started: immediate single-tile dig
+        send({ type: 'tw_assign_dig', unit_id: uid, plan: [tile] });
+      } else {
+        // Accumulate plan (no soldier yet, or plan already started)
+        addToPlan(tile);
+      }
     }
 
   } else if (mode === 'build') {
@@ -926,10 +893,12 @@ board.addEventListener('click', (evt) => {
 
 board.addEventListener('contextmenu', (evt) => {
   evt.preventDefault();
+  if (!tw() || mySeat() === null || state.status !== 'active') return;
+  const tile = tileFromEvent(evt);
+  if (!tile) return;
+
+  // Scatter formation: right-click places positions (takes priority)
   if (mode === 'formation_move' && formationShape === 'scatter') {
-    if (!tw() || mySeat() === null || state.status !== 'active') return;
-    const tile = tileFromEvent(evt);
-    if (!tile) return;
     const targetCount = selectedSquad !== null
       ? ((getSquad(selectedSquad)?.soldier_ids || []).filter(uid => {
           const s = (tw().soldiers || []).find(s => s.unit_id === uid);
@@ -954,9 +923,16 @@ board.addEventListener('contextmenu', (evt) => {
     render();
     return;
   }
-  if (!tw() || mySeat() === null || state.status !== 'active') return;
-  const tile = tileFromEvent(evt);
-  if (!tile) return;
+
+  // Right-click own soldier: cancel their task immediately (any other mode)
+  const myS = mySoldiersAt(tile);
+  if (myS.length) {
+    send({ type: 'tw_cancel_task', unit_id: myS[0].unit_id });
+    setStatus('Task cancelled.');
+    render();
+    return;
+  }
+
   const myMg = myMgAt(tile);
   if (myMg) {
     send({ type: 'tw_force_fire', mg_id: myMg.structure_id, tile: null });
@@ -991,7 +967,7 @@ function addToPlan(tile) {
 }
 
 board.addEventListener('mousedown', (evt) => {
-  if (mode === 'plan' && evt.button === 0) planDragging = true;
+  if (mode === 'dig' && evt.button === 0) planDragging = true;
 });
 board.addEventListener('mouseup', () => { planDragging = false; });
 
@@ -999,7 +975,7 @@ board.addEventListener('mousemove', (evt) => {
   const r = board.getBoundingClientRect();
   mouseCanvas.x = (evt.clientX - r.left) * (board.width / r.width);
   mouseCanvas.y = (evt.clientY - r.top) * (board.height / r.height);
-  if (mode === 'plan' && planDragging) {
+  if (mode === 'dig' && planDragging) {
     const tile = tileFromEvent(evt);
     if (tile) { addToPlan(tile); render(); }
   }
@@ -2579,9 +2555,10 @@ function render() {
       ? `${state.winner_name} wins — ${state.win_reason || ''}`
       : (state.win_reason || 'Game over.');
     setStatus(msg);
-  } else if (mode === 'move') {
-    if (!selectedUnits.size) setStatus('Move — click soldiers to select, then click a destination tile.');
-    else setStatus(`Move — ${selectedUnits.size} selected. Click any tile to move.`);
+  } else if (mode === 'dig') {
+    if (plan.length) setStatus(`Dig/Plan — ${plan.length} tile plan traced. Click a soldier to assign, or keep dragging.`);
+    else if (!selectedUnits.size) setStatus('Dig/Plan — click a soldier to select, then click a tile. Or drag to trace a multi-tile plan.');
+    else setStatus('Dig/Plan — click a tile to dig. Drag to trace a longer plan.');
   } else if (mode === 'sandbag') {
     const inBuildPhase = (tw()?.build_phase_remaining || 0) > 0;
     if (inBuildPhase) {
@@ -2676,8 +2653,8 @@ function render() {
 // === BUTTON WIRING ===
 
 [
-  ['mode-select','select'], ['mode-move','move'],
-  ['mode-dig','dig'], ['mode-plan','plan'], ['mode-build','build'], ['mode-operate','operate'], ['mode-mortar','mortar'], ['mode-grenade','grenade'], ['mode-sandbag','sandbag'], ['mode-wire','wire'], ['mode-bunker','bunker'], ['mode-flare','flare'],
+  ['mode-select','select'],
+  ['mode-dig','dig'], ['mode-build','build'], ['mode-operate','operate'], ['mode-mortar','mortar'], ['mode-grenade','grenade'], ['mode-sandbag','sandbag'], ['mode-wire','wire'], ['mode-bunker','bunker'], ['mode-flare','flare'],
 ].forEach(([id, m]) => {
   const btn = el(id);
   if (btn) btn.addEventListener('click', (evt) => { evt.stopPropagation(); setMode(m); render(); });
