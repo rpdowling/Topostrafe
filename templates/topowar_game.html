@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=61" />
+  <link rel="stylesheet" href="/static/app.css?v=62" />
 </head>
 <body>
   <div class="page game-layout topowar-layout">
@@ -57,22 +57,16 @@
             <button id="mode-select" class="cmd-btn cmd-select" title="Click units or MGs to select (Esc to clear)">
               <span class="cmd-key">1</span><span class="cmd-label">Select</span>
             </button>
-            <button id="mode-move" class="cmd-btn cmd-attack" title="Select soldiers, then click a destination tile to move">
-              <span class="cmd-key">2</span><span class="cmd-label">Move</span>
-            </button>
-            <button id="mode-dig" class="cmd-btn cmd-dig" title="Click an empty tile adjacent to your trench to dig one square">
-              <span class="cmd-key">D</span><span class="cmd-label">Dig (1)</span>
-            </button>
-            <button id="mode-plan" class="cmd-btn cmd-plan" title="Trace a chain of tiles, then click a soldier to assign the dig plan">
-              <span class="cmd-key">P</span><span class="cmd-label">Plan Dig</span>
+            <button id="mode-dig" class="cmd-btn cmd-dig" title="Click a tile to dig 1 square (soldier must be selected). Drag or multi-click to trace a longer plan, then click a soldier to assign it. Right-click any soldier to cancel their task.">
+              <span class="cmd-key">D</span><span class="cmd-label">Dig/Plan</span>
             </button>
             <button id="mode-build" class="cmd-btn cmd-build" title="Place a machine gun adjacent to your trench (needs 1 builder)">
               <span class="cmd-key">B</span><span class="cmd-label">Build MG</span>
             </button>
             <button id="mode-operate" class="cmd-btn cmd-operate" title="Click an MG or mortar to crew it; then click a tile to force-fire MG">
-              <span class="cmd-key">O</span><span class="cmd-label">Crew</span>
+              <span class="cmd-key">O</span><span class="cmd-label">Crew MG</span>
             </button>
-            <button id="mode-mortar" class="cmd-btn cmd-mortar" title="Place a mortar (3×3 same-type zone, 2 builders, 60 s build; click to fire when ready)">
+            <button id="mode-mortar" class="cmd-btn cmd-mortar" title="Place a mortar (3&times;3 same-type zone, 2 builders, 60 s build; click to fire when ready)">
               <span class="cmd-key">M</span><span class="cmd-label">Mortar</span>
             </button>
             <button id="mode-grenade" class="cmd-btn cmd-attack" title="Mark grenade target tiles (grenadiers auto-throw when in range)">
@@ -85,21 +79,21 @@
               <span class="cmd-key">W</span><span class="cmd-label">Wire</span>
             </button>
             <button id="mode-bunker" class="cmd-btn cmd-build" title="Place a bunker on a trench tile (build phase only, 5 per side). Direct mortar hits negated; nodes inside go underground.">
-              <span class="cmd-key">B</span><span class="cmd-label">Bunker</span>
+              <span class="cmd-key">U</span><span class="cmd-label">Bunker</span>
             </button>
             <button id="mode-flare" class="cmd-btn cmd-sentry" title="Fire a flare to illuminate an area for both sides (5 per game). Scatter increases with distance.">
               <span class="cmd-key">F</span><span class="cmd-label">Flare</span>
             </button>
-            <button id="cancel-task" class="cmd-btn cmd-cancel" title="Cancel the selected soldier's current task">
+            <button id="cancel-task" class="cmd-btn cmd-cancel" title="Cancel selected soldier's task. You can also right-click any soldier to cancel directly.">
               <span class="cmd-key">C</span><span class="cmd-label">Cancel</span>
             </button>
           </div>
         </div>
 
         <div>
-          <h2 class="section-title">Formation Move</h2>
-          <button id="mode-formation-move" class="cmd-btn cmd-attack formation-move-btn" title="Auto-move nearest soldiers in formation (V)">
-            <span class="cmd-key">V</span><span class="cmd-label">Move</span>
+          <h2 class="section-title">Move</h2>
+          <button id="mode-formation-move" class="cmd-btn cmd-attack formation-move-btn" title="Auto-move nearest soldiers in formation (V). Count=1 works like regular Move. Right-click soldier to cancel.">
+            <span class="cmd-key">V</span><span class="cmd-label">Formation Move</span>
           </button>
           <div class="formation-controls top-8">
             <div class="fcount-row">
@@ -165,6 +159,7 @@
             <li>Rifles: range 5, fire while moving, 1 shot per 3s.</li>
             <li>MG: range 20, needs 2 nearby soldiers to fire bursts.</li>
             <li>Dig only adjacent to your trench. MGs build next to trench (not in trench).</li>
+            <li><strong>Right-click</strong> a soldier to cancel their task instantly.</li>
             <li>Eliminate the enemy or out-kill them by 10:00.</li>
           </ul>
         </div>
@@ -179,6 +174,6 @@
     </section>
   </div>
   <script>window.TOPOS_GAME_ID = "{{ game_id }}";</script>
-  <script src="/static/topowar_game.js?v=24"></script>
+  <script src="/static/topowar_game.js?v=25"></script>
 </body>
 </html>
