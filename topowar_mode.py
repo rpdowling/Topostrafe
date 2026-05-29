@@ -1779,19 +1779,25 @@ class TopowarGameState:
             # Assign soldiers to positions
             assignments = self._assign_soldiers_to_positions(soldiers_to_move, form_positions)
 
-            # Issue move orders
-            occ = (
-                set(self._occupied_tiles().keys())
-                | self._mg_tile_set()
+            # Issue move orders — exclude formation soldiers from each other's blocked sets
+            # so their current tiles don't create phantom obstacles as they all move at once.
+            formation_unit_ids = {s.unit_id for s, _ in assignments}
+            other_soldier_tiles = {
+                sol.tile for sol in self.soldiers.values()
+                if sol.hp > 0 and sol.unit_id not in formation_unit_ids
+            }
+            static_blocked = (
+                self._mg_tile_set()
                 | self._mortar_tile_set()
                 | self._sandbag_tile_set()
                 | self._wire_tile_set()
             )
+            blocked_base = other_soldier_tiles | static_blocked
             for s, pos in assignments:
                 s.current_task = {"type": "move", "goal": list(pos)}
                 s.combat_halt = False
                 s.path = self.path.find_path(
-                    s.tile, pos, trench_only=False, blocked=occ - {s.tile}
+                    s.tile, pos, trench_only=False, blocked=blocked_base - {s.tile}
                 )
 
             # Squad management (only when NOT moving an existing squad)
@@ -1816,9 +1822,14 @@ class TopowarGameState:
                                     sol.squad_id = None
                             self.squads.pop(osqid, None)
 
-                # Create new squad
+                # Create new squad; avoid reusing colors already active for this owner
                 has_officer = any(s.is_officer for s in soldiers_to_move)
-                color = 'gold' if has_officer else self.random.choice(SQUAD_COLORS)
+                if has_officer:
+                    color = 'gold'
+                else:
+                    used = {sq.color for sq in self.squads.values() if sq.owner == owner and sq.color != 'gold'}
+                    available = [c for c in SQUAD_COLORS if c not in used]
+                    color = self.random.choice(available if available else SQUAD_COLORS)
                 sqid = self.next_squad_id
                 self.next_squad_id += 1
                 new_squad = Squad(sqid, owner, [s.unit_id for s in soldiers_to_move], color)
@@ -1992,7 +2003,8 @@ class TopowarGameState:
                     # Bunker removal: soldier must be adjacent, takes 60 seconds
                     in_position = s.tile in set(adj4_tgt)
                     if not in_position:
-                        if not s.path:
+                        if not s.path or (s.blocked and s.blocked_for >= 0.4):
+                            s.path = []
                             goals = [t for t in adj4_tgt if self.map.in_bounds(t)]
                             if goals:
                                 goal = min(goals, key=lambda g: math.dist(s.tile, g))
@@ -2015,7 +2027,8 @@ class TopowarGameState:
                 # All dig types: soldier just needs to be adjacent to the target tile
                 in_position = s.tile in set(adj4_tgt)
                 if not in_position:
-                    if not s.path:
+                    if not s.path or (s.blocked and s.blocked_for >= 0.4):
+                        s.path = []
                         goals = [t for t in adj4_tgt if self.map.in_bounds(t)]
                         if not goals:
                             s.current_task = None
@@ -2283,11 +2296,12 @@ class TopowarGameState:
                     if self.soldiers.get(sid) and self.soldiers[sid].hp > 0
                 )
                 if alive_count <= 1:
+                    sqid_to_remove = victim.squad_id  # save before loop clears it
                     for sid in squad.soldier_ids:
                         sol = self.soldiers.get(sid)
                         if sol:
                             sol.squad_id = None
-                    self.squads.pop(victim.squad_id, None)
+                    self.squads.pop(sqid_to_remove, None)
 
     def _fire_mortar(self, mortar: "Mortar"):
         if not mortar.target or not mortar.ready:
