@@ -856,34 +856,34 @@ class TopowarGameState:
                 cy += sy
 
     def _has_combat_los(self, a: tuple[int, int], b: tuple[int, int]) -> bool:
-        """LOS check for rifle and MG fire, respecting elevation in both directions.
+        """LOS check for rifle and MG fire, respecting elevation.
+
+        Trench and ground are treated as the same surface tier — a trench is a
+        dug-in position on the ground plane, not an underground bunker, so a
+        trench soldier can see and shoot across open ground and vice versa.
 
         Threshold (passed to _has_terrain_los as "block if tile > threshold"):
 
-          Downhill (shooter > target): threshold = shooter_elev - 1
-            → block if tile >= shooter_elev
-            → shots from a mountain pass over hills and ground freely;
-               another mountain tile in the path blocks them.
+          Same surface (trench/ground ↔ trench/ground, hill ↔ hill, mountain ↔ mountain):
+            threshold = surface_elev  →  only tiles above that tier block.
 
-          Uphill (shooter < target): threshold = target_elev - 1
-            → block if tile >= target_elev
-            → you can shoot past lower tiers toward the target tier, but
-               a tile at the target's own elevation (or higher) blocks.
+          Downhill (surface_a > surface_b, e.g. hill→ground):
+            threshold = surface_a - 1  →  another tile at the shooter's tier blocks.
 
-          Equal elevation: threshold = shooter_elev
-            → block if tile > shooter_elev (unchanged existing behaviour).
-
-        Because elevation values are 2, 4, 5, 6 (no integer between 2 and 4),
-        trench→ground uphill gives threshold = 3, matching the old rule exactly.
+          Uphill (surface_a < surface_b, e.g. ground→hill):
+            threshold = surface_b - 1  →  another tile at the target's tier blocks.
         """
         a_elev = self.map.elevation_at(a)
         b_elev = self.map.elevation_at(b)
-        if a_elev > b_elev:    # downhill
-            threshold = a_elev - 1
-        elif a_elev < b_elev:  # uphill
-            threshold = b_elev - 1
-        else:                  # equal
-            threshold = a_elev
+        # Normalise: trench (2) → ground (4) for the threshold calculation only.
+        a_surf = max(a_elev, ELEV_GROUND)
+        b_surf = max(b_elev, ELEV_GROUND)
+        if a_surf > b_surf:
+            threshold = a_surf - 1
+        elif a_surf < b_surf:
+            threshold = b_surf - 1
+        else:
+            threshold = a_surf
         return self._has_terrain_los(a, b, threshold)
 
     def _has_mortar_los(self, mortar_tile: tuple[int, int], target: tuple[int, int]) -> bool:
@@ -2644,7 +2644,7 @@ class TopowarGameState:
                 continue
             targets = [
                 t for t in self.grenade_tiles.get(s.owner, set())
-                if math.dist(s.tile, t) <= self.rules.grenade_range
+                if math.dist(s.tile, t) <= self._soldier_effective_range(s, t)
             ]
             if not targets:
                 s.grenade_target = None
@@ -2934,7 +2934,7 @@ class TopowarGameState:
                 "is_grenadier": s.is_grenadier,
                 "is_officer": s.is_officer,
                 "squad_id": s.squad_id,
-                "range": self._soldier_max_range(s) if not s.is_grenadier else None,
+                "range": self._soldier_max_range(s),
             })
         mgs = []
         for mg in self.mgs.values():
