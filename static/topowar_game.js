@@ -111,10 +111,18 @@ let scatterPendingPositions = [];
 let buildFlyoutOpen = false;
 const BUILD_MODES = new Set(['build', 'mortar', 'sandbag', 'wire', 'bunker']);
 
+// Smooth soldier interpolation: display position trails toward server position.
+const soldierDisplayPos = new Map(); // unit_id → {x, y}
+
+// Box / marquee selection state.
+let selectBox = null; // {x0, y0, x1, y1} in canvas coords, null when inactive
+
 const CELL = 24;
 const OX = 20;
 const OY = 20;
-const RIFLE_RANGE = 5;
+const RIFLE_RANGE = 10;
+const RIFLE_RANGE_HILL = 12;
+const RIFLE_RANGE_MOUNTAIN = 14;
 const GRENADIER_RANGE = 7;
 const MG_RANGE = 20;
 const MIN_BOARD_ZOOM = 0.6;
@@ -626,6 +634,7 @@ document.addEventListener('keydown', (evt) => {
 // === CLICK HANDLER ===
 
 board.addEventListener('click', (evt) => {
+  if (selectBoxConsumedClick) { selectBoxConsumedClick = false; return; }
   if (!tw() || mySeat() === null) return;
   if (state.status !== 'active') return;
   const tile = tileFromEvent(evt);
@@ -1007,10 +1016,54 @@ function addToPlan(tile) {
   }
 }
 
+let _selectBoxStart = null; // {cx, cy} canvas coords where drag began
+let selectBoxConsumedClick = false; // suppress click when a drag was completed
+
 board.addEventListener('mousedown', (evt) => {
-  if (mode === 'dig' && evt.button === 0) planDragging = true;
+  if (evt.button !== 0) return;
+  if (mode === 'dig') { planDragging = true; return; }
+  if (mode === 'select') {
+    // Start a potential box-select drag only if clicking empty ground.
+    const tile = tileFromEvent(evt);
+    const myS = tile ? mySoldiersAt(tile) : [];
+    const hasMg = tile ? !!myMgAt(tile) : false;
+    const hasMortar = tile ? !!myMortarAt(tile) : false;
+    if (!myS.length && !hasMg && !hasMortar) {
+      const r = board.getBoundingClientRect();
+      const cx = (evt.clientX - r.left) * (board.width / r.width);
+      const cy = (evt.clientY - r.top) * (board.height / r.height);
+      _selectBoxStart = { cx, cy };
+    }
+  }
 });
-board.addEventListener('mouseup', () => { planDragging = false; });
+
+board.addEventListener('mouseup', (evt) => {
+  planDragging = false;
+  if (selectBox !== null) {
+    // Finalise box-select: pick all own soldiers whose tile falls inside the box.
+    const x0 = Math.min(selectBox.x0, selectBox.x1);
+    const x1 = Math.max(selectBox.x0, selectBox.x1);
+    const y0 = Math.min(selectBox.y0, selectBox.y1);
+    const y1 = Math.max(selectBox.y0, selectBox.y1);
+    const picked = new Set();
+    for (const s of tw()?.soldiers || []) {
+      if (s.owner !== mySeat() || s.hp <= 0) continue;
+      const dp = soldierDisplayPos.get(s.unit_id) || { x: s.x, y: s.y };
+      const px = cpx(dp.x), py = cpy(dp.y);
+      if (px >= x0 && px <= x1 && py >= y0 && py <= y1) picked.add(s.unit_id);
+    }
+    if (picked.size > 0) {
+      selectedUnits = picked;
+      selectedMg = null; selectedMortar = null; selectedSquad = null;
+      selectBoxConsumedClick = true;
+    }
+    selectBox = null;
+    _selectBoxStart = null;
+    render();
+  } else {
+    _selectBoxStart = null;
+  }
+});
 
 board.addEventListener('mousemove', (evt) => {
   const r = board.getBoundingClientRect();
@@ -1020,11 +1073,22 @@ board.addEventListener('mousemove', (evt) => {
     const tile = tileFromEvent(evt);
     if (tile) { addToPlan(tile); render(); }
   }
-  if (mode === 'build' && pendingBuildTile && pendingBuildFacing === null) render();
-  if (mode === 'mortar' && pendingMortarTile && !pendingMortarTarget) render();
-  if (retargetMortarId !== null) render();
-  if (mode === 'flare') render();
-  if (mode === 'select') render();
+  if (mode === 'select' && _selectBoxStart) {
+    const cx = mouseCanvas.x, cy = mouseCanvas.y;
+    const dist = Math.sqrt((cx - _selectBoxStart.cx) ** 2 + (cy - _selectBoxStart.cy) ** 2);
+    if (dist > 6) {
+      selectBox = { x0: _selectBoxStart.cx, y0: _selectBoxStart.cy, x1: cx, y1: cy };
+    } else if (selectBox) {
+      selectBox.x1 = cx; selectBox.y1 = cy;
+    }
+    render();
+  } else {
+    if (mode === 'build' && pendingBuildTile && pendingBuildFacing === null) render();
+    if (mode === 'mortar' && pendingMortarTile && !pendingMortarTarget) render();
+    if (retargetMortarId !== null) render();
+    if (mode === 'flare') render();
+    if (mode === 'select') render();
+  }
 });
 
 // === DRAW ===
@@ -1404,7 +1468,8 @@ function draw() {
   if (selSoldier) {
     const grenRange = tw()?.rules?.grenade_range ?? GRENADIER_RANGE;
     const effectiveRange = selSoldier.is_grenadier ? grenRange : (selSoldier.range ?? RIFLE_RANGE);
-    drawRangeCircle(cpx(selSoldier.x), cpy(selSoldier.y), effectiveRange * CELL, 'rgba(255,180,50,0.8)');
+    const _sdp = soldierDisplayPos.get(selSoldier.unit_id) || { x: selSoldier.x, y: selSoldier.y };
+    drawRangeCircle(cpx(_sdp.x), cpy(_sdp.y), effectiveRange * CELL, 'rgba(255,180,50,0.8)');
   }
 
   // Build mode: pending MG arc preview (before MG sprites so it renders underneath)
@@ -1690,13 +1755,14 @@ function draw() {
 
   // Soldiers
   for (const s of data.soldiers || []) {
-    const scx = cpx(s.x);
-    const scy = cpy(s.y);
+    const dp = soldierDisplayPos.get(s.unit_id) || { x: s.x, y: s.y };
+    const scx = cpx(dp.x);
+    const scy = cpy(dp.y);
     const onBunker = bunkerTileSet.has(`${Math.round(s.x)},${Math.round(s.y)}`);
     if (onBunker) ctx.globalAlpha = 0.5;
 
     // Firing flash halo
-    if (s.rifle_cooldown > 2.5) {
+    if (s.rifle_cooldown > 1.5) {
       ctx.fillStyle = 'rgba(255,255,180,0.4)';
       ctx.beginPath();
       ctx.arc(scx, scy, 10, 0, Math.PI * 2);
@@ -1830,8 +1896,9 @@ function draw() {
     if (s.squad_id === null || s.squad_id === undefined) continue;
     const squad = squadMap.get(s.squad_id);
     if (!squad) continue;
-    const scx = cpx(s.x);
-    const scy = cpy(s.y);
+    const _dp = soldierDisplayPos.get(s.unit_id) || { x: s.x, y: s.y };
+    const scx = cpx(_dp.x);
+    const scy = cpy(_dp.y);
     const color = getSquadColor(squad.color);
     ctx.beginPath();
     ctx.arc(scx + 7, scy - 7, 3.5, 0, Math.PI * 2);
@@ -2453,6 +2520,23 @@ function draw() {
     }
     ctx.textAlign = 'left';
   }
+
+  // Box / marquee selection overlay
+  if (selectBox !== null) {
+    const bx = Math.min(selectBox.x0, selectBox.x1);
+    const by = Math.min(selectBox.y0, selectBox.y1);
+    const bw = Math.abs(selectBox.x1 - selectBox.x0);
+    const bh = Math.abs(selectBox.y1 - selectBox.y0);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(100,200,255,0.9)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.fillStyle = 'rgba(100,200,255,0.08)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
 }
 
 // === SELECTION PANEL ===
@@ -2811,7 +2895,40 @@ function updateSmoke() {
   smokeParticles = smokeParticles.filter(p => p.age < p.maxAge);
 }
 
+// Move each soldier's display position toward its server position at twice soldier speed.
+// This gives smooth tile-to-tile glide without needing move_cooldown data from the server.
+let _lastRafTime = performance.now();
+function updateSoldierDisplayPos() {
+  const now = performance.now();
+  const dt = Math.min(0.1, (now - _lastRafTime) / 1000);
+  _lastRafTime = now;
+  const DISPLAY_SPEED = 2.6; // tiles per second (soldier moves at 1.25; catch-up is fast)
+  const soldiers = tw()?.soldiers || [];
+  // Remove entries for dead/gone soldiers.
+  const liveIds = new Set(soldiers.map(s => s.unit_id));
+  for (const id of soldierDisplayPos.keys()) {
+    if (!liveIds.has(id)) soldierDisplayPos.delete(id);
+  }
+  for (const s of soldiers) {
+    if (!soldierDisplayPos.has(s.unit_id)) {
+      soldierDisplayPos.set(s.unit_id, { x: s.x, y: s.y });
+      continue;
+    }
+    const dp = soldierDisplayPos.get(s.unit_id);
+    const dx = s.x - dp.x, dy = s.y - dp.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const step = DISPLAY_SPEED * dt;
+    if (dist <= step) {
+      dp.x = s.x; dp.y = s.y;
+    } else {
+      dp.x += (dx / dist) * step;
+      dp.y += (dy / dist) * step;
+    }
+  }
+}
+
 (function rafLoop() {
+  updateSoldierDisplayPos();
   updateSmoke();
   // Spawn billowy puffs from the impact origin; their velocity carries them east to cover the zone.
   // Stop spawning once the fade phase starts — existing long-lived puffs handle the tail.

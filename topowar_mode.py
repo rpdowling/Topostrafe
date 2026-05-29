@@ -957,13 +957,13 @@ class TopowarGameState:
         return (cx, cy)
 
     def _soldier_effective_range(self, s: "Soldier", target_tile: tuple[int, int]) -> float:
-        """Rifle range based on shooter elevation: mountain=7, hill=6, ground/trench=5."""
+        """Rifle range based on shooter elevation: mountain=14, hill=12, ground/trench=10."""
         s_elev = self.map.elevation_at(s.tile)
         if s_elev == ELEV_MOUNTAIN:
-            return 7.0
+            return 14.0
         if s_elev == ELEV_HILL:
-            return 6.0
-        return 5.0
+            return 12.0
+        return 10.0
 
     def _soldier_max_range(self, s: "Soldier") -> float:
         """Maximum rifle range — used for UI display. Same as effective range (elevation-fixed)."""
@@ -1993,13 +1993,13 @@ class TopowarGameState:
             if self._has_smoke_between(s.tile, target_tile, smoke_tiles):
                 continue
 
-            # Hit chance: 25% when moving through open ground toward a trench enemy;
-            # 50% when stationary (halted or already in a trench).
+            # Hit chance: 35% when moving through open ground toward a trench enemy;
+            # 65% when stationary (halted or already in a trench).
             is_moving = advancing and not s.combat_halt
             target_in_trench = typ == "soldier" and target_elev == ELEV_TRENCH
-            chance = 0.25 if (is_moving and target_in_trench) else 0.5
+            chance = 0.35 if (is_moving and target_in_trench) else 0.65
 
-            s.rifle_cooldown = 3.0
+            s.rifle_cooldown = 2.0
             will_hit = self.random.random() <= chance
             self.projectiles.append(Projectile(s.owner, s.x, s.y, target_tile[0] - s.x, target_tile[1] - s.y, effective_range, "rifle", s_elev, will_hit=will_hit))
             self.muzzle_flashes.append(MuzzleFlash(s.x, s.y, target_tile[0] - s.x, target_tile[1] - s.y, s.owner))
