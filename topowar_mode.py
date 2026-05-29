@@ -1952,28 +1952,38 @@ class TopowarGameState:
             if s.rifle_cooldown > 0:
                 continue
 
-            picked = self._nearest_enemy(s.owner, s.tile, visible_only=True)
-            if not picked:
+            # Pick the nearest enemy this soldier can actually shoot — don't give
+            # up just because a closer enemy happens to be out of LOS, concealed,
+            # smoke-blocked or out of range.
+            s_elev = self.map.elevation_at(s.tile)
+            best: tuple[float, "Soldier"] | None = None
+            for s2 in self.soldiers.values():
+                if s2.hp <= 0 or s2.owner == s.owner:
+                    continue
+                if not self._soldier_visible_to(s2, s.owner):
+                    continue
+                d2 = math.dist(s.tile, s2.tile)
+                if d2 > self._soldier_effective_range(s, s2.tile):
+                    continue
+                if not self._has_combat_los(s.tile, s2.tile):
+                    continue
+                if self._is_concealed_by_elevation(s.tile, s2.tile):
+                    continue
+                if self._has_smoke_between(s.tile, s2.tile, smoke_tiles):
+                    continue
+                if best is None or d2 < best[0]:
+                    best = (d2, s2)
+            if best is None:
                 continue
-            typ, tid = picked
-            target_tile = self.soldiers[tid].tile if typ == "soldier" else self.mgs[tid].tile
-            d = math.dist(s.tile, target_tile)
+            target_obj = best[1]
+            target_tile = target_obj.tile
             target_elev = self.map.elevation_at(target_tile)
             effective_range = self._soldier_effective_range(s, target_tile)
-            if d > effective_range:
-                continue
-            s_elev = self.map.elevation_at(s.tile)
-            if not self._has_combat_los(s.tile, target_tile):
-                continue
-            if self._is_concealed_by_elevation(s.tile, target_tile):
-                continue
-            if self._has_smoke_between(s.tile, target_tile, smoke_tiles):
-                continue
 
             # Hit chance: 35% when moving through open ground toward a trench enemy;
             # 65% when stationary (halted or already in a trench).
             is_moving = advancing and not s.combat_halt
-            target_in_trench = typ == "soldier" and target_elev == ELEV_TRENCH
+            target_in_trench = target_elev == ELEV_TRENCH
             chance = 0.35 if (is_moving and target_in_trench) else 0.65
 
             s.rifle_cooldown = 2.0
@@ -2807,10 +2817,7 @@ class TopowarGameState:
                             continue  # MG cannot hit targets at higher elevation
                         if target_e == ELEV_TRENCH:
                             continue  # MG flat trajectory overshoots trenches
-                    else:
-                        # Rifle fire: 25% hit chance only when shooting into a trench from above
-                        if target_e == ELEV_TRENCH and p.origin_elevation > ELEV_TRENCH and self.random.random() > 0.25:
-                            continue
+                    # Rifle fire: hit/miss is fully decided at fire time via will_hit.
                     self._register_kill(s, p.owner)
                     hit = True
                     break

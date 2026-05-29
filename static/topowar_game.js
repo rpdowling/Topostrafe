@@ -96,6 +96,7 @@ let boardZoom = 1;
 let mouseCanvas = { x: 0, y: 0 };
 
 let lastStateTime = performance.now();
+let moveOrderPings = []; // {x, y, age} — brief confirmation ring at a move destination
 let smokeParticles = [];
 let smokeLayer = null;  // offscreen canvas for mortar puffs — caps stacking opacity
 let lastSmokeTick = performance.now();
@@ -400,6 +401,10 @@ function getSquadColor(color) {
   return map[color] || '#ffffff';
 }
 
+function spawnMovePing(tile) {
+  if (tile) moveOrderPings.push({ x: tile[0], y: tile[1], age: 0 });
+}
+
 function selectSquad(squadId) {
   selectedSquad = (selectedSquad === squadId) ? null : squadId;
   render();
@@ -687,6 +692,7 @@ board.addEventListener('click', (evt) => {
         selectedUnits = new Set();
       }
       send(payload);
+      spawnMovePing(tile);
     }
     // In pure select mode, clicking empty ground does nothing — no accidental moves.
 
@@ -970,6 +976,7 @@ board.addEventListener('contextmenu', (evt) => {
       if (selectedSquad !== null) { payload.squad_id = selectedSquad; selectedSquad = null; }
       else if (selectedUnits.size > 0) { payload.unit_ids = [...selectedUnits]; selectedUnits = new Set(); }
       send(payload);
+      for (const pos of positions) spawnMovePing(pos);
     }
     render();
     return;
@@ -2494,6 +2501,21 @@ function draw() {
     }
   }
 
+  // Move-order confirmation pings: a quick contracting ring at the destination.
+  for (const ping of moveOrderPings) {
+    const t = ping.age / 0.6;
+    const pcx = cpx(ping.x), pcy = cpy(ping.y);
+    const r = CELL * (0.9 - 0.5 * t);
+    ctx.save();
+    ctx.globalAlpha = (1 - t) * 0.9;
+    ctx.strokeStyle = 'rgba(120, 220, 255, 1)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(pcx, pcy, Math.max(1, r), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // Death crosses
   for (const dm of data.death_marks || []) {
     const alpha = 1 - dm.age / dm.duration;
@@ -2943,6 +2965,9 @@ function updateSoldierDisplayPos() {
 
 (function rafLoop() {
   updateSoldierDisplayPos();
+  // Age move-order pings (~0.6s lifetime).
+  for (const ping of moveOrderPings) ping.age += 0.016;
+  moveOrderPings = moveOrderPings.filter(p => p.age < 0.6);
   updateSmoke();
   // Spawn billowy puffs from the impact origin; their velocity carries them east to cover the zone.
   // Stop spawning once the fade phase starts — existing long-lived puffs handle the tail.
