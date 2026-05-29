@@ -118,6 +118,10 @@ const soldierDisplayPos = new Map(); // unit_id → {x, y}
 // Box / marquee selection state.
 let selectBox = null; // {x0, y0, x1, y1} in canvas coords, null when inactive
 
+// Impact particle effects — dirt puffs (miss) and kill sparks (hit)
+let impactParticles = []; // {x, y, vx, vy, alpha, r, color, age, maxAge}
+let _prevProjectiles = []; // previous frame's projectile list for disappearance detection
+
 const CELL = 24;
 const OX = 20;
 const OY = 20;
@@ -289,6 +293,36 @@ function connect() {
         for (const k of poppedAirburstShells) {
           if (!activeShellKeys.has(k)) poppedAirburstShells.delete(k);
         }
+
+        // Hit/miss tells: new death_marks → kill spark; vanished projectiles → dirt puff
+        const prevDmKeys = new Set((_prevProjectiles._dmKeys) || []);
+        const newDmKeys = new Set((newTw.death_marks || []).map(dm => `${dm.x.toFixed(1)},${dm.y.toFixed(1)}`));
+        for (const key of newDmKeys) {
+          if (!prevDmKeys.has(key)) {
+            const dm = (newTw.death_marks || []).find(d => `${d.x.toFixed(1)},${d.y.toFixed(1)}` === key);
+            if (dm) spawnKillSpark(dm.x, dm.y);
+          }
+        }
+        // Detect rifle/mg projectiles that vanished (not a kill) → dirt puff at last position
+        // Match using owner+source+rounded_direction (constant per projectile lifetime).
+        const newProjSig = {};
+        for (const p of (newTw.projectiles || [])) {
+          const norm = Math.hypot(p.dx, p.dy);
+          const sig = `${p.owner},${p.source},${norm > 0 ? Math.round(p.dx/norm*8) : 0},${norm > 0 ? Math.round(p.dy/norm*8) : 0}`;
+          newProjSig[sig] = (newProjSig[sig] || 0) + 1;
+        }
+        for (const pp of _prevProjectiles) {
+          const norm = Math.hypot(pp.dx, pp.dy);
+          const sig = `${pp.owner},${pp.source},${norm > 0 ? Math.round(pp.dx/norm*8) : 0},${norm > 0 ? Math.round(pp.dy/norm*8) : 0}`;
+          if (!newProjSig[sig] || newProjSig[sig] <= 0) {
+            if (!pp.will_hit) spawnDirtPuff(pp.x, pp.y);
+          } else {
+            newProjSig[sig]--;
+          }
+        }
+        const nextPrev = [...(newTw.projectiles || [])];
+        nextPrev._dmKeys = newDmKeys;
+        _prevProjectiles = nextPrev;
       }
       reconcilePendingBuildState();
       // Track build phase transitions for background music
@@ -534,7 +568,9 @@ function reconcilePendingBuildState() {
     );
     if (placedMg) {
       clearPendingMgBuild();
-      setStatus('MG construction started.');
+      selectedMg = placedMg.structure_id;  // keep selected so Cancel can cancel the build
+      setMode('select');
+      setStatus('MG construction started — press C or click Cancel to abort.');
     }
   }
   if (pendingMortarTile) {
@@ -543,7 +579,9 @@ function reconcilePendingBuildState() {
     );
     if (placedMortar) {
       clearPendingMortarBuild();
-      setStatus('Mortar construction started.');
+      selectedMortar = placedMortar.structure_id;  // keep selected so Cancel can cancel the build
+      setMode('select');
+      setStatus('Mortar construction started — press C or click Cancel to abort.');
     }
   }
 }
@@ -1109,6 +1147,21 @@ function cpy(gy) { return OY + flipY(gy) * CELL + CELL / 2; }
 // Top-left pixel y of a tile (integer or float game-y).
 function tileTop(gy) { return OY + Math.floor(flipY(gy)) * CELL; }
 
+// Deterministic per-tile brightness noise: returns a small offset in [-1, 1].
+function tileNoise(x, y) {
+  let h = ((x * 374761393 + y * 668265263) | 0);
+  h = ((h ^ (h >>> 13)) * 1274126177) | 0;
+  h = h ^ (h >>> 16);
+  return ((h & 0xFFFF) / 65535.0) * 2.0 - 1.0;
+}
+
+// Apply ±magnitude noise to a hex color string and return adjusted rgb string.
+function noisedColor(hexR, hexG, hexB, magnitude, x, y) {
+  const n = tileNoise(x, y);
+  const d = Math.round(n * magnitude);
+  return `rgb(${Math.max(0,Math.min(255,hexR+d))},${Math.max(0,Math.min(255,hexG+d))},${Math.max(0,Math.min(255,hexB+d))})`;
+}
+
 function hasTrenchLos(trenchSet, x0, y0, x1, y1) {
   const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
   const sx = x1 >= x0 ? 1 : -1, sy = y1 >= y0 ? 1 : -1;
@@ -1193,6 +1246,44 @@ function spawnAirburstTileSmoke(gx, gy) {
   }
 }
 
+function spawnDirtPuff(gx, gy) {
+  const count = 4 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const spd = 0.06 + Math.random() * 0.14;
+    impactParticles.push({
+      x: gx + (Math.random() - 0.5) * 0.3,
+      y: gy + (Math.random() - 0.5) * 0.3,
+      vx: Math.cos(angle) * spd,
+      vy: Math.sin(angle) * spd - 0.08,
+      alpha: 0.55 + Math.random() * 0.3,
+      r: 0.10 + Math.random() * 0.12,
+      color: '140,110,70',
+      age: 0,
+      maxAge: 0.4 + Math.random() * 0.3,
+    });
+  }
+}
+
+function spawnKillSpark(gx, gy) {
+  const count = 5 + Math.floor(Math.random() * 4);
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const spd = 0.12 + Math.random() * 0.22;
+    impactParticles.push({
+      x: gx,
+      y: gy,
+      vx: Math.cos(angle) * spd,
+      vy: Math.sin(angle) * spd - 0.12,
+      alpha: 0.9 + Math.random() * 0.1,
+      r: 0.05 + Math.random() * 0.08,
+      color: '255,80,30',
+      age: 0,
+      maxAge: 0.25 + Math.random() * 0.2,
+    });
+  }
+}
+
 function flareScatterRadius(targetTile) {
   const data = tw();
   if (!data || !targetTile) return 0;
@@ -1266,53 +1357,84 @@ function draw() {
   board.height = OY * 2 + data.map.height * CELL;
   applyBoardZoom();
 
-  ctx.fillStyle = '#1a1e28';
+  ctx.fillStyle = '#1a1c14';
   ctx.fillRect(0, 0, board.width, board.height);
 
-  // Ground tiles
+  // Ground tiles — warmer olive/khaki palette with per-tile brightness noise
   for (let y = 0; y < data.map.height; y++) {
     for (let x = 0; x < data.map.width; x++) {
-      ctx.fillStyle = '#445a48';
+      ctx.fillStyle = noisedColor(87, 96, 52, 9, x, y);  // base #576434
       ctx.fillRect(OX + x * CELL, tileTop(y), CELL - 1, CELL - 1);
     }
   }
 
-  // Mountain tiles (grey)
+  // Mountain tiles — warm brown-grey with noise
   for (const t of data.map.mountains || []) {
     const tty = tileTop(t[1]);
-    ctx.fillStyle = '#8c8c8c';
+    ctx.fillStyle = noisedColor(120, 108, 90, 12, t[0], t[1]);  // base #786c5a
     ctx.fillRect(OX + t[0] * CELL, tty, CELL - 1, CELL - 1);
-    ctx.strokeStyle = 'rgba(180,180,180,0.3)';
+    ctx.strokeStyle = 'rgba(200,180,150,0.25)';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(OX + t[0] * CELL + 0.5, tty + 0.5, CELL - 2, CELL - 2);
     ctx.lineWidth = 1;
   }
 
-  // Hill tiles (midpoint between ground #445a48 and mountain #8c8c8c)
+  // Hill tiles — olive mid-tone with noise
   for (const t of data.map.hills || []) {
     const tty = tileTop(t[1]);
-    ctx.fillStyle = '#68736a';
+    ctx.fillStyle = noisedColor(105, 108, 64, 10, t[0], t[1]);  // base #696c40
     ctx.fillRect(OX + t[0] * CELL, tty, CELL - 1, CELL - 1);
-    ctx.strokeStyle = 'rgba(90,105,92,0.3)';
+    ctx.strokeStyle = 'rgba(130,138,80,0.28)';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(OX + t[0] * CELL + 0.5, tty + 0.5, CELL - 2, CELL - 2);
     ctx.lineWidth = 1;
   }
 
-  // Trench tiles
-  for (const t of data.map.trenches) {
-    const tty = tileTop(t[1]);
-    ctx.fillStyle = '#2e2a24';
-    ctx.fillRect(OX + t[0] * CELL, tty, CELL - 1, CELL - 1);
-    ctx.strokeStyle = 'rgba(100,80,50,0.35)';
-    ctx.lineWidth = 0.5;
-    ctx.beginPath();
-    ctx.moveTo(OX + t[0] * CELL, tty);
-    ctx.lineTo(OX + t[0] * CELL + CELL - 1, tty + CELL - 1);
-    ctx.moveTo(OX + t[0] * CELL + CELL - 1, tty);
-    ctx.lineTo(OX + t[0] * CELL, tty + CELL - 1);
-    ctx.stroke();
-    ctx.lineWidth = 1;
+  // Trench tiles — connected channel style with rounded corners
+  {
+    const trenchConnSet = new Set((data.map.trenches || []).map(t => `${t[0]},${t[1]}`));
+    const CH = 10;  // channel width in pixels
+    for (const t of data.map.trenches) {
+      const [tx, ty] = t;
+      const tlx = OX + tx * CELL;
+      const tty = tileTop(ty);
+      const sz = CELL - 1;
+      const N = trenchConnSet.has(`${tx},${ty - 1}`);
+      const S = trenchConnSet.has(`${tx},${ty + 1}`);
+      const E = trenchConnSet.has(`${tx + 1},${ty}`);
+      const W = trenchConnSet.has(`${tx - 1},${ty}`);
+
+      // Dirt rim (dark khaki earth)
+      ctx.fillStyle = noisedColor(55, 46, 34, 6, tx, ty);  // #372e22 warm earth
+      ctx.fillRect(tlx, tty, sz, sz);
+
+      // Shadow/depth line on rim edges that face inward
+      ctx.strokeStyle = 'rgba(0,0,0,0.30)';
+      ctx.lineWidth = 1;
+
+      // Channel cut: draw horizontal + vertical strips to form a cross
+      const cOff = Math.round((sz - CH) / 2);  // offset from tile edge to channel start
+      ctx.fillStyle = '#1a150e';  // deep shadow in channel
+
+      // Center square always filled
+      ctx.fillRect(tlx + cOff, tty + cOff, CH, CH);
+
+      // Extend channel toward each connected neighbour
+      if (N) ctx.fillRect(tlx + cOff, tty, CH, cOff + 1);
+      if (S) ctx.fillRect(tlx + cOff, tty + cOff + CH - 1, CH, sz - (cOff + CH - 1));
+      if (E) ctx.fillRect(tlx + cOff + CH - 1, tty + cOff, sz - (cOff + CH - 1), CH);
+      if (W) ctx.fillRect(tlx, tty + cOff, cOff + 1, CH);
+
+      // Subtle highlight on top rim edge
+      ctx.strokeStyle = 'rgba(160,130,90,0.22)';
+      ctx.lineWidth = 0.5;
+      if (!N) {
+        ctx.beginPath(); ctx.moveTo(tlx, tty + 0.5); ctx.lineTo(tlx + sz, tty + 0.5); ctx.stroke();
+      }
+      if (!W) {
+        ctx.beginPath(); ctx.moveTo(tlx + 0.5, tty); ctx.lineTo(tlx + 0.5, tty + sz); ctx.stroke();
+      }
+    }
   }
 
   // Elevation shading: north-side shadow where a tile is south of a higher neighbour.
@@ -1343,6 +1465,10 @@ function draw() {
       }
     }
   }
+
+  // Slight global darken so muzzle flashes and flares feel more illuminating
+  ctx.fillStyle = 'rgba(0,0,0,0.10)';
+  ctx.fillRect(OX, OY, data.map.width * CELL, data.map.height * CELL);
 
   drawBuildPhaseOverlay(data);
 
@@ -2200,10 +2326,31 @@ function draw() {
       ctx.arc(sx, sy - arcHeight * CELL * 0.8, radius, 0, Math.PI * 2);
       ctx.fill();
       ctx.globalAlpha = 1;
+
+      // Pre-impact telegraph: shrinking crosshair at target tile when shell > 40% of way
+      if (progress > 0.40) {
+        const impactAlpha = Math.min(1, (progress - 0.40) / 0.3) * 0.85;
+        const shrink = 1 - progress;  // shrinks to 0 at impact
+        const tcx = cpx(ms.target[0]), tcy = cpy(ms.target[1]);
+        const impR = Math.max(2, CELL * 0.55 * shrink);
+        ctx.save();
+        ctx.globalAlpha = impactAlpha;
+        ctx.strokeStyle = ms.owner === 0 ? '#ff6040' : '#6080ff';
+        ctx.lineWidth = 1.5;
+        const armLen = impR * 1.3;
+        ctx.beginPath();
+        ctx.moveTo(tcx - armLen, tcy); ctx.lineTo(tcx + armLen, tcy);
+        ctx.moveTo(tcx, tcy - armLen); ctx.lineTo(tcx, tcy + armLen);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(tcx, tcy, impR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
     }
   }
 
-  // Grenade shells — dead-reckoned
+  // Grenade shells — dead-reckoned with pre-impact telegraph
   {
     const elapsed = (performance.now() - lastStateTime) / 1000;
     for (const gs of data.grenade_shells || []) {
@@ -2212,11 +2359,29 @@ function draw() {
       const advance = nd > 0 ? Math.min(nd, 5.0 * elapsed) : 0;
       const ex = gs.x + (nd > 0 ? (ddx / nd) * advance : 0);
       const ey = gs.y + (nd > 0 ? (ddy / nd) * advance : 0);
+      const gTotalDist = Math.hypot(gs.target[0] - gs.sx, gs.target[1] - gs.sy);
+      const gProgress = gTotalDist > 0 ? Math.min(1, Math.hypot(ex - gs.sx, ey - gs.sy) / gTotalDist) : 0;
       const gx = cpx(ex), gy = cpy(ey);
       ctx.fillStyle = '#9ad26d';
       ctx.beginPath();
       ctx.arc(gx, gy, 3, 0, Math.PI * 2);
       ctx.fill();
+
+      // Pre-impact indicator at target tile when grenade > 50% of way
+      if (gProgress > 0.50) {
+        const impAlpha = Math.min(1, (gProgress - 0.5) / 0.25) * 0.75;
+        const shrink = 1 - gProgress;
+        const tcx = cpx(gs.target[0]), tcy = cpy(gs.target[1]);
+        const impR = Math.max(1.5, CELL * 0.4 * shrink);
+        ctx.save();
+        ctx.globalAlpha = impAlpha;
+        ctx.strokeStyle = '#c8f060';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(tcx, tcy, impR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
     }
   }
 
@@ -2279,7 +2444,7 @@ function draw() {
     }
   }
 
-  // Projectiles — dead-reckoned using dx/dy velocity from server
+  // Projectiles — dead-reckoned with tracer trails
   {
     const elapsed = (performance.now() - lastStateTime) / 1000;
     const projSpeed = data.rules?.projectile_speed ?? 8.0;
@@ -2289,14 +2454,52 @@ function draw() {
       const ey = norm > 0 ? p.y + (p.dy / norm) * projSpeed * elapsed : p.y;
       const pcx = cpx(ex);
       const pcy = cpy(ey);
-      ctx.fillStyle = p.source === 'mg' ? '#ffd34d' : 'rgba(255,255,255,0.9)';
-      ctx.beginPath();
-      ctx.arc(pcx, pcy, p.source === 'mg' ? 2.5 : 1.5, 0, Math.PI * 2);
-      ctx.fill();
+      const isMg = p.source === 'mg';
+
+      if (norm > 0) {
+        const ux = p.dx / norm, uy = p.dy / norm;
+        const trailLen = isMg ? 22 : 14;
+        const tailX = pcx - ux * trailLen;
+        const tailY = pcy - uy * trailLen;
+        const trailGrad = ctx.createLinearGradient(tailX, tailY, pcx, pcy);
+        if (isMg) {
+          trailGrad.addColorStop(0, 'rgba(255,220,80,0)');
+          trailGrad.addColorStop(0.5, 'rgba(255,200,60,0.35)');
+          trailGrad.addColorStop(1, 'rgba(255,255,180,0.9)');
+        } else {
+          trailGrad.addColorStop(0, 'rgba(255,255,255,0)');
+          trailGrad.addColorStop(1, 'rgba(255,255,255,0.55)');
+        }
+        ctx.save();
+        ctx.strokeStyle = trailGrad;
+        ctx.lineWidth = isMg ? 2.0 : 1.2;
+        ctx.beginPath();
+        ctx.moveTo(tailX, tailY);
+        ctx.lineTo(pcx, pcy);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Bright tip
+      if (isMg) {
+        const grad = ctx.createRadialGradient(pcx, pcy, 0, pcx, pcy, 4);
+        grad.addColorStop(0, '#ffffff');
+        grad.addColorStop(0.4, '#ffe060');
+        grad.addColorStop(1, 'rgba(255,200,0,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(pcx, pcy, 4, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.fillStyle = 'rgba(255,255,255,0.92)';
+        ctx.beginPath();
+        ctx.arc(pcx, pcy, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   }
 
-  // Muzzle flashes
+  // Muzzle flashes — bright core with wide ambient glow and directional streak
   for (const mf of data.muzzle_flashes || []) {
     const t = mf.age / mf.duration;
     const alpha = (1 - t) * 0.95;
@@ -2306,21 +2509,33 @@ function draw() {
     const dirX = norm > 0 ? mf.dx / norm : 1;
     const dirY = norm > 0 ? mf.dy / norm : 0;
     ctx.save();
-    ctx.globalAlpha = alpha;
+    // Wide ambient glow (makes surrounding tiles feel lit)
+    const glowR = 20 * (1 - t * 0.6);
+    ctx.globalAlpha = alpha * 0.22;
+    const glowGrad = ctx.createRadialGradient(fx, fy, 0, fx, fy, glowR);
+    glowGrad.addColorStop(0, '#ffe880');
+    glowGrad.addColorStop(1, 'rgba(255,200,0,0)');
+    ctx.fillStyle = glowGrad;
+    ctx.beginPath();
+    ctx.arc(fx, fy, glowR, 0, Math.PI * 2);
+    ctx.fill();
     // Bright core circle
-    const coreR = 4.5 * (1 - t * 0.5);
-    const grad = ctx.createRadialGradient(fx, fy, 0, fx, fy, coreR * 2);
-    grad.addColorStop(0, '#ffffc0');
-    grad.addColorStop(0.4, '#ffcc44');
+    ctx.globalAlpha = alpha;
+    const coreR = 5 * (1 - t * 0.5);
+    const grad = ctx.createRadialGradient(fx, fy, 0, fx, fy, coreR * 2.2);
+    grad.addColorStop(0, '#ffffff');
+    grad.addColorStop(0.25, '#ffffc0');
+    grad.addColorStop(0.6, '#ffcc44');
     grad.addColorStop(1, 'rgba(255,140,0,0)');
     ctx.fillStyle = grad;
     ctx.beginPath();
-    ctx.arc(fx, fy, coreR * 2, 0, Math.PI * 2);
+    ctx.arc(fx, fy, coreR * 2.2, 0, Math.PI * 2);
     ctx.fill();
     // Short directional streak
-    const streakLen = 9 * (1 - t);
-    ctx.strokeStyle = 'rgba(255,245,180,0.85)';
-    ctx.lineWidth = 2;
+    const streakLen = 11 * (1 - t);
+    ctx.strokeStyle = `rgba(255,245,200,${0.9 * (1 - t)})`;
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(fx, fy);
     ctx.lineTo(fx + dirX * streakLen, fy + dirY * streakLen);
@@ -2531,6 +2746,22 @@ function draw() {
     ctx.stroke();
     ctx.lineWidth = 1;
     ctx.globalAlpha = 1;
+  }
+
+  // Impact particles — dirt puffs (miss) and kill sparks (hit)
+  if (impactParticles.length) {
+    ctx.save();
+    for (const p of impactParticles) {
+      const t = p.age / p.maxAge;
+      const a = p.alpha * (1 - t * t);
+      if (a < 0.01) continue;
+      ctx.globalAlpha = a;
+      ctx.fillStyle = `rgb(${p.color})`;
+      ctx.beginPath();
+      ctx.arc(cpx(p.x), cpy(p.y), Math.max(0.5, p.r * CELL * (1 + t * 0.5)), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   // Draw build-phase fog/hatching late so enemy-side units/structures are obscured.
@@ -2931,6 +3162,18 @@ function updateSmoke() {
   smokeParticles = smokeParticles.filter(p => p.age < p.maxAge);
 }
 
+function updateImpactParticles() {
+  const now = performance.now();
+  const dt = Math.min(0.05, (now - lastSmokeTick) / 1000);
+  for (const p of impactParticles) {
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 0.3 * dt;  // gravity
+    p.age += dt;
+  }
+  impactParticles = impactParticles.filter(p => p.age < p.maxAge);
+}
+
 // Move each soldier's display position toward its server position at twice soldier speed.
 // This gives smooth tile-to-tile glide without needing move_cooldown data from the server.
 let _lastRafTime = performance.now();
@@ -2969,6 +3212,7 @@ function updateSoldierDisplayPos() {
   for (const ping of moveOrderPings) ping.age += 0.016;
   moveOrderPings = moveOrderPings.filter(p => p.age < 0.6);
   updateSmoke();
+  updateImpactParticles();
   // Spawn billowy puffs from the impact origin; their velocity carries them east to cover the zone.
   // Stop spawning once the fade phase starts — existing long-lived puffs handle the tail.
   const FADE_START = 12.0;

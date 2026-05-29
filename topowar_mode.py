@@ -881,7 +881,7 @@ class TopowarGameState:
         if a_surf > b_surf:
             threshold = a_surf - 1
         elif a_surf < b_surf:
-            threshold = b_surf - 1
+            threshold = b_surf  # same-level tiles at the target tier don't block uphill shots
         else:
             threshold = a_surf
         return self._has_terrain_los(a, b, threshold)
@@ -3067,7 +3067,7 @@ class TopowarGameState:
             "build_wire_remaining": self.build_wire_remaining.get(viewer, 0) if viewer is not None else None,
             "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "intended_target": list(ms.intended_target), "owner": ms.owner, "round_type": ms.round_type, "popped": ms.popped} for ms in self.mortar_shells],
             "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
-            "projectiles": [{"x": p.x, "y": p.y, "dx": p.dx, "dy": p.dy, "owner": p.owner, "source": p.source} for p in self.projectiles],
+            "projectiles": [{"x": p.x, "y": p.y, "dx": p.dx, "dy": p.dy, "owner": p.owner, "source": p.source, "will_hit": p.will_hit} for p in self.projectiles],
             "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration, "kill_radius": e.kill_radius, "landing_in_trench": e.landing_in_trench, "landing_elev": e.landing_elev, "collapsed_trenches": [list(t) for t in e.collapsed_trenches], "airburst": e.airburst} for e in self.explosions],
             "death_marks": [{"x": dm.x, "y": dm.y, "age": dm.age, "duration": dm.duration} for dm in self.death_marks],
             "muzzle_flashes": [{"x": mf.x, "y": mf.y, "dx": mf.dx, "dy": mf.dy, "owner": mf.owner, "age": mf.age, "duration": mf.duration} for mf in self.muzzle_flashes],
