@@ -453,7 +453,7 @@ function nearestUnusedTile(sx, sy, used, W, H) {
 // === MODE MANAGEMENT ===
 
 function updateModeButtons() {
-  const modes = ['select','dig','build','operate','mortar','grenade','sandbag','wire','bunker','flare'];
+  const modes = ['select','move','dig','build','operate','mortar','grenade','sandbag','wire','bunker','flare'];
   for (const m of modes) {
     const btn = el('mode-' + m);
     if (btn) btn.classList.toggle('active', mode === m);
@@ -487,7 +487,7 @@ function setMode(m) {
     if (m !== 'dig') plan = [];
     if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false; }
     if (m !== 'mortar') { pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false; }
-    if (m !== 'select') { scatterPendingPositions = []; }
+    if (m !== 'select' && m !== 'move') { scatterPendingPositions = []; }
     if (BUILD_MODES.has(m)) selectedUnits = new Set();
   }
   // Keep the build flyout open while a build mode is active; collapse otherwise.
@@ -499,7 +499,7 @@ function setMode(m) {
 
 function updateModeLabel() {
   const labels = {
-    select: 'Select / Move',
+    select: 'Select', move: 'Move',
     dig: 'Dig/Plan', build: 'Build MG', operate: 'Crew MG', mortar: 'Build Mortar', grenade: 'Grenade', sandbag: 'Build Sandbag', wire: 'Wire', bunker: 'Bunker', flare: 'Flare',
   };
   const e = el('mode-line');
@@ -604,7 +604,7 @@ document.addEventListener('keydown', (evt) => {
     return;
   }
 
-  const shortcutMap = { '1':'select','V':'select','D':'dig','B':'build','O':'operate','M':'mortar','N':'grenade','G':'sandbag','W':'wire','U':'bunker','F':'flare' };
+  const shortcutMap = { '1':'select','2':'move','V':'move','D':'dig','B':'build','O':'operate','M':'mortar','N':'grenade','G':'sandbag','W':'wire','U':'bunker','F':'flare' };
   if (shortcutMap[key]) {
     evt.preventDefault();
     setMode(shortcutMap[key]);
@@ -653,7 +653,7 @@ board.addEventListener('click', (evt) => {
     return;
   }
 
-  if (mode === 'select') {
+  if (mode === 'select' || mode === 'move') {
     if (myS.length) {
       // Left-click own soldier: select (Ctrl toggles for multi-select)
       const uid = myS[0].unit_id;
@@ -674,11 +674,10 @@ board.addEventListener('click', (evt) => {
     } else if (selectedMg !== null || selectedMortar !== null) {
       // A structure was selected; clicking empty ground just deselects it (no move).
       selectedMg = null; selectedMortar = null;
-    } else if (formationShape === 'scatter') {
+    } else if (mode === 'move' && formationShape === 'scatter') {
       // Scatter uses right-click to place each position; left-click on ground is a no-op.
-    } else if (soldiersAt(tile).length === 0 && !tileHasEquipment(tile)) {
-      // Left-click ground = MOVE. Move the current selection / squad in formation;
-      // with nothing selected, auto-grab the nearest `count` free soldiers.
+    } else if (mode === 'move' && soldiersAt(tile).length === 0 && !tileHasEquipment(tile)) {
+      // Move mode: left-click ground = formation move.
       const payload = { type: 'tw_formation_move', tile, count: formationCount, formation: formationShape };
       if (selectedSquad !== null) {
         payload.squad_id = selectedSquad;
@@ -689,6 +688,7 @@ board.addEventListener('click', (evt) => {
       }
       send(payload);
     }
+    // In pure select mode, clicking empty ground does nothing — no accidental moves.
 
   } else if (mode === 'dig') {
     if (myS.length) {
@@ -947,9 +947,9 @@ board.addEventListener('contextmenu', (evt) => {
 
   const myS = mySoldiersAt(tile);
 
-  // Scatter formation (in Select/Move mode): right-click empty ground places each
+  // Scatter formation (in Move mode): right-click empty ground places each
   // position. Right-clicking a soldier still cancels (handled below).
-  if (mode === 'select' && formationShape === 'scatter' && !myS.length && !tileHasEquipment(tile)) {
+  if (mode === 'move' && formationShape === 'scatter' && !myS.length && !tileHasEquipment(tile)) {
     const targetCount = selectedSquad !== null
       ? ((getSquad(selectedSquad)?.soldier_ids || []).filter(uid => {
           const s = (tw().soldiers || []).find(s => s.unit_id === uid);
@@ -1022,7 +1022,7 @@ let selectBoxConsumedClick = false; // suppress click when a drag was completed
 board.addEventListener('mousedown', (evt) => {
   if (evt.button !== 0) return;
   if (mode === 'dig') { planDragging = true; return; }
-  if (mode === 'select') {
+  if (mode === 'select' || mode === 'move') {
     // Start a potential box-select drag only if clicking empty ground.
     const tile = tileFromEvent(evt);
     const myS = tile ? mySoldiersAt(tile) : [];
@@ -1073,7 +1073,7 @@ board.addEventListener('mousemove', (evt) => {
     const tile = tileFromEvent(evt);
     if (tile) { addToPlan(tile); render(); }
   }
-  if (mode === 'select' && _selectBoxStart) {
+  if ((mode === 'select' || mode === 'move') && _selectBoxStart) {
     const cx = mouseCanvas.x, cy = mouseCanvas.y;
     const dist = Math.sqrt((cx - _selectBoxStart.cx) ** 2 + (cy - _selectBoxStart.cy) ** 2);
     if (dist > 6) {
@@ -1087,7 +1087,7 @@ board.addEventListener('mousemove', (evt) => {
     if (mode === 'mortar' && pendingMortarTile && !pendingMortarTarget) render();
     if (retargetMortarId !== null) render();
     if (mode === 'flare') render();
-    if (mode === 'select') render();
+    if (mode === 'select' || mode === 'move') render();
   }
 });
 
@@ -1794,11 +1794,21 @@ function draw() {
       ctx.stroke();
       ctx.lineWidth = 1;
     } else {
-      if (s.is_grenadier) ctx.fillStyle = s.owner === 0 ? '#ff9f1a' : '#1fc7b6';
-      else ctx.fillStyle = s.owner === 0 ? '#e83030' : '#3d6cdf';
+      ctx.fillStyle = s.owner === 0 ? '#e83030' : '#3d6cdf';
       ctx.beginPath();
       ctx.arc(scx, scy, 6, 0, Math.PI * 2);
       ctx.fill();
+      if (s.is_grenadier) {
+        // Diagonal slash to distinguish grenadiers from riflemen
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,255,255,0.88)';
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.moveTo(scx - 3.5, scy + 3.5);
+        ctx.lineTo(scx + 3.5, scy - 3.5);
+        ctx.stroke();
+        ctx.restore();
+      }
     }
 
     // Thin dashed path preview for moving soldiers.
@@ -1910,8 +1920,8 @@ function draw() {
     ctx.lineWidth = 1;
   }
 
-  // Formation move preview (Select/Move mode, hovering ground)
-  if (mode === 'select' && formationShape !== 'scatter' && tw()) {
+  // Formation move preview (Move mode, hovering ground)
+  if (mode === 'move' && formationShape !== 'scatter' && tw()) {
     const hoverTile = tileFromCanvas(mouseCanvas.x, mouseCanvas.y);
     const overEquip = hoverTile && (soldiersAt(hoverTile).length > 0 || tileHasEquipment(hoverTile));
     // Only preview when the click would actually issue a move (not over a unit/structure).
@@ -1941,7 +1951,7 @@ function draw() {
   }
 
   // Scatter pending positions preview
-  if (mode === 'select' && formationShape === 'scatter') {
+  if (mode === 'move' && formationShape === 'scatter') {
     for (let i = 0; i < scatterPendingPositions.length; i++) {
       const [px, py] = scatterPendingPositions[i];
       const tlx = OX + px * CELL;
@@ -2656,7 +2666,7 @@ function updateSquadWindow() {
       const aliveCount = (tw().soldiers || []).filter(s => s.squad_id === squad.squad_id).length;
       const isSelected = selectedSquad === squad.squad_id;
       const colorHex = getSquadColor(squad.color);
-      html += `<div class="squad-tab${isSelected ? ' selected' : ''}" onclick="selectSquad(${squad.squad_id})">` +
+      html += `<div class="squad-tab${isSelected ? ' selected' : ''}" style="border-left:3px solid ${colorHex};" onclick="selectSquad(${squad.squad_id})">` +
         `<span class="squad-dot" style="background:${colorHex}"></span>` +
         `<span class="squad-count">${aliveCount}</span>` +
         `<button class="squad-disband" onclick="event.stopPropagation();disbandSquad(${squad.squad_id})">×</button>` +
@@ -2724,6 +2734,10 @@ function render() {
     if (!myOfficer()) setStatus('Flare — unavailable (no living officer).', true);
     else setStatus(`Flare — click any tile to illuminate it (${rem} remaining). Reveals all units in radius.`);
   } else if (mode === 'select') {
+    const selCount = selectedUnits.size;
+    if (selCount > 0) setStatus(`Select — ${selCount} selected. Switch to Move (2/V) to issue orders.`);
+    else setStatus('Select — click a soldier to select it. Drag to box-select. Switch to Move (2/V) to issue move orders.');
+  } else if (mode === 'move') {
     let n = formationCount;
     let who = `${n} nearest`;
     if (selectedSquad !== null) {
@@ -2735,9 +2749,9 @@ function render() {
     }
     if (formationShape === 'scatter') {
       const remaining = Math.max(0, n - scatterPendingPositions.length);
-      setStatus(`Select/Move — right-click ${remaining} more scatter position${remaining !== 1 ? 's' : ''} (moving ${who}).`);
+      setStatus(`Move — right-click ${remaining} more scatter position${remaining !== 1 ? 's' : ''} (moving ${who}).`);
     } else {
-      setStatus(`Select/Move — left-click a soldier to select, or left-click ground to move ${who} in ${formationShape} formation.`);
+      setStatus(`Move — left-click ground to move ${who} in ${formationShape} formation.`);
     }
   } else {
     const bpr = tw()?.build_phase_remaining || 0;
@@ -2787,7 +2801,7 @@ function render() {
 // === BUTTON WIRING ===
 
 [
-  ['mode-select','select'],
+  ['mode-select','select'], ['mode-move','move'],
   ['mode-dig','dig'], ['mode-build','build'], ['mode-operate','operate'], ['mode-mortar','mortar'], ['mode-grenade','grenade'], ['mode-sandbag','sandbag'], ['mode-wire','wire'], ['mode-bunker','bunker'], ['mode-flare','flare'],
 ].forEach(([id, m]) => {
   const btn = el(id);
@@ -2797,7 +2811,7 @@ function render() {
 const buildToggle = el('build-flyout-toggle');
 if (buildToggle) buildToggle.addEventListener('click', (evt) => {
   evt.stopPropagation();
-  // If a build mode is active, the flyout is forced open; clicking returns to Select/Move.
+  // If a build mode is active, the flyout is forced open; clicking returns to Select.
   if (BUILD_MODES.has(mode)) { setMode('select'); render(); return; }
   buildFlyoutOpen = !buildFlyoutOpen;
   applyBuildFlyout();

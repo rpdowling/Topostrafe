@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from collections import deque
 from typing import Any
+import heapq
 import itertools
 import math
 import random
@@ -284,34 +285,48 @@ class PathfindingService:
     def __init__(self, grid: GridMap):
         self.grid = grid
 
+    # Tiny per-tile discount applied when stepping onto a trench tile. It is
+    # small enough that it never overrides true shortest-distance (a path that
+    # is even one step longer always costs more than any equal-or-shorter
+    # alternative on a map of this size), so soldiers prefer trenches only when
+    # a trench route is as short as — or shorter than — the open-ground route.
+    TRENCH_DISCOUNT = 0.001
+
     def find_path(self, start: tuple[int, int], goal: tuple[int, int], trench_only: bool = False, blocked: set[tuple[int, int]] | None = None, stop_adjacent: bool = False) -> list[tuple[int, int]]:
-        """BFS over the 4-connected grid.
+        """Weighted shortest path (Dijkstra) over the 4-connected grid.
 
         - `trench_only`: only step onto trench tiles (the goal itself is exempt).
         - `blocked`: tiles that cannot be stepped on (the goal is exempt so we
           can always reach it, even if currently occupied).
         - `stop_adjacent`: stop one tile short of the goal (used when the goal
           is an enemy unit we should not walk on top of).
-        Elevation restriction is always enforced: each step may only change
-        elevation by at most one tier (trench↔ground↔hill↔mountain).
+
+        Each step costs 1.0, minus a tiny discount when the destination tile is
+        a trench, so that among equal-length routes the one that travels through
+        more trench tiles wins. Elevation restriction is always enforced: each
+        step may only change elevation by at most one tier
+        (trench↔ground↔hill↔mountain).
         """
         if start == goal:
             return [start]
         blocked = (blocked or set()) - {goal}
 
-        direct = self._preferred_zigzag_path(start, goal, blocked=blocked, trench_only=trench_only)
-        if direct:
-            out = direct[:-1] if (stop_adjacent and len(direct) >= 2) else direct
-            return out
-
-        q = deque([start])
+        # (cost, insertion_order, tile) — insertion_order keeps expansion
+        # deterministic and goal-directed (mirrors the old BFS neighbour order)
+        # among tiles of equal cost.
+        counter = 0
+        pq: list[tuple[float, int, tuple[int, int]]] = [(0.0, 0, start)]
+        dist: dict[tuple[int, int], float] = {start: 0.0}
         prev: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
-        while q:
-            cx, cy = q.popleft()
-            cur_elev = self.grid.elevation_at((cx, cy))
-            for nx, ny in self._ordered_neighbors((cx, cy), goal):
-                nt = (nx, ny)
-                if nt in prev or nt in blocked:
+        while pq:
+            d, _, cur = heapq.heappop(pq)
+            if cur == goal:
+                break
+            if d > dist.get(cur, float("inf")):
+                continue
+            cur_elev = self.grid.elevation_at(cur)
+            for nt in self._ordered_neighbors(cur, goal):
+                if nt in blocked:
                     continue
                 if not self.grid.in_bounds(nt):
                     continue
@@ -319,11 +334,13 @@ class PathfindingService:
                     continue
                 if not _elevation_adjacent(cur_elev, self.grid.elevation_at(nt)):
                     continue
-                prev[nt] = (cx, cy)
-                if nt == goal:
-                    q.clear()
-                    break
-                q.append(nt)
+                step = 1.0 - (self.TRENCH_DISCOUNT if nt in self.grid.trenches else 0.0)
+                nd = d + step
+                if nd < dist.get(nt, float("inf")):
+                    dist[nt] = nd
+                    prev[nt] = cur
+                    counter += 1
+                    heapq.heappush(pq, (nd, counter, nt))
         if goal not in prev:
             return []
         out = []
@@ -357,50 +374,6 @@ class PathfindingService:
                 seen.add(n)
                 out.append(n)
         return out
-
-    def _preferred_zigzag_path(self, start: tuple[int, int], goal: tuple[int, int], blocked: set[tuple[int, int]], trench_only: bool) -> list[tuple[int, int]] | None:
-        if start == goal:
-            return [start]
-        x, y = start
-        gx, gy = goal
-        dx = gx - x
-        dy = gy - y
-        sx = 1 if dx > 0 else -1
-        sy = 1 if dy > 0 else -1
-        rem_x = abs(dx)
-        rem_y = abs(dy)
-        path = [start]
-        prefer_x = rem_x >= rem_y
-        while rem_x > 0 or rem_y > 0:
-            took_step = False
-            if prefer_x and rem_x > 0:
-                nx, ny = x + sx, y
-                took_step = True
-            elif (not prefer_x) and rem_y > 0:
-                nx, ny = x, y + sy
-                took_step = True
-            elif rem_x > 0:
-                nx, ny = x + sx, y
-                took_step = True
-            elif rem_y > 0:
-                nx, ny = x, y + sy
-                took_step = True
-            if not took_step:
-                break
-            nt = (nx, ny)
-            cur_elev = self.grid.elevation_at((x, y))
-            if (not self.grid.in_bounds(nt)) or (nt in blocked) or (trench_only and nt not in self.grid.trenches and nt != goal):
-                return None
-            if not _elevation_adjacent(cur_elev, self.grid.elevation_at(nt)):
-                return None
-            path.append(nt)
-            x, y = nx, ny
-            rem_x = abs(gx - x)
-            rem_y = abs(gy - y)
-            prefer_x = not prefer_x
-        if path[-1] != goal:
-            return None
-        return path
 
 
 class TopowarGameState:
@@ -883,34 +856,34 @@ class TopowarGameState:
                 cy += sy
 
     def _has_combat_los(self, a: tuple[int, int], b: tuple[int, int]) -> bool:
-        """LOS check for rifle and MG fire, respecting elevation in both directions.
+        """LOS check for rifle and MG fire, respecting elevation.
+
+        Trench and ground are treated as the same surface tier — a trench is a
+        dug-in position on the ground plane, not an underground bunker, so a
+        trench soldier can see and shoot across open ground and vice versa.
 
         Threshold (passed to _has_terrain_los as "block if tile > threshold"):
 
-          Downhill (shooter > target): threshold = shooter_elev - 1
-            → block if tile >= shooter_elev
-            → shots from a mountain pass over hills and ground freely;
-               another mountain tile in the path blocks them.
+          Same surface (trench/ground ↔ trench/ground, hill ↔ hill, mountain ↔ mountain):
+            threshold = surface_elev  →  only tiles above that tier block.
 
-          Uphill (shooter < target): threshold = target_elev - 1
-            → block if tile >= target_elev
-            → you can shoot past lower tiers toward the target tier, but
-               a tile at the target's own elevation (or higher) blocks.
+          Downhill (surface_a > surface_b, e.g. hill→ground):
+            threshold = surface_a - 1  →  another tile at the shooter's tier blocks.
 
-          Equal elevation: threshold = shooter_elev
-            → block if tile > shooter_elev (unchanged existing behaviour).
-
-        Because elevation values are 2, 4, 5, 6 (no integer between 2 and 4),
-        trench→ground uphill gives threshold = 3, matching the old rule exactly.
+          Uphill (surface_a < surface_b, e.g. ground→hill):
+            threshold = surface_b - 1  →  another tile at the target's tier blocks.
         """
         a_elev = self.map.elevation_at(a)
         b_elev = self.map.elevation_at(b)
-        if a_elev > b_elev:    # downhill
-            threshold = a_elev - 1
-        elif a_elev < b_elev:  # uphill
-            threshold = b_elev - 1
-        else:                  # equal
-            threshold = a_elev
+        # Normalise: trench (2) → ground (4) for the threshold calculation only.
+        a_surf = max(a_elev, ELEV_GROUND)
+        b_surf = max(b_elev, ELEV_GROUND)
+        if a_surf > b_surf:
+            threshold = a_surf - 1
+        elif a_surf < b_surf:
+            threshold = b_surf - 1
+        else:
+            threshold = a_surf
         return self._has_terrain_los(a, b, threshold)
 
     def _has_mortar_los(self, mortar_tile: tuple[int, int], target: tuple[int, int]) -> bool:
@@ -1208,13 +1181,17 @@ class TopowarGameState:
             if not plan:
                 raise ValueError("No dig plan.")
             sandbag_tile_map = {sb.tile: sb for sb in self.sandbags.values() if sb.hp > 0}
-            bunker_tile_map = {b.tile: b for b in self.bunkers.values() if b.hp > 0}
             for p in plan:
                 if not self.map.in_bounds(p):
                     raise ValueError("Dig target out of bounds.")
-                if self.map.elevation_at(p) == ELEV_TRENCH and p not in bunker_tile_map:
-                    raise ValueError("Tile is already fully dug.")
-                # Sandbag and bunker tiles are allowed – digging removes them
+                # Existing trenches are allowed in the plan: the soldier skips them
+                # at execution time. Sandbag and bunker tiles are allowed too –
+                # digging removes them.
+            # Drop already-dug tiles (plain trench, not a bunker) so the plan
+            # starts on a tile that actually needs work.
+            plan = [p for p in plan if not self._dig_already_done(p)]
+            if not plan:
+                raise ValueError("Tile is already fully dug.")
             first = plan[0]
             first_is_sandbag = first in sandbag_tile_map
             first_elev = self.map.elevation_at(first)
@@ -2004,9 +1981,41 @@ class TopowarGameState:
             self.projectiles.append(Projectile(s.owner, s.x, s.y, target_tile[0] - s.x, target_tile[1] - s.y, effective_range, "rifle", s_elev, will_hit=will_hit))
             self.muzzle_flashes.append(MuzzleFlash(s.x, s.y, target_tile[0] - s.x, target_tile[1] - s.y, s.owner))
 
+    def _dig_already_done(self, tile: tuple[int, int]) -> bool:
+        """True if a planned dig tile needs no digging — i.e. it is already a
+        plain trench (not a bunker, which digging removes). Such tiles are
+        skipped so a dig plan can be traced straight across existing trenches."""
+        if self.map.elevation_at(tile) != ELEV_TRENCH:
+            return False
+        return not any(b.hp > 0 and b.tile == tile for b in self.bunkers.values())
+
+    def _advance_dig_plan(self, s: "Soldier", task: dict[str, Any], pop_current: bool = True) -> bool:
+        """Advance a dig task to its next still-diggable tile.
+
+        Pops the current head (when `pop_current`) then skips any tiles that are
+        already dug (plain trench). Sets the new target / resets progress / clears
+        the path, or clears the task when nothing remains. Returns True if a
+        diggable target remains."""
+        plan = task.get("plan", [])
+        if pop_current and plan:
+            plan.pop(0)
+        while plan and self._dig_already_done(tuple(plan[0])):
+            plan.pop(0)
+        if not plan:
+            s.current_task = None
+            return False
+        task["target"] = list(plan[0])
+        task["progress"] = 0.0
+        s.path = []
+        return True
+
     def _update_tasks(self, dt: float):
         occ = self._occupied_tiles()
-        blocked_keys = set(occ.keys()) | self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set() | self._wire_tile_set()
+        # Static structure tiles never move, so a soldier whose current path runs
+        # through one (e.g. a sandbag placed after the path was planned) should
+        # reroute immediately rather than walking into it and stalling.
+        structure_blockers = self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set() | self._wire_tile_set()
+        blocked_keys = set(occ.keys()) | structure_blockers
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
@@ -2021,19 +2030,29 @@ class TopowarGameState:
                     s.current_task = None
                     s.path = []
                     continue
-                if not s.path or s.path[-1] != goal or (s.blocked and s.blocked_for >= 0.3):
+                path_hits_structure = any(t in structure_blockers for t in s.path)
+                if not s.path or s.path[-1] != goal or path_hits_structure or (s.blocked and s.blocked_for >= 0.3):
                     s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
             elif task["type"] == "dig":
                 tgt = tuple(task["target"])
+                # Skip any current target that needs no digging (already a plain
+                # trench) — lets a plan be traced straight across existing trenches.
+                if self._dig_already_done(tgt):
+                    if not self._advance_dig_plan(s, task, pop_current=True):
+                        continue
+                    tgt = tuple(task["target"])
                 tgt_bunker = next((b for b in self.bunkers.values() if b.hp > 0 and b.tile == tgt), None)
                 tgt_sandbag = next((sb for sb in self.sandbags.values() if sb.hp > 0 and sb.tile == tgt), None)
                 adj4_tgt = [(tgt[0]+dx, tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
                 tgt_elev = self.map.elevation_at(tgt)
+                # Reroute immediately if the planned approach now runs through a
+                # structure (e.g. a sandbag placed after the path was traced).
+                path_hits_structure = any(t in structure_blockers for t in s.path)
                 if tgt_bunker:
                     # Bunker removal: soldier must be adjacent, takes 60 seconds
                     in_position = s.tile in set(adj4_tgt)
                     if not in_position:
-                        if not s.path or (s.blocked and s.blocked_for >= 0.4):
+                        if not s.path or path_hits_structure or (s.blocked and s.blocked_for >= 0.4):
                             s.path = []
                             goals = [t for t in adj4_tgt if self.map.in_bounds(t)]
                             if goals:
@@ -2045,19 +2064,12 @@ class TopowarGameState:
                     task["progress"] = task.get("progress", 0.0) + dt
                     if task["progress"] >= 60.0:
                         del self.bunkers[tgt_bunker.structure_id]
-                        plan = task["plan"]
-                        if plan:
-                            plan.pop(0)
-                        s.current_task = None if not plan else s.current_task
-                        if plan:
-                            task["target"] = list(plan[0])
-                            task["progress"] = 0.0
-                            s.path = []
+                        self._advance_dig_plan(s, task, pop_current=True)
                     continue
                 # All dig types: soldier just needs to be adjacent to the target tile
                 in_position = s.tile in set(adj4_tgt)
                 if not in_position:
-                    if not s.path or (s.blocked and s.blocked_for >= 0.4):
+                    if not s.path or path_hits_structure or (s.blocked and s.blocked_for >= 0.4):
                         s.path = []
                         goals = [t for t in adj4_tgt if self.map.in_bounds(t)]
                         if not goals:
@@ -2074,14 +2086,7 @@ class TopowarGameState:
                                 s.path = best
                             else:
                                 # All approaches blocked — skip this dig tile and move to next
-                                plan = task.get("plan", [])
-                                if plan:
-                                    plan.pop(0)
-                                if not plan:
-                                    s.current_task = None
-                                else:
-                                    task["target"] = list(plan[0])
-                                    task["progress"] = 0.0
+                                self._advance_dig_plan(s, task, pop_current=True)
                     continue
                 task["progress"] = task.get("progress", 0.0) + dt
                 if task["progress"] >= self.rules.dig_seconds_per_tile:
@@ -2094,21 +2099,7 @@ class TopowarGameState:
                         self.map.hills.discard(tgt)
                     else:
                         self.map.trenches.add(tgt)
-                    plan = task["plan"]
-                    if plan:
-                        plan.pop(0)
-                    if not plan:
-                        s.current_task = None
-                    else:
-                        next_tgt = tuple(plan[0])
-                        task["target"] = list(next_tgt)
-                        task["progress"] = 0.0
-                        s.path = []
-                        next_sandbag = next((sb for sb in self.sandbags.values() if sb.hp > 0 and sb.tile == next_tgt), None)
-                        if not next_sandbag:
-                            next_elev = self.map.elevation_at(next_tgt)
-                            if next_elev == ELEV_TRENCH:
-                                s.current_task = None  # already fully dug
+                    self._advance_dig_plan(s, task, pop_current=True)
             elif task["type"] == "build_mg":
                 mg = self.mgs.get(task["mg_id"])
                 if not mg or mg.hp <= 0 or mg.built:
@@ -2653,7 +2644,7 @@ class TopowarGameState:
                 continue
             targets = [
                 t for t in self.grenade_tiles.get(s.owner, set())
-                if math.dist(s.tile, t) <= self.rules.grenade_range
+                if math.dist(s.tile, t) <= self._soldier_effective_range(s, t)
             ]
             if not targets:
                 s.grenade_target = None
@@ -2943,7 +2934,7 @@ class TopowarGameState:
                 "is_grenadier": s.is_grenadier,
                 "is_officer": s.is_officer,
                 "squad_id": s.squad_id,
-                "range": self._soldier_max_range(s) if not s.is_grenadier else None,
+                "range": self._soldier_max_range(s),
             })
         mgs = []
         for mg in self.mgs.values():
