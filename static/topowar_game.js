@@ -1357,40 +1357,40 @@ function draw() {
   board.height = OY * 2 + data.map.height * CELL;
   applyBoardZoom();
 
-  ctx.fillStyle = '#1a1c14';
+  ctx.fillStyle = '#1a1d20';
   ctx.fillRect(0, 0, board.width, board.height);
 
-  // Ground tiles — warmer olive/khaki palette with per-tile brightness noise
+  // Ground tiles — slight olive shift from original #445a48, with subtle per-tile noise
   for (let y = 0; y < data.map.height; y++) {
     for (let x = 0; x < data.map.width; x++) {
-      ctx.fillStyle = noisedColor(87, 96, 52, 9, x, y);  // base #576434
+      ctx.fillStyle = noisedColor(78, 93, 62, 5, x, y);  // base #4e5d3e, midpoint between old/new
       ctx.fillRect(OX + x * CELL, tileTop(y), CELL - 1, CELL - 1);
     }
   }
 
-  // Mountain tiles — warm brown-grey with noise
+  // Mountain tiles — slight warm shift from original #8c8c8c, subtle noise
   for (const t of data.map.mountains || []) {
     const tty = tileTop(t[1]);
-    ctx.fillStyle = noisedColor(120, 108, 90, 12, t[0], t[1]);  // base #786c5a
+    ctx.fillStyle = noisedColor(130, 124, 115, 6, t[0], t[1]);  // base #827c73, midpoint
     ctx.fillRect(OX + t[0] * CELL, tty, CELL - 1, CELL - 1);
-    ctx.strokeStyle = 'rgba(200,180,150,0.25)';
+    ctx.strokeStyle = 'rgba(190,180,165,0.25)';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(OX + t[0] * CELL + 0.5, tty + 0.5, CELL - 2, CELL - 2);
     ctx.lineWidth = 1;
   }
 
-  // Hill tiles — olive mid-tone with noise
+  // Hill tiles — slight olive shift from original #68736a, subtle noise
   for (const t of data.map.hills || []) {
     const tty = tileTop(t[1]);
-    ctx.fillStyle = noisedColor(105, 108, 64, 10, t[0], t[1]);  // base #696c40
+    ctx.fillStyle = noisedColor(104, 112, 86, 5, t[0], t[1]);  // base #687056, midpoint
     ctx.fillRect(OX + t[0] * CELL, tty, CELL - 1, CELL - 1);
-    ctx.strokeStyle = 'rgba(130,138,80,0.28)';
+    ctx.strokeStyle = 'rgba(110,120,90,0.28)';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(OX + t[0] * CELL + 0.5, tty + 0.5, CELL - 2, CELL - 2);
     ctx.lineWidth = 1;
   }
 
-  // Trench tiles — connected channel style with rounded corners
+  // Trench tiles — connected channel style
   {
     const trenchConnSet = new Set((data.map.trenches || []).map(t => `${t[0]},${t[1]}`));
     const CH = 10;  // channel width in pixels
@@ -1404,29 +1404,22 @@ function draw() {
       const E = trenchConnSet.has(`${tx + 1},${ty}`);
       const W = trenchConnSet.has(`${tx - 1},${ty}`);
 
-      // Dirt rim (dark khaki earth)
-      ctx.fillStyle = noisedColor(55, 46, 34, 6, tx, ty);  // #372e22 warm earth
+      // Dirt rim — midpoint between old trench (#2e2a24) and new warm earth
+      ctx.fillStyle = noisedColor(50, 44, 34, 3, tx, ty);  // #322c22
       ctx.fillRect(tlx, tty, sz, sz);
 
-      // Shadow/depth line on rim edges that face inward
-      ctx.strokeStyle = 'rgba(0,0,0,0.30)';
-      ctx.lineWidth = 1;
+      // Channel cut: cross-shaped dug shadow
+      const cOff = Math.round((sz - CH) / 2);
+      ctx.fillStyle = '#201c14';  // slightly lighter than before
 
-      // Channel cut: draw horizontal + vertical strips to form a cross
-      const cOff = Math.round((sz - CH) / 2);  // offset from tile edge to channel start
-      ctx.fillStyle = '#1a150e';  // deep shadow in channel
-
-      // Center square always filled
       ctx.fillRect(tlx + cOff, tty + cOff, CH, CH);
-
-      // Extend channel toward each connected neighbour
       if (N) ctx.fillRect(tlx + cOff, tty, CH, cOff + 1);
       if (S) ctx.fillRect(tlx + cOff, tty + cOff + CH - 1, CH, sz - (cOff + CH - 1));
       if (E) ctx.fillRect(tlx + cOff + CH - 1, tty + cOff, sz - (cOff + CH - 1), CH);
       if (W) ctx.fillRect(tlx, tty + cOff, cOff + 1, CH);
 
-      // Subtle highlight on top rim edge
-      ctx.strokeStyle = 'rgba(160,130,90,0.22)';
+      // Subtle rim highlight
+      ctx.strokeStyle = 'rgba(140,115,80,0.18)';
       ctx.lineWidth = 0.5;
       if (!N) {
         ctx.beginPath(); ctx.moveTo(tlx, tty + 0.5); ctx.lineTo(tlx + sz, tty + 0.5); ctx.stroke();
@@ -1467,7 +1460,7 @@ function draw() {
   }
 
   // Slight global darken so muzzle flashes and flares feel more illuminating
-  ctx.fillStyle = 'rgba(0,0,0,0.10)';
+  ctx.fillStyle = 'rgba(0,0,0,0.06)';
   ctx.fillRect(OX, OY, data.map.width * CELL, data.map.height * CELL);
 
   drawBuildPhaseOverlay(data);
