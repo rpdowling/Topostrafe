@@ -1991,7 +1991,7 @@ class TopowarGameState:
                     s.current_task = None
                     s.path = []
                     continue
-                if not s.path or s.path[-1] != goal:
+                if not s.path or s.path[-1] != goal or (s.blocked and s.blocked_for >= 0.3):
                     s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
             elif task["type"] == "dig":
                 tgt = tuple(task["target"])
