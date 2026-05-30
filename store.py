@@ -835,6 +835,7 @@ class GameStore:
                 "tw_set_grenade_tile",
                 "tw_assign_wire",
                 "tw_fire_flare",
+                "tw_airstrike",
                 "tw_build_phase_place_sandbag",
                 "tw_build_phase_place_wire",
                 "tw_build_phase_place_bunker",
