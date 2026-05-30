@@ -107,6 +107,7 @@ class Soldier(Unit):
     is_officer: bool = False
     grenade_target: tuple[int, int] | None = None
     grenade_windup: float = 0.0
+    grenade_cooldown: float = 0.0
     sandbag_queue: list[int] = field(default_factory=list)
     wire_queue: list[int] = field(default_factory=list)
     squad_id: int | None = None
@@ -126,7 +127,6 @@ class MachineGun(Structure):
     build_progress: float = 0.0
     build_required: float = 30.0
     required_staff: int = 1
-    force_target: tuple[int, int] | None = None
     cooldown: float = 0.0
     burst_left: int = 0
     burst_shot_cooldown: float = 0.0  # inter-shot delay within a burst
@@ -409,7 +409,6 @@ class TopowarGameState:
         self.death_marks: list[DeathMark] = []
         self.muzzle_flashes: list[MuzzleFlash] = []
         self.last_tick_monotonic = 0.0
-        self.grenade_tiles: dict[int, set[tuple[int, int]]] = {0: set(), 1: set()}
         self._name_pool: list[str] = []
         self.next_recruit_time: dict[int, float] = {0: 180.0, 1: 180.0}
         self._setup()
@@ -591,9 +590,12 @@ class TopowarGameState:
                 cx = (base_x + sign * delta) % self.map.width
                 tile = (cx, back_y)
                 if tile not in occ and self.map.in_bounds(tile):
+                    # If the side has lost its officer, the next recruit is a
+                    # replacement officer — restoring squad/formation command.
+                    need_officer = not self._has_command(owner)
                     live_grenadiers = sum(1 for s in self.soldiers.values() if s.owner == owner and s.hp > 0 and s.is_grenadier)
-                    is_grenadier = live_grenadiers < 2
-                    self._spawn_soldier(owner, tile, is_grenadier=is_grenadier, is_officer=False)
+                    is_grenadier = (not need_officer) and live_grenadiers < 2
+                    self._spawn_soldier(owner, tile, is_grenadier=is_grenadier, is_officer=need_officer)
                     return
 
     def _try_spawn_recruits(self):
@@ -705,6 +707,8 @@ class TopowarGameState:
                 s.grenade_target = None
             if not hasattr(s, "grenade_windup"):
                 s.grenade_windup = 0.0
+            if not hasattr(s, "grenade_cooldown"):
+                s.grenade_cooldown = 0.0
         for mg in self.mgs.values():
             if not hasattr(mg, "arc_center"):
                 mg.arc_center = getattr(mg, "facing", 0.0)
@@ -771,6 +775,10 @@ class TopowarGameState:
                 return trench_adj
             return [t for t in neighbours if self.map.in_bounds(t) and self.map.elevation_at(t) == ELEV_GROUND]
         return [t for t in neighbours if self.map.in_bounds(t) and self.map.elevation_at(t) == mg_elev]
+
+    def _has_command(self, owner: int) -> bool:
+        """A side can issue squad/formation orders only while it has a living officer."""
+        return any(s.owner == owner and s.hp > 0 and s.is_officer for s in self.soldiers.values())
 
     def _nearest_enemy(self, owner: int, from_tile: tuple[int, int], visible_only: bool = False) -> tuple[str, int] | None:
         best = None
@@ -1285,13 +1293,6 @@ class TopowarGameState:
                         goal = min(crew_spots, key=lambda t: math.dist(s.tile, t))
                         s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=occ - {s.tile})
             return "MG operators updated."
-        if t == "tw_force_fire":
-            mg = self.mgs.get(int(action.get("mg_id", -1)))
-            if not mg or mg.owner != owner:
-                raise ValueError("MG not found.")
-            target = action.get("tile")
-            mg.force_target = tuple(map(int, target)) if target else None
-            return "Force target set." if mg.force_target else "Force target cleared."
         if t == "tw_assign_build_mortar":
             tile = tuple(map(int, action.get("tile", [])))
             target_raw = action.get("target", [])
@@ -1486,18 +1487,6 @@ class TopowarGameState:
                 return "Sandbag queued."
             s.current_task = {"type": "build_sandbag", "sandbag_id": mid}
             return "Sandbag construction started."
-        if t == "tw_set_grenade_tile":
-            tile = tuple(map(int, action.get("tile", [])))
-            if len(tile) != 2 or not self.map.in_bounds(tile):
-                raise ValueError("Invalid grenade target tile.")
-            targets = self.grenade_tiles.setdefault(owner, set())
-            if tile in targets:
-                targets.remove(tile)
-                return "Grenade target removed."
-            if len(targets) >= 8:
-                raise ValueError("Maximum 8 grenade targets.")
-            targets.add(tile)
-            return "Grenade target added."
         if t == "tw_fire_flare":
             if self.flares_remaining.get(owner, 0) <= 0:
                 raise ValueError("No flares remaining.")
@@ -1735,6 +1724,8 @@ class TopowarGameState:
             return "MG construction resumed."
 
         if t == "tw_formation_move":
+            if not self._has_command(owner):
+                raise ValueError("No officer: squad and formation orders unavailable.")
             target = tuple(map(int, action.get("tile", [])))
             if len(target) != 2 or not self.map.in_bounds(target):
                 raise ValueError("Invalid move target.")
@@ -2230,35 +2221,34 @@ class TopowarGameState:
                 continue
             mg_elev = self.map.elevation_at(mg.tile)
             mg_range = self._mg_effective_range(mg)
-            target = mg.force_target
-            if target is None:
-                nearest = None
-                for sv in self.soldiers.values():
-                    if sv.hp <= 0 or sv.owner == mg.owner:
-                        continue
-                    sv_elev = self.map.elevation_at(sv.tile)
-                    if sv_elev > mg_elev:
-                        continue  # MG cannot fire at higher elevation
-                    if sv_elev == ELEV_TRENCH and mg_elev > ELEV_TRENCH:
-                        continue  # open-ground MG cannot see into trenches
-                    if not self._has_combat_los(mg.tile, sv.tile):
-                        continue  # blocked by terrain above target's elevation
-                    if self._is_concealed_by_elevation(mg.tile, sv.tile):
-                        continue  # target in dead ground (adjacent to higher elevation)
-                    if self._has_smoke_between(mg.tile, sv.tile, smoke_tiles):
-                        continue  # blocked by smoke
-                    if not self._soldier_visible_to(sv, mg.owner):
-                        continue
-                    d = math.dist(sv.tile, mg.tile)
-                    if d > mg_range:
-                        continue
-                    target_angle = math.degrees(math.atan2(sv.tile[1] - mg.tile[1], sv.tile[0] - mg.tile[0])) % 360.0
-                    if not self._is_angle_within_arc(target_angle, mg.arc_center, mg.arc_half):
-                        continue
-                    if nearest is None or d < nearest[0]:
-                        nearest = (d, sv.tile)
-                if nearest:
-                    target = nearest[1]
+            target = None
+            nearest = None
+            for sv in self.soldiers.values():
+                if sv.hp <= 0 or sv.owner == mg.owner:
+                    continue
+                sv_elev = self.map.elevation_at(sv.tile)
+                if sv_elev > mg_elev:
+                    continue  # MG cannot fire at higher elevation
+                if sv_elev == ELEV_TRENCH and mg_elev > ELEV_TRENCH:
+                    continue  # open-ground MG cannot see into trenches
+                if not self._has_combat_los(mg.tile, sv.tile):
+                    continue  # blocked by terrain above target's elevation
+                if self._is_concealed_by_elevation(mg.tile, sv.tile):
+                    continue  # target in dead ground (adjacent to higher elevation)
+                if self._has_smoke_between(mg.tile, sv.tile, smoke_tiles):
+                    continue  # blocked by smoke
+                if not self._soldier_visible_to(sv, mg.owner):
+                    continue
+                d = math.dist(sv.tile, mg.tile)
+                if d > mg_range:
+                    continue
+                target_angle = math.degrees(math.atan2(sv.tile[1] - mg.tile[1], sv.tile[0] - mg.tile[0])) % 360.0
+                if not self._is_angle_within_arc(target_angle, mg.arc_center, mg.arc_half):
+                    continue
+                if nearest is None or d < nearest[0]:
+                    nearest = (d, sv.tile)
+            if nearest:
+                target = nearest[1]
             if target is None:
                 continue
             # Swivel barrel toward target at swivel_speed deg/s.
@@ -2274,7 +2264,6 @@ class TopowarGameState:
                 mg.facing = (mg.facing + math.copysign(max_turn, diff)) % 360.0
             mg.facing = self._clamp_angle_to_arc(mg.facing, mg.arc_center, mg.arc_half)
             # Guard: only fire if elevation and LOS allow it.
-            # This applies to both auto-targeted and force-targeted shots.
             tgt_elev = self.map.elevation_at(target)
             can_fire = (tgt_elev <= mg_elev
                         and not (tgt_elev == ELEV_TRENCH and mg_elev > ELEV_TRENCH)
@@ -2638,7 +2627,6 @@ class TopowarGameState:
             dist = math.hypot(vx, vy)
             if dist <= 0.05:
                 self._grenade_impact(shell.target, shell.owner)
-                self.grenade_tiles[shell.owner].discard(shell.target)
                 continue
             step = min(dist, shell.speed * dt)
             shell.x += vx / dist * step
@@ -2646,37 +2634,67 @@ class TopowarGameState:
             remaining.append(shell)
         self.grenade_shells = remaining
 
+    # Grenadiers won't throw within this distance of themselves (self-frag guard).
+    # Grenade kill radius is 2.0, so 3.0 keeps the thrower clear of the blast.
+    GRENADE_MIN_THROW_DIST = 3.0
+
     def _update_grenadiers(self, dt: float):
         if self.time_elapsed < self.rules.build_phase_seconds:
             return
+        smoke_tiles = self._smoke_blocked_tiles()
         for s in self.soldiers.values():
             if s.hp <= 0 or not s.is_grenadier:
                 continue
-            targets = [
-                t for t in self.grenade_tiles.get(s.owner, set())
-                if math.dist(s.tile, t) <= self._soldier_effective_range(s, t)
-            ]
-            if not targets:
-                s.grenade_target = None
-                s.grenade_windup = 0.0
-                continue
-            target = min(targets, key=lambda t: math.dist(s.tile, t))
-            if s.grenade_target != target:
-                s.grenade_target = target
-                s.grenade_windup = self.rules.grenade_windup_seconds
-            else:
+            s.grenade_cooldown = max(0.0, s.grenade_cooldown - dt)
+
+            # Already committed to a throw: wind up and release at the LOCKED tile.
+            # The windup cannot be cancelled — even if the target walks away, the
+            # grenade still lands on the spot where the enemy was first seen.
+            if s.grenade_target is not None:
                 s.grenade_windup = max(0.0, s.grenade_windup - dt)
+                s.path = []
+                if s.grenade_windup <= 0:
+                    tgt = s.grenade_target
+                    self.grenade_shells.append(GrenadeShell(
+                        s.owner,
+                        float(s.tile[0]), float(s.tile[1]),
+                        float(s.tile[0]), float(s.tile[1]),
+                        tgt,
+                    ))
+                    s.grenade_target = None
+                    s.grenade_windup = 0.0
+                    s.grenade_cooldown = 2.0
+                continue
+
+            if s.grenade_cooldown > 0:
+                continue
+
+            # Acquire the nearest visible enemy that is in range but far enough
+            # away that the blast won't catch the thrower.
+            rng = self._soldier_effective_range(s, s.tile)
+            best: tuple[float, "Soldier"] | None = None
+            for s2 in self.soldiers.values():
+                if s2.hp <= 0 or s2.owner == s.owner:
+                    continue
+                if not self._soldier_visible_to(s2, s.owner):
+                    continue
+                d2 = math.dist(s.tile, s2.tile)
+                if d2 < self.GRENADE_MIN_THROW_DIST or d2 > rng:
+                    continue
+                if not self._has_combat_los(s.tile, s2.tile):
+                    continue
+                if self._is_concealed_by_elevation(s.tile, s2.tile):
+                    continue
+                if self._has_smoke_between(s.tile, s2.tile, smoke_tiles):
+                    continue
+                if best is None or d2 < best[0]:
+                    best = (d2, s2)
+            if best is None:
+                continue
+            # Lock onto the target's current tile and begin the windup.
+            s.grenade_target = best[1].tile
+            s.grenade_windup = self.rules.grenade_windup_seconds
             s.path = []
-            if s.grenade_windup <= 0 and s.grenade_target:
-                tgt = s.grenade_target
-                self.grenade_shells.append(GrenadeShell(
-                    s.owner,
-                    float(s.tile[0]), float(s.tile[1]),
-                    float(s.tile[0]), float(s.tile[1]),
-                    tgt,
-                ))
-                s.grenade_target = None
-                s.grenade_windup = 0.0
 
     # Smoke zone grows east at 0.70 tiles/sec; full 9 tiles reached after ~13 s.
     _SMOKE_GROW_SPEED = 0.70
@@ -2864,20 +2882,10 @@ class TopowarGameState:
         self._update_effects(dt)
         alive0 = sum(1 for s in self.soldiers.values() if s.owner == 0 and s.hp > 0)
         alive1 = sum(1 for s in self.soldiers.values() if s.owner == 1 and s.hp > 0)
-        officer0_alive = any(s.owner == 0 and s.hp > 0 and s.is_officer for s in self.soldiers.values())
-        officer1_alive = any(s.owner == 1 and s.hp > 0 and s.is_officer for s in self.soldiers.values())
-        officer0_existed = any(s.owner == 0 and s.is_officer for s in self.soldiers.values())
-        officer1_existed = any(s.owner == 1 and s.is_officer for s in self.soldiers.values())
-        if officer0_existed and not officer0_alive and officer1_existed and not officer1_alive:
-            self.winner = None
-            self.win_reason = "Mutual officer elimination."
-        elif officer0_existed and not officer0_alive:
-            self.winner = 1
-            self.win_reason = "Officer eliminated."
-        elif officer1_existed and not officer1_alive:
-            self.winner = 0
-            self.win_reason = "Officer eliminated."
-        elif alive0 == 0 or alive1 == 0:
+        # Officer death no longer ends the game — it suspends command (see
+        # _has_command). The match is won only by total elimination or by
+        # kill count when the clock runs out.
+        if alive0 == 0 or alive1 == 0:
             self.winner = 0 if alive0 > alive1 else 1 if alive1 > alive0 else None
             self.win_reason = "Elimination." if self.winner is not None else "Mutual elimination."
         elif self.time_elapsed >= self.rules.match_time_seconds:
@@ -2942,6 +2950,8 @@ class TopowarGameState:
                 "is_officer": s.is_officer,
                 "squad_id": s.squad_id,
                 "range": self._soldier_max_range(s),
+                "grenade_target": list(s.grenade_target) if (s.grenade_target and (viewer is None or s.owner == viewer)) else None,
+                "grenade_windup": s.grenade_windup,
             })
         mgs = []
         for mg in self.mgs.values():
@@ -2959,7 +2969,6 @@ class TopowarGameState:
                 "build_progress": mg.build_progress,
                 "build_required": mg.build_required,
                 "operators": sorted(list(mg.operators)),
-                "force_target": list(mg.force_target) if mg.force_target else None,
                 "facing": mg.facing,
                 "arc_center": mg.arc_center,
                 "arc_half": mg.arc_half,
@@ -3060,7 +3069,6 @@ class TopowarGameState:
             "bunkers": bunkers_out,
             "build_bunkers_remaining": self.build_bunkers_remaining.get(viewer, 0) if viewer is not None else None,
             "barbed_wire": wire_out,
-            "grenade_targets": [list(t) for t in sorted(self.grenade_tiles.get(viewer, set()))] if viewer is not None else [],
             "flare_shells": [{"x": fs.x, "y": fs.y, "sx": fs.sx, "sy": fs.sy, "target": list(fs.target), "owner": fs.owner} for fs in self.flare_shells],
             "flares_remaining": {"0": self.flares_remaining.get(0, 0), "1": self.flares_remaining.get(1, 0)},
             "build_sandbags_remaining": self.build_sandbags_remaining.get(viewer, 0) if viewer is not None else None,
@@ -3081,6 +3089,7 @@ class TopowarGameState:
             "winner": self.winner,
             "win_reason": self.win_reason,
             "kill_counts": {"0": self.kill_counts[0], "1": self.kill_counts[1]},
+            "command_available": {"0": self._has_command(0), "1": self._has_command(1)},
             "squads": [
                 {
                     "squad_id": sq.squad_id,
