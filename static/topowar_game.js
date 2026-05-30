@@ -547,7 +547,8 @@ function computeDefendPositions(box, n) {
   tiles.sort((a, b) => b.score - a.score);
   // Greedy max-spread: prefer high score, but keep picks apart.
   const chosen = [];
-  let minSpacing = Math.max(1, Math.floor(Math.min(x1 - x0, y1 - y0) / Math.max(1, n)));
+  const area = (x1 - x0 + 1) * (y1 - y0 + 1);
+  let minSpacing = Math.max(1, Math.floor(Math.sqrt(area / Math.max(1, n))));
   while (chosen.length < n && minSpacing >= 0) {
     for (const t of tiles) {
       if (chosen.length >= n) break;
@@ -568,9 +569,9 @@ function computeKillBoxPositions(box, n) {
   const minY = Math.min(box.y0, box.y1), maxY = Math.max(box.y0, box.y1);
   const cornerOnLeft = box.ax <= minX;
   const cornerOnTop = box.ay <= minY;
-  const OFF = 2;  // tiles to stand back from the edge (outside the box)
-  const edgeX = cornerOnLeft ? minX - OFF : maxX + OFF;  // x for the vertical arm
-  const edgeY = cornerOnTop ? minY - OFF : maxY + OFF;   // y for the horizontal arm
+  // Soldiers line the two near edges of the box itself (inside the kill zone perimeter).
+  const edgeX = cornerOnLeft ? minX : maxX;  // x-column for the vertical arm
+  const edgeY = cornerOnTop ? minY : maxY;   // y-row for the horizontal arm
   // Split: longer edge gets proportionally more soldiers.
   const wLen = maxX - minX + 1, hLen = maxY - minY + 1;
   let nHoriz = Math.round(n * wLen / (wLen + hLen));
