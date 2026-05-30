@@ -52,6 +52,8 @@ class RulesConfig:
     mg_build_seconds: float = 30.0
     match_time_seconds: int = 1200
     build_phase_seconds: int = 180
+    # Starting soldiers per side; the starting trench spans this many tiles.
+    starting_troops: int = 20
     # Soldiers move discretely: one tile per (1 / soldier_move_speed) seconds.
     soldier_move_speed: float = 1.25
     projectile_speed: float = 8.0
@@ -441,7 +443,9 @@ class TopowarGameState:
         names = list(SOLDIER_NAMES)
         self.random.shuffle(names)
         self._name_pool = names
-        length = 10
+        # Starting troop count and trench length match, clamped to map width.
+        count = max(1, min(self.rules.starting_troops, self.map.width))
+        length = count
         x0 = (self.map.width - length) // 2
         y_red = self.map.height - 5
         y_blue = 4
@@ -450,13 +454,14 @@ class TopowarGameState:
             self.map.trenches.add((x, y_blue))
         if self.rules.generate_terrain:
             self._generate_terrain()
-        # Starting squad: all riflemen plus one officer. Grenadiers are unlocked
-        # later via the officer's promotion ranks (RANK_GRENADES).
-        for i in range(7):
+        # Starting squad: all riflemen plus one officer (placed centrally).
+        # Grenadiers are unlocked later via the officer's promotion ranks.
+        officer_idx = count // 2
+        for i in range(count):
             rx = x0 + i
             bx = x0 + i
-            self._spawn_soldier(0, (rx, y_red), is_grenadier=False, is_officer=(i == 2))
-            self._spawn_soldier(1, (bx, y_blue), is_grenadier=False, is_officer=(i == 2))
+            self._spawn_soldier(0, (rx, y_red), is_grenadier=False, is_officer=(i == officer_idx))
+            self._spawn_soldier(1, (bx, y_blue), is_grenadier=False, is_officer=(i == officer_idx))
 
     def _generate_terrain(self):
         """Procedurally generate symmetric hills and mountains in no-man's land.
