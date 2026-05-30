@@ -720,16 +720,23 @@ board.addEventListener('click', (evt) => {
     } else if (mode === 'move' && formationShape === 'scatter') {
       // Scatter uses right-click to place each position; left-click on ground is a no-op.
     } else if (mode === 'move' && soldiersAt(tile).length === 0 && !tileHasEquipment(tile)) {
-      // Move mode: left-click ground = formation move.
-      const payload = { type: 'tw_formation_move', tile, count: formationCount, formation: formationShape };
-      if (selectedSquad !== null) {
-        payload.squad_id = selectedSquad;
-        selectedSquad = null;
-      } else if (selectedUnits.size > 0) {
-        payload.unit_ids = [...selectedUnits];
+      if (selectedUnits.size === 1 && selectedSquad === null) {
+        // Single selected soldier: direct move, ignore formation count/shape
+        const [uid] = selectedUnits;
+        send({ type: 'tw_move_unit', unit_id: uid, tile });
         selectedUnits = new Set();
+      } else {
+        // Formation move (multi-select, squad, or no selection)
+        const payload = { type: 'tw_formation_move', tile, count: formationCount, formation: formationShape };
+        if (selectedSquad !== null) {
+          payload.squad_id = selectedSquad;
+          selectedSquad = null;
+        } else if (selectedUnits.size > 0) {
+          payload.unit_ids = [...selectedUnits];
+          selectedUnits = new Set();
+        }
+        send(payload);
       }
-      send(payload);
       spawnMovePing(tile);
     }
     // In pure select mode, clicking empty ground does nothing — no accidental moves.
@@ -1249,18 +1256,18 @@ function spawnAirburstTileSmoke(gx, gy) {
 function spawnDirtPuff(gx, gy) {
   const count = 4 + Math.floor(Math.random() * 3);
   for (let i = 0; i < count; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const spd = 0.06 + Math.random() * 0.14;
+    const angle = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 0.8;  // upward cone
+    const spd = 0.14 + Math.random() * 0.20;
     impactParticles.push({
-      x: gx + (Math.random() - 0.5) * 0.3,
-      y: gy + (Math.random() - 0.5) * 0.3,
+      x: gx + (Math.random() - 0.5) * 0.15,
+      y: gy + (Math.random() - 0.5) * 0.15,
       vx: Math.cos(angle) * spd,
-      vy: Math.sin(angle) * spd - 0.08,
-      alpha: 0.55 + Math.random() * 0.3,
-      r: 0.10 + Math.random() * 0.12,
-      color: '140,110,70',
+      vy: Math.sin(angle) * spd,  // negative = upward
+      alpha: 0.60 + Math.random() * 0.25,
+      r: 0.05 + Math.random() * 0.07,
+      color: '185,160,115',  // dusty tan
       age: 0,
-      maxAge: 0.4 + Math.random() * 0.3,
+      maxAge: 0.22 + Math.random() * 0.18,
     });
   }
 }
@@ -1592,8 +1599,7 @@ function draw() {
   // Range circle for selected soldier
   const selSoldier = getSelectedSoldier();
   if (selSoldier) {
-    const grenRange = tw()?.rules?.grenade_range ?? GRENADIER_RANGE;
-    const effectiveRange = selSoldier.is_grenadier ? grenRange : (selSoldier.range ?? RIFLE_RANGE);
+    const effectiveRange = selSoldier.range ?? RIFLE_RANGE;  // grenadiers use rifle range (10/12/14)
     const _sdp = soldierDisplayPos.get(selSoldier.unit_id) || { x: selSoldier.x, y: selSoldier.y };
     drawRangeCircle(cpx(_sdp.x), cpy(_sdp.y), effectiveRange * CELL, 'rgba(255,180,50,0.8)');
   }
@@ -2751,7 +2757,7 @@ function draw() {
       ctx.globalAlpha = a;
       ctx.fillStyle = `rgb(${p.color})`;
       ctx.beginPath();
-      ctx.arc(cpx(p.x), cpy(p.y), Math.max(0.5, p.r * CELL * (1 + t * 0.5)), 0, Math.PI * 2);
+      ctx.arc(cpx(p.x), cpy(p.y), Math.max(0.5, p.r * CELL * (1 - t * 0.4)), 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.restore();
@@ -2955,7 +2961,7 @@ function render() {
       else setStatus('Sandbag — click an adjacent open tile to build.');
     }
   } else if (mode === 'grenade') {
-    setStatus('Grenade — click tiles to toggle grenade targets (range 7 from grenadiers).');
+    setStatus('Grenade — click tiles to toggle grenade targets (10/12/14 range by elevation).');
   } else if (mode === 'wire') {
     const inBuildPhase = (tw()?.build_phase_remaining || 0) > 0;
     if (inBuildPhase) {
