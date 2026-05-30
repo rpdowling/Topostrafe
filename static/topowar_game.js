@@ -369,6 +369,20 @@ function hasCommand() {
 }
 function tw() { return state?.topowar || null; }
 
+// Officer promotion: rank = enemy kills since the current officer took command.
+function myRank() {
+  const seat = mySeat();
+  if (seat === null) return 0;
+  return tw()?.officer_rank?.[String(seat)] ?? 0;
+}
+function rankUnlock(name) { return tw()?.rank_unlocks?.[name] ?? Infinity; }
+function unlocked(name) { return myRank() >= rankUnlock(name); }
+function airstrikeUsed() {
+  const seat = mySeat();
+  if (seat === null) return true;
+  return !!(tw()?.airstrike_used?.[String(seat)]);
+}
+
 function tileFromEvent(evt) {
   if (!tw()) return null;
   const rect = board.getBoundingClientRect();
@@ -660,7 +674,7 @@ function boxHitAt(cx, cy) {
 // === MODE MANAGEMENT ===
 
 function updateModeButtons() {
-  const modes = ['select','move','dig','build','mortar','sandbag','wire','bunker','flare'];
+  const modes = ['select','move','dig','build','mortar','sandbag','wire','bunker','flare','airstrike'];
   for (const m of modes) {
     const btn = el('mode-' + m);
     if (btn) btn.classList.toggle('active', mode === m);
@@ -815,7 +829,7 @@ document.addEventListener('keydown', (evt) => {
     return;
   }
 
-  const shortcutMap = { '1':'select','2':'move','V':'move','D':'dig','B':'build','M':'mortar','G':'sandbag','W':'wire','U':'bunker','F':'flare' };
+  const shortcutMap = { '1':'select','2':'move','V':'move','D':'dig','B':'build','M':'mortar','G':'sandbag','W':'wire','U':'bunker','F':'flare','A':'airstrike' };
   if (shortcutMap[key]) {
     evt.preventDefault();
     setMode(shortcutMap[key]);
@@ -1039,13 +1053,28 @@ board.addEventListener('click', (evt) => {
   } else if (mode === 'flare') {
     const fr = tw()?.flares_remaining;
     const remaining = fr ? (fr[String(mySeat())] ?? 0) : 0;
-    if (!myOfficer()) {
+    if (!unlocked('flares')) {
+      setStatus(`Flares unlock at officer rank ${rankUnlock('flares')}.`, true);
+    } else if (!myOfficer()) {
       setStatus('No living officer available to fire flares.', true);
     } else if (remaining > 0) {
       send({ type: 'tw_fire_flare', tile });
       setStatus('Flare request sent…');
     } else {
       setStatus('No flares remaining.', true);
+    }
+
+  } else if (mode === 'airstrike') {
+    if (!unlocked('airstrike')) {
+      setStatus(`Airstrike unlocks at officer rank ${rankUnlock('airstrike')}.`, true);
+    } else if (airstrikeUsed()) {
+      setStatus('Airstrike already used.', true);
+    } else if (!myOfficer()) {
+      setStatus('No living officer to call an airstrike.', true);
+    } else {
+      send({ type: 'tw_airstrike', tile });
+      setStatus('Airstrike inbound…');
+      setMode('select');
     }
 
   } else if (mode === 'wire') {
@@ -1286,7 +1315,7 @@ board.addEventListener('mousemove', (evt) => {
     if (mode === 'build' && pendingBuildTile && pendingBuildFacing === null) render();
     if (mode === 'mortar' && pendingMortarTile && !pendingMortarTarget) render();
     if (retargetMortarId !== null) render();
-    if (mode === 'flare') render();
+    if (mode === 'flare' || mode === 'airstrike') render();
     if (mode === 'select' || mode === 'move') render();
   }
 });
@@ -2564,6 +2593,50 @@ function draw() {
     }
   }
 
+  // Airstrike targeting preview: a red reticle at the aim tile.
+  if (mode === 'airstrike') {
+    const hover = tileFromCanvas(mouseCanvas.x, mouseCanvas.y);
+    if (hover) {
+      const cx = cpx(hover[0]), cy = cpy(hover[1]);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 70, 50, 0.95)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 4]);
+      ctx.strokeRect(cx - CELL * 0.5, cy - CELL * 0.5, CELL, CELL);
+      ctx.beginPath();
+      ctx.arc(cx, cy, CELL * 1.1, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(cx - CELL * 1.4, cy); ctx.lineTo(cx + CELL * 1.4, cy);
+      ctx.moveTo(cx, cy - CELL * 1.4); ctx.lineTo(cx, cy + CELL * 1.4);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // Incoming airstrike telegraphs: a shrinking red crosshair per pending shell.
+  for (const a of data.airstrikes || []) {
+    const cx = cpx(a.x), cy = cpy(a.y);
+    const fuse = Math.max(0, a.fuse || 0);
+    const t = Math.min(1, fuse / 2.0);          // ring closes in over the last 2s
+    const r = CELL * (0.5 + 1.6 * t);
+    const pulse = 0.55 + 0.45 * Math.abs(Math.sin(performance.now() / 130));
+    ctx.save();
+    ctx.strokeStyle = `rgba(255, 60, 40, ${pulse.toFixed(3)})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255, 60, 40, 0.18)';
+    ctx.fillRect(cx - CELL * 0.5, cy - CELL * 0.5, CELL, CELL);
+    ctx.beginPath();
+    ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy);
+    ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // Projectiles — dead-reckoned with tracer trails
   {
     const elapsed = (performance.now() - lastStateTime) / 1000;
@@ -3080,11 +3153,17 @@ function updateSelectionPanel() {
     const operableTag = mortar.operable === false ? '<span class="sel-blocked">Inoperable: restore 3×3 ground</span>' : '';
     const isAirburst = mortar.round_type === 'airburst';
     const isSmoke = mortar.round_type === 'smoke';
+    const abLock = unlocked('airburst') ? '' : ' locked';
+    const smLock = unlocked('smoke') ? '' : ' locked';
+    const abDis = unlocked('airburst') ? '' : ' disabled';
+    const smDis = unlocked('smoke') ? '' : ' disabled';
+    const abTitle = unlocked('airburst') ? '' : ` title="Unlocks at officer rank ${rankUnlock('airburst')}"`;
+    const smTitle = unlocked('smoke') ? '' : ` title="Unlocks at officer rank ${rankUnlock('smoke')}"`;
     const ammoRow = mortar.built && mortar.owner === mySeat() ? `
       <div class="sel-ammo-btns">
         <button class="sel-ammo-btn${!isAirburst && !isSmoke ? ' active' : ''}" onclick="setMortarRound('he')">HE</button>
-        <button class="sel-ammo-btn${isAirburst ? ' active' : ''}" onclick="setMortarRound('airburst')">Airburst</button>
-        <button class="sel-ammo-btn${isSmoke ? ' active' : ''}" onclick="setMortarRound('smoke')">Smoke</button>
+        <button class="sel-ammo-btn${isAirburst ? ' active' : ''}${abLock}"${abDis}${abTitle} onclick="setMortarRound('airburst')">Airburst${unlocked('airburst') ? '' : ' 🔒'}</button>
+        <button class="sel-ammo-btn${isSmoke ? ' active' : ''}${smLock}"${smDis}${smTitle} onclick="setMortarRound('smoke')">Smoke${unlocked('smoke') ? '' : ' 🔒'}</button>
         <button class="sel-ammo-btn${holdFire ? ' active' : ''}" onclick="toggleMortarHoldFire()">Hold Fire</button>
       </div>` : '';
     html = `
@@ -3142,6 +3221,45 @@ function updateCommandState() {
   if (hint) hint.style.display = disabled ? 'block' : 'none';
 }
 
+// Officer rank readout + unlock ladder + capability button gating.
+const RANK_LADDER = [
+  ['flares', 'Flares'], ['grenades', 'Grenadiers'],
+  ['airburst', 'Airburst'], ['smoke', 'Smoke'], ['airstrike', 'Airstrike'],
+];
+let _lastRankHtml = '';
+function updateRankPanel() {
+  const rank = myRank();
+  // Gate the Flare and Airstrike command buttons.
+  const flareBtn = el('mode-flare');
+  if (flareBtn) {
+    const ok = unlocked('flares');
+    flareBtn.classList.toggle('locked', !ok);
+    flareBtn.title = ok ? 'Fire a flare to illuminate an area (5 per game).'
+                        : `Locked — unlocks at officer rank ${rankUnlock('flares')}.`;
+  }
+  const asBtn = el('mode-airstrike');
+  if (asBtn) {
+    const ok = unlocked('airstrike') && !airstrikeUsed();
+    asBtn.classList.toggle('locked', !ok);
+    asBtn.title = !unlocked('airstrike')
+      ? `Locked — unlocks at officer rank ${rankUnlock('airstrike')}.`
+      : (airstrikeUsed() ? 'Airstrike already used (one per game).'
+                         : 'Call in 5 HE shells along a line (one use).');
+  }
+  // Ladder display.
+  const panel = el('rank-ladder');
+  if (panel) {
+    let html = `<div class="rank-now">Officer rank <strong>${rank}</strong></div><div class="rank-pips">`;
+    for (const [key, label] of RANK_LADDER) {
+      const need = rankUnlock(key);
+      const got = rank >= need;
+      html += `<span class="rank-pip${got ? ' got' : ''}" title="${label} — rank ${need}">${need}·${label}</span>`;
+    }
+    html += '</div>';
+    if (html !== _lastRankHtml) { _lastRankHtml = html; panel.innerHTML = html; }
+  }
+}
+
 // === RENDER ===
 
 function render() {
@@ -3193,8 +3311,14 @@ function render() {
   } else if (mode === 'flare') {
     const fr = tw()?.flares_remaining;
     const rem = fr ? (fr[String(mySeat())] ?? 0) : 0;
-    if (!myOfficer()) setStatus('Flare — unavailable (no living officer).', true);
+    if (!unlocked('flares')) setStatus(`Flare — locked. Unlocks at officer rank ${rankUnlock('flares')}.`, true);
+    else if (!myOfficer()) setStatus('Flare — unavailable (no living officer).', true);
     else setStatus(`Flare — click any tile to illuminate it (${rem} remaining). Reveals all units in radius.`);
+  } else if (mode === 'airstrike') {
+    if (!unlocked('airstrike')) setStatus(`Airstrike — locked. Unlocks at officer rank ${rankUnlock('airstrike')}.`, true);
+    else if (airstrikeUsed()) setStatus('Airstrike — already used (one per game).', true);
+    else if (!myOfficer()) setStatus('Airstrike — unavailable (no living officer).', true);
+    else setStatus('Airstrike — click a tile to call in 5 HE shells along a line over 10s. One use only.');
   } else if (mode === 'select') {
     const selCount = selectedUnits.size;
     if (selCount > 0) setStatus(`Select — ${selCount} selected. Switch to Move (2/V) to issue orders.`);
@@ -3237,6 +3361,12 @@ function render() {
   if (k0) k0.textContent = String(k['0'] || 0);
   if (k1) k1.textContent = String(k['1'] || 0);
 
+  const ranks = tw()?.officer_rank || {};
+  const rankEl0 = el('rank0'), rankEl1 = el('rank1');
+  if (rankEl0) rankEl0.textContent = String(ranks['0'] || 0);
+  if (rankEl1) rankEl1.textContent = String(ranks['1'] || 0);
+  updateRankPanel();
+
   const rt = tw()?.recruit_timers || {};
   const r0 = el('recruit0'), r1 = el('recruit1');
   function fmtTimer(s) { s = Math.ceil(s); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
@@ -3259,7 +3389,7 @@ function render() {
 
 [
   ['mode-select','select'], ['mode-move','move'],
-  ['mode-dig','dig'], ['mode-build','build'], ['mode-mortar','mortar'], ['mode-sandbag','sandbag'], ['mode-wire','wire'], ['mode-bunker','bunker'], ['mode-flare','flare'],
+  ['mode-dig','dig'], ['mode-build','build'], ['mode-mortar','mortar'], ['mode-sandbag','sandbag'], ['mode-wire','wire'], ['mode-bunker','bunker'], ['mode-flare','flare'], ['mode-airstrike','airstrike'],
 ].forEach(([id, m]) => {
   const btn = el(id);
   if (btn) btn.addEventListener('click', (evt) => { evt.stopPropagation(); setMode(m); render(); });

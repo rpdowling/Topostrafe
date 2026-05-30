@@ -1433,6 +1433,41 @@ body.info-modal-open {
 .cmd-build  { background: linear-gradient(180deg, #b787e3 0%, #6b3aa6 100%); border-color: #d3aff3; }
 .cmd-operate{ background: linear-gradient(180deg, #d65a8c 0%, #7a1e44 100%); border-color: #ff96bd; }
 .cmd-cancel { background: linear-gradient(180deg, #6e7886 0%, #3a414c 100%); border-color: #98a3b3; }
+.cmd-airstrike { background: linear-gradient(180deg, #e6483a 0%, #8a1810 100%); border-color: #ff7b6a; }
+
+/* A capability button whose officer rank requirement isn't met yet. */
+.cmd-btn.locked, .sel-ammo-btn.locked {
+  filter: grayscale(0.85) brightness(0.6);
+  opacity: 0.75;
+}
+.sel-ammo-btn.locked { cursor: not-allowed; }
+
+/* Officer rank readout in the scoreboard pills. */
+.score-pill .score-rank {
+  margin-left: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #f4c84a;
+  opacity: 0.95;
+}
+
+/* Officer rank unlock ladder in the sidebar. */
+.rank-ladder .rank-now { font-size: 0.85rem; margin-bottom: 6px; }
+.rank-ladder .rank-now strong { color: #f4c84a; font-size: 1rem; }
+.rank-ladder .rank-pips { display: flex; flex-wrap: wrap; gap: 4px; }
+.rank-ladder .rank-pip {
+  font-size: 0.66rem;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(40,48,60,0.7);
+  border: 1px solid #2a3340;
+  color: #8a96a6;
+}
+.rank-ladder .rank-pip.got {
+  background: linear-gradient(180deg, #3a6a3c 0%, #234824 100%);
+  border-color: #6fbf74;
+  color: #d8f5da;
+}
 
 .selection-panel {
   background: rgba(13,17,23,0.7);
