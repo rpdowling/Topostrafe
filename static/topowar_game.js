@@ -353,6 +353,13 @@ function connect() {
 }
 
 function mySeat() { return state?.my_seat ?? null; }
+// A side can issue squad/formation orders only while it has a living officer.
+function hasCommand() {
+  const seat = mySeat();
+  if (seat === null) return false;
+  const ca = tw()?.command_available;
+  return ca ? !!ca[String(seat)] : true;
+}
 function tw() { return state?.topowar || null; }
 
 function tileFromEvent(evt) {
@@ -403,6 +410,19 @@ function firstSelected() {
     if ((tw()?.soldiers || []).find(s => s.unit_id === uid)) return uid;
   }
   return null;
+}
+// Auto-assign the nearest N friendly soldiers to crew an MG or mortar.
+function crewStructure(kind, struct, n) {
+  const seat = mySeat();
+  const ops = (tw().soldiers || [])
+    .filter(s => s.owner === seat && s.hp > 0)
+    .sort((a, b) =>
+      Math.hypot(a.tile[0]-struct.tile[0], a.tile[1]-struct.tile[1]) -
+      Math.hypot(b.tile[0]-struct.tile[0], b.tile[1]-struct.tile[1]))
+    .slice(0, n).map(s => s.unit_id);
+  if (!ops.length) { setStatus('No soldiers available to crew.', true); return; }
+  if (kind === 'mg') send({ type: 'tw_toggle_operate_mg', mg_id: struct.structure_id, unit_ids: ops });
+  else send({ type: 'tw_toggle_operate_mortar', mortar_id: struct.structure_id, unit_ids: ops });
 }
 function getSelectedSoldier() {
   const uid = firstSelected();
@@ -492,7 +512,7 @@ function nearestUnusedTile(sx, sy, used, W, H) {
 // === MODE MANAGEMENT ===
 
 function updateModeButtons() {
-  const modes = ['select','move','dig','build','operate','mortar','grenade','sandbag','wire','bunker','flare'];
+  const modes = ['select','move','dig','build','mortar','sandbag','wire','bunker','flare'];
   for (const m of modes) {
     const btn = el('mode-' + m);
     if (btn) btn.classList.toggle('active', mode === m);
@@ -539,7 +559,7 @@ function setMode(m) {
 function updateModeLabel() {
   const labels = {
     select: 'Select', move: 'Move',
-    dig: 'Dig/Plan', build: 'Build MG', operate: 'Crew MG', mortar: 'Build Mortar', grenade: 'Grenade', sandbag: 'Build Sandbag', wire: 'Wire', bunker: 'Bunker', flare: 'Flare',
+    dig: 'Dig/Plan', build: 'Build MG', mortar: 'Build Mortar', sandbag: 'Build Sandbag', wire: 'Wire', bunker: 'Bunker', flare: 'Flare',
   };
   const e = el('mode-line');
   if (e) e.textContent = labels[mode] || 'Select / Move';
@@ -647,7 +667,7 @@ document.addEventListener('keydown', (evt) => {
     return;
   }
 
-  const shortcutMap = { '1':'select','2':'move','V':'move','D':'dig','B':'build','O':'operate','M':'mortar','N':'grenade','G':'sandbag','W':'wire','U':'bunker','F':'flare' };
+  const shortcutMap = { '1':'select','2':'move','V':'move','D':'dig','B':'build','M':'mortar','G':'sandbag','W':'wire','U':'bunker','F':'flare' };
   if (shortcutMap[key]) {
     evt.preventDefault();
     setMode(shortcutMap[key]);
@@ -698,22 +718,42 @@ board.addEventListener('click', (evt) => {
 
   if (mode === 'select' || mode === 'move') {
     if (myS.length) {
-      // Left-click own soldier: select (Ctrl toggles for multi-select)
       const uid = myS[0].unit_id;
-      if (evt.ctrlKey) {
-        if (selectedUnits.has(uid)) selectedUnits.delete(uid);
-        else selectedUnits.add(uid);
+      // If an unbuilt MG is selected, clicking a soldier resumes its construction.
+      const selMg = getSelectedMg();
+      if (selMg && !selMg.built) {
+        send({ type: 'tw_resume_build_mg', mg_id: selMg.structure_id, unit_id: uid });
+        selectedMg = null;
       } else {
-        selectedUnits = new Set([uid]);
+        // Left-click own soldier: select (Ctrl toggles for multi-select)
+        if (evt.ctrlKey) {
+          if (selectedUnits.has(uid)) selectedUnits.delete(uid);
+          else selectedUnits.add(uid);
+        } else {
+          selectedUnits = new Set([uid]);
+        }
+        selectedMg = null; selectedMortar = null; selectedSquad = null;
       }
-      selectedMg = null; selectedMortar = null; selectedSquad = null;
     } else if (myMortar) {
       selectedMortar = myMortar.structure_id; selectedMg = null; selectedUnits = new Set();
-      if (myMortar.built && myMortar.ready && (myMortar.hold_fire ?? false)) {
-        send({ type: 'tw_fire_mortar', mortar_id: myMortar.structure_id });
+      if (myMortar.built) {
+        if (myMortar.ready && (myMortar.hold_fire ?? false)) {
+          send({ type: 'tw_fire_mortar', mortar_id: myMortar.structure_id });
+        } else {
+          // Auto-crew with the nearest 2 available soldiers.
+          crewStructure('mortar', myMortar, 2);
+        }
       }
     } else if (myMg) {
       selectedMg = myMg.structure_id; selectedMortar = null; selectedUnits = new Set();
+      if (myMg.built) {
+        // Toggle crew: if already crewed, stand down; otherwise crew nearest soldier.
+        if ((myMg.operators || []).length > 0) {
+          send({ type: 'tw_toggle_operate_mg', mg_id: myMg.structure_id, unit_ids: [] });
+        } else {
+          crewStructure('mg', myMg, 1);
+        }
+      }
     } else if (selectedMg !== null || selectedMortar !== null) {
       // A structure was selected; clicking empty ground just deselects it (no move).
       selectedMg = null; selectedMortar = null;
@@ -799,60 +839,6 @@ board.addEventListener('click', (evt) => {
     tryDispatch();
     refreshBuildStatus();
 
-  } else if (mode === 'operate') {
-    const myMortar = myMortarAt(tile);
-    if (myMg) {
-      if (myMg.structure_id === selectedMg && myMg.force_target) {
-        // Click the already-selected MG again → clear force fire
-        send({ type: 'tw_force_fire', mg_id: selectedMg, tile: null });
-        setStatus('Force fire cleared.');
-      } else {
-        selectedMg = myMg.structure_id; selectedMortar = null;
-        if (myMg.built) {
-          const ops = (tw().soldiers || [])
-            .filter(s => s.owner === mySeat())
-            .sort((a, b) => Math.hypot(a.tile[0]-myMg.tile[0],a.tile[1]-myMg.tile[1]) - Math.hypot(b.tile[0]-myMg.tile[0],b.tile[1]-myMg.tile[1]))
-            .slice(0, 1).map(s => s.unit_id);
-          send({ type: 'tw_toggle_operate_mg', mg_id: selectedMg, unit_ids: ops });
-        }
-        // If unbuilt: just select it so a follow-up soldier click can resume construction
-      }
-    } else if (myMortar) {
-      selectedMortar = myMortar.structure_id; selectedMg = null;
-      if (myMortar.built) {
-        const ops = (tw().soldiers || [])
-          .filter(s => s.owner === mySeat())
-          .sort((a, b) => Math.hypot(a.tile[0]-myMortar.tile[0],a.tile[1]-myMortar.tile[1]) - Math.hypot(b.tile[0]-myMortar.tile[0],b.tile[1]-myMortar.tile[1]))
-          .slice(0, 2).map(s => s.unit_id);
-        send({ type: 'tw_toggle_operate_mortar', mortar_id: selectedMortar, unit_ids: ops });
-      }
-    } else if (selectedMg !== null && myS.length) {
-      const mg = getSelectedMg();
-      if (mg) {
-        if (!mg.built) {
-          // Resume interrupted build with this soldier
-          send({ type: 'tw_resume_build_mg', mg_id: selectedMg, unit_id: myS[0].unit_id });
-          selectedMg = null;
-        } else {
-          const ops = new Set((mg.operators || []).map(x => Number(x)));
-          const uid = myS[0].unit_id;
-          if (ops.has(uid)) {
-            ops.delete(uid);
-          } else {
-            ops.clear();
-            ops.add(uid);
-          }
-          send({ type: 'tw_toggle_operate_mg', mg_id: selectedMg, unit_ids: [...ops] });
-        }
-      }
-    } else if (selectedMg !== null) {
-      const mg = getSelectedMg();
-      if (mg && mg.built) {
-        send({ type: 'tw_force_fire', mg_id: selectedMg, tile });
-        setStatus('Force fire set — click MG again to clear.');
-      }
-    }
-
   } else if (mode === 'mortar') {
     const tryDispatchMortar = () => {
       if (pendingMortarTile && pendingMortarTarget && selectedUnits.size >= 2 && !pendingMortarDispatch) {
@@ -903,10 +889,6 @@ board.addEventListener('click', (evt) => {
         }
       }
     }
-
-  } else if (mode === 'grenade') {
-    send({ type: 'tw_set_grenade_tile', tile });
-    setStatus('Grenade target updated.');
 
   } else if (mode === 'flare') {
     const fr = tw()?.flares_remaining;
@@ -1036,9 +1018,10 @@ board.addEventListener('contextmenu', (evt) => {
   }
 
   const myMg = myMgAt(tile);
-  if (myMg) {
-    send({ type: 'tw_force_fire', mg_id: myMg.structure_id, tile: null });
-    setStatus('Force fire cleared.');
+  if (myMg && myMg.built && (myMg.operators || []).length > 0) {
+    // Right-click a crewed MG: stand the crew down.
+    send({ type: 'tw_toggle_operate_mg', mg_id: myMg.structure_id, unit_ids: [] });
+    setStatus('MG crew stood down.');
     render();
     return;
   }
@@ -1729,22 +1712,6 @@ function draw() {
       ctx.lineWidth = 1;
     }
 
-    // Force-fire target line
-    if (mg.force_target) {
-      const [fx, fy] = mg.force_target;
-      ctx.strokeStyle = '#ff6767';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(OX + fx * CELL + 2, tileTop(fy) + 2, CELL - 4, CELL - 4);
-      ctx.strokeStyle = 'rgba(255,100,100,0.4)';
-      ctx.setLineDash([3, 3]);
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(mcx, mcy);
-      ctx.lineTo(cpx(fx), cpy(fy));
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
     // HP bar
     const hpFrac = mg.hp / (mg.hp_max || 20);
     ctx.fillStyle = '#111';
@@ -2416,16 +2383,26 @@ function draw() {
     }
   }
 
-  // Planned grenade targets
-  for (const gt of data.grenade_targets || []) {
-    const [gx, gy] = gt;
-    const gty = tileTop(gy);
-    ctx.strokeStyle = 'rgba(154,210,109,0.95)';
+  // Grenadier windup telegraph: pulsing ring at the locked throw tile for own grenadiers
+  for (const s of data.soldiers || []) {
+    if (!s.grenade_target || s.owner !== mySeat()) continue;
+    const [gx, gy] = s.grenade_target;
+    const gcx = cpx(gx), gcy = cpy(gy);
+    const wind = s.grenade_windup ?? 0;
+    const windFrac = Math.max(0, Math.min(1, wind / 3.0));
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 120);
+    ctx.save();
+    ctx.strokeStyle = `rgba(154,210,109,${0.55 + 0.35 * pulse})`;
     ctx.lineWidth = 2;
     ctx.setLineDash([3, 2]);
-    ctx.strokeRect(OX + gx * CELL + 2, gty + 2, CELL - 4, CELL - 4);
+    ctx.strokeRect(OX + gx * CELL + 2, tileTop(gy) + 2, CELL - 4, CELL - 4);
     ctx.setLineDash([]);
-    ctx.lineWidth = 1;
+    // Shrinking inner ring shows windup progress (full → small as it nears throw)
+    const r = CELL * 0.45 * windFrac + 2;
+    ctx.beginPath();
+    ctx.arc(gcx, gcy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
 
   // Flare targeting preview (scatter area around selected tile)
@@ -2853,14 +2830,13 @@ function updateSelectionPanel() {
     const side = mg.owner === 0 ? 'Red' : 'Blue';
     const hp = Math.round((mg.hp / (mg.hp_max || 20)) * 100);
     const ops = (mg.operators || []).length;
-    const ffTag = mg.force_target ? '<span class="sel-blocked">Force-fire active</span>' : '';
     html = `
       <div class="sel-grid">
         <span class="sel-label">Side</span><span class="sel-val">${side}</span>
         <span class="sel-label">HP</span><span class="sel-val">${hp}%</span>
         <span class="sel-label">Built</span><span class="sel-val">${mg.built ? 'Yes' : 'No'}</span>
         <span class="sel-label">Crew</span><span class="sel-val">${ops}/1</span>
-      </div>${ffTag}`;
+      </div>`;
   } else if (mortar) {
     const side = mortar.owner === 0 ? 'Red' : 'Blue';
     const hp = Math.round((mortar.hp / (mortar.hp_max || 10)) * 100);
@@ -2931,6 +2907,17 @@ function updateSquadWindow() {
   }
 }
 
+// Grey out squad/formation controls while the side has no officer.
+function updateCommandState() {
+  const disabled = !hasCommand();
+  for (const id of ['formation-controls', 'squad-window']) {
+    const e = el(id);
+    if (e) e.classList.toggle('command-disabled', disabled);
+  }
+  const hint = el('command-lost-hint');
+  if (hint) hint.style.display = disabled ? 'block' : 'none';
+}
+
 // === RENDER ===
 
 function render() {
@@ -2938,6 +2925,7 @@ function render() {
   draw();
   updateSelectionPanel();
   updateSquadWindow();
+  updateCommandState();
 
   if (state.status === 'open') {
     setStatus('Waiting for opponent…');
@@ -2960,8 +2948,6 @@ function render() {
       if (!selectedUnits.size) setStatus('Sandbag — click a soldier, then click an adjacent open tile.');
       else setStatus('Sandbag — click an adjacent open tile to build.');
     }
-  } else if (mode === 'grenade') {
-    setStatus('Grenade — click tiles to toggle grenade targets (10/12/14 range by elevation).');
   } else if (mode === 'wire') {
     const inBuildPhase = (tw()?.build_phase_remaining || 0) > 0;
     if (inBuildPhase) {
@@ -3054,7 +3040,7 @@ function render() {
 
 [
   ['mode-select','select'], ['mode-move','move'],
-  ['mode-dig','dig'], ['mode-build','build'], ['mode-operate','operate'], ['mode-mortar','mortar'], ['mode-grenade','grenade'], ['mode-sandbag','sandbag'], ['mode-wire','wire'], ['mode-bunker','bunker'], ['mode-flare','flare'],
+  ['mode-dig','dig'], ['mode-build','build'], ['mode-mortar','mortar'], ['mode-sandbag','sandbag'], ['mode-wire','wire'], ['mode-bunker','bunker'], ['mode-flare','flare'],
 ].forEach(([id, m]) => {
   const btn = el(id);
   if (btn) btn.addEventListener('click', (evt) => { evt.stopPropagation(); setMode(m); render(); });

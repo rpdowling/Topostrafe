@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=66" />
+  <link rel="stylesheet" href="/static/app.css?v=67" />
 </head>
 <body>
   <div class="page game-layout topowar-layout">
@@ -54,7 +54,7 @@
         <div>
           <h2 class="section-title">Commands</h2>
           <div class="mode-buttons topowar-command-grid top-8">
-            <button id="mode-select" class="cmd-btn cmd-select" title="Left-click a soldier to select it (Ctrl+click adds). Drag empty ground to box-select. Right-click a soldier to cancel its task. Esc clears.">
+            <button id="mode-select" class="cmd-btn cmd-select" title="Left-click a soldier to select it (Ctrl+click adds). Click your MG or mortar to crew it (right-click to stand down). Drag empty ground to box-select. Right-click a soldier to cancel its task. Esc clears.">
               <span class="cmd-key">1</span><span class="cmd-label">Select</span>
             </button>
             <button id="mode-move" class="cmd-btn cmd-select" title="Left-click ground to move selected soldiers in formation. With nothing selected, the nearest soldiers move. Right-click a soldier to cancel its task.">
@@ -65,12 +65,6 @@
             </button>
             <button id="build-flyout-toggle" class="cmd-btn cmd-build" title="Place structures: MG, mortar, sandbag, wire, bunker (B)">
               <span class="cmd-key">B</span><span class="cmd-label">Build <span class="build-caret">&#9662;</span></span>
-            </button>
-            <button id="mode-operate" class="cmd-btn cmd-operate" title="Click an MG or mortar to crew it; then click a tile to force-fire MG">
-              <span class="cmd-key">O</span><span class="cmd-label">Crew MG</span>
-            </button>
-            <button id="mode-grenade" class="cmd-btn cmd-attack" title="Mark grenade target tiles (grenadiers auto-throw when in range)">
-              <span class="cmd-key">N</span><span class="cmd-label">Grenade</span>
             </button>
             <button id="mode-flare" class="cmd-btn cmd-sentry" title="Fire a flare to illuminate an area for both sides (5 per game). Scatter increases with distance.">
               <span class="cmd-key">F</span><span class="cmd-label">Flare</span>
@@ -100,6 +94,7 @@
 
         <div>
           <h2 class="section-title">Formation</h2>
+          <div id="command-lost-hint" class="command-lost-hint">⚠ Officer down — squad &amp; formation orders disabled until your next recruit (an officer) arrives.</div>
           <div class="muted formation-hint">Set count &amp; shape, then switch to Move (2) and left-click ground. Scatter places spots with right-click.</div>
           <div class="formation-controls top-6">
             <div class="fcount-row">
@@ -163,10 +158,12 @@
           <ul class="quick-rules">
             <li><strong>Select (1):</strong> click/drag to select soldiers. <strong>Move (2/V):</strong> click ground to move. <strong>Right-click</strong> a soldier to cancel its task.</li>
             <li>Soldiers move <strong>1 tile/second</strong> in rectilinear shortest paths.</li>
-            <li>Rifles &amp; grenadiers: range 10 (hill 12, mountain 14), fire while moving, 1 shot per 2s.</li>
+            <li>Riflemen: range 10 (hill 12, mountain 14), fire while moving, 1 shot per 2s.</li>
+            <li>Grenadiers: auto-throw at enemies in range (3s windup, then 2s reload). Won't throw close enough to hurt themselves.</li>
             <li>MG: range 20, needs 2 nearby soldiers to fire bursts.</li>
             <li>Dig only adjacent to your trench. MGs build next to trench (not in trench).</li>
-            <li>Eliminate the enemy or out-kill them by 10:00.</li>
+            <li>Lose your <strong>officer</strong> and you can't issue squad/formation orders until the next recruit (an officer) arrives.</li>
+            <li>Win by eliminating the enemy, or by most kills at 10:00.</li>
           </ul>
         </div>
 
@@ -180,6 +177,6 @@
     </section>
   </div>
   <script>window.TOPOS_GAME_ID = "{{ game_id }}";</script>
-  <script src="/static/topowar_game.js?v=32"></script>
+  <script src="/static/topowar_game.js?v=33"></script>
 </body>
 </html>
