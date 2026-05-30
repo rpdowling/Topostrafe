@@ -255,6 +255,10 @@ function connect() {
       lastStateTime = performance.now();
       const newTw = state?.topowar;
       if (newTw?.map) rebuildElevMap(newTw.map);
+      // Prune tactical boxes for squads that no longer exist or have no living members.
+      for (const squadId of [...squadBoxes.keys()]) {
+        if (!getSquad(squadId) || squadSoldierIds(squadId).length === 0) squadBoxes.delete(squadId);
+      }
       if (prevTw && newTw) {
         const prevPos = new Set((prevTw.explosions || []).map(e => `${Math.round(e.x)},${Math.round(e.y)}`));
         for (const ex of newTw.explosions || []) {
@@ -519,7 +523,7 @@ function nearestUnusedTile(sx, sy, used, W, H) {
 function squadSoldierIds(squadId) {
   const sq = getSquad(squadId);
   if (!sq) return [];
-  return (sq.soldier_ids || []).filter(uid => (tw()?.soldiers || []).find(s => s.unit_id === uid && s.hp > 0));
+  return (sq.soldier_ids || []).filter(uid => (tw()?.soldiers || []).find(s => s.unit_id === uid));
 }
 
 // Defensive value of a tile: trenches rank highest (best cover), then high ground.
@@ -3128,10 +3132,6 @@ function updateSquadWindow() {
 
 // Grey out squad/formation controls while the side has no officer.
 function updateCommandState() {
-  // Prune boxes whose squad no longer exists or has no living members.
-  for (const squadId of [...squadBoxes.keys()]) {
-    if (!getSquad(squadId) || squadSoldierIds(squadId).length === 0) squadBoxes.delete(squadId);
-  }
   const disabled = !hasCommand();
   for (const id of ['formation-controls', 'squad-window']) {
     const e = el(id);
