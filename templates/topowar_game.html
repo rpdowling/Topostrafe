@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=68" />
+  <link rel="stylesheet" href="/static/app.css?v=69" />
 </head>
 <body>
   <div class="page game-layout topowar-layout">
@@ -15,9 +15,9 @@
           <div class="muted" id="share-line"></div>
         </div>
         <div class="topowar-scoreboard">
-          <div class="score-pill score-red"><span class="score-label">Red</span><strong id="kills0">0</strong></div>
+          <div class="score-pill score-red"><span class="score-label">Red</span><strong id="kills0">0</strong><span class="score-rank">★<span id="rank0">0</span></span></div>
           <div class="score-pill score-clock"><span class="score-label">Time</span><strong id="clock-line">10:00</strong></div>
-          <div class="score-pill score-blue"><span class="score-label">Blue</span><strong id="kills1">0</strong></div>
+          <div class="score-pill score-blue"><span class="score-label">Blue</span><strong id="kills1">0</strong><span class="score-rank">★<span id="rank1">0</span></span></div>
         </div>
         <div class="toolbar-right">
           <span id="status-line" class="muted">Connecting&hellip;</span>
@@ -69,6 +69,9 @@
             <button id="mode-flare" class="cmd-btn cmd-sentry" title="Fire a flare to illuminate an area for both sides (5 per game). Scatter increases with distance.">
               <span class="cmd-key">F</span><span class="cmd-label">Flare</span>
             </button>
+            <button id="mode-airstrike" class="cmd-btn cmd-airstrike" title="Airstrike (rank 10, one use): 5 HE shells walk along a random ~10-tile line through your target over 10s. Friendly fire on.">
+              <span class="cmd-key">A</span><span class="cmd-label">Airstrike</span>
+            </button>
             <button id="cancel-task" class="cmd-btn cmd-cancel" title="Cancel selected soldier's task. You can also right-click any soldier to cancel directly.">
               <span class="cmd-key">C</span><span class="cmd-label">Cancel</span>
             </button>
@@ -90,6 +93,12 @@
               <span class="cmd-key">U</span><span class="cmd-label">Bunker</span>
             </button>
           </div>
+        </div>
+
+        <div>
+          <h2 class="section-title">Officer Rank</h2>
+          <div class="muted formation-hint">Each enemy kill promotes your officer. Lose your officer and rank resets to 0. At timeout, the higher-ranked officer wins (kills break ties).</div>
+          <div id="rank-ladder" class="rank-ladder top-6"></div>
         </div>
 
         <div>
@@ -163,8 +172,9 @@
             <li>Grenadiers: auto-throw at enemies in range (3s windup, then 2s reload). Won't throw close enough to hurt themselves.</li>
             <li>MG: range 20, needs 2 nearby soldiers to fire bursts.</li>
             <li>Dig only adjacent to your trench. MGs build next to trench (not in trench).</li>
-            <li>Lose your <strong>officer</strong> and you can't issue squad/formation orders until the next recruit (an officer) arrives.</li>
-            <li>Win by eliminating the enemy, or by most kills at 10:00.</li>
+            <li>Lose your <strong>officer</strong> and you can't issue squad/formation orders, and your rank resets to 0, until the next recruit (an officer) arrives.</li>
+            <li><strong>Officer ranks</strong> (1 per enemy kill) unlock: Flares (2), Grenadiers (4), Airburst (6), Smoke (8), Airstrike (10).</li>
+            <li>Win by eliminating the enemy, or at 10:00 by <strong>higher officer rank</strong> (kills break ties).</li>
           </ul>
         </div>
 
@@ -178,6 +188,6 @@
     </section>
   </div>
   <script>window.TOPOS_GAME_ID = "{{ game_id }}";</script>
-  <script src="/static/topowar_game.js?v=36"></script>
+  <script src="/static/topowar_game.js?v=37"></script>
 </body>
 </html>

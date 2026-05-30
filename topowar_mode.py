@@ -14,6 +14,15 @@ ELEV_GROUND = 4
 ELEV_HILL = 5
 ELEV_MOUNTAIN = 6
 
+# Officer promotion ranks. An officer's rank = the number of enemy kills the
+# side has scored since the current officer took command; it resets to 0 when
+# that officer dies. Each threshold unlocks a capability.
+RANK_FLARES = 2
+RANK_GRENADES = 4
+RANK_AIRBURST = 6
+RANK_SMOKE = 8
+RANK_AIRSTRIKE = 10
+
 # Ordered tier list used for elevation-adjacency checks during movement.
 _ELEV_TIER_ORDER = [ELEV_TRENCH, ELEV_GROUND, ELEV_HILL, ELEV_MOUNTAIN]
 
@@ -229,6 +238,14 @@ class FlareShell:
 
 
 @dataclass
+class AirstrikeStrike:
+    """A single scheduled HE impact in an officer's rank-10 airstrike barrage."""
+    owner: int
+    tile: tuple[int, int]
+    fuse: float  # seconds until this shell lands
+
+
+@dataclass
 class SmokeSource:
     origin_x: float
     origin_y: float
@@ -386,6 +403,13 @@ class TopowarGameState:
         self.winner: int | None = None
         self.win_reason: str | None = None
         self.kill_counts = {0: 0, 1: 0}
+        # Officer rank = enemy kills since the current officer took command;
+        # resets to 0 when that officer dies. Drives capability unlocks and the
+        # timeout win condition.
+        self.officer_rank = {0: 0, 1: 0}
+        # Rank-10 airstrike: one use per side per game.
+        self.airstrike_used = {0: False, 1: False}
+        self.airstrikes: list[AirstrikeStrike] = []
         self.next_unit_id = 1
         self.next_structure_id = 1
         self.squads: dict[int, Squad] = {}
@@ -426,11 +450,13 @@ class TopowarGameState:
             self.map.trenches.add((x, y_blue))
         if self.rules.generate_terrain:
             self._generate_terrain()
+        # Starting squad: all riflemen plus one officer. Grenadiers are unlocked
+        # later via the officer's promotion ranks (RANK_GRENADES).
         for i in range(7):
             rx = x0 + i
             bx = x0 + i
-            self._spawn_soldier(0, (rx, y_red), is_grenadier=(i < 2), is_officer=(i == 2))
-            self._spawn_soldier(1, (bx, y_blue), is_grenadier=(i < 2), is_officer=(i == 2))
+            self._spawn_soldier(0, (rx, y_red), is_grenadier=False, is_officer=(i == 2))
+            self._spawn_soldier(1, (bx, y_blue), is_grenadier=False, is_officer=(i == 2))
 
     def _generate_terrain(self):
         """Procedurally generate symmetric hills and mountains in no-man's land.
@@ -594,7 +620,10 @@ class TopowarGameState:
                     # replacement officer — restoring squad/formation command.
                     need_officer = not self._has_command(owner)
                     live_grenadiers = sum(1 for s in self.soldiers.values() if s.owner == owner and s.hp > 0 and s.is_grenadier)
-                    is_grenadier = (not need_officer) and live_grenadiers < 2
+                    # Grenadiers only spawn once the officer has reached the
+                    # Grenades rank, capped at 2 live at a time.
+                    grenades_unlocked = self.officer_rank.get(owner, 0) >= RANK_GRENADES
+                    is_grenadier = (not need_officer) and grenades_unlocked and live_grenadiers < 2
                     self._spawn_soldier(owner, tile, is_grenadier=is_grenadier, is_officer=need_officer)
                     return
 
@@ -740,6 +769,12 @@ class TopowarGameState:
         for s in self.soldiers.values():
             if not hasattr(s, "squad_id"):
                 s.squad_id = None
+        if not hasattr(self, "officer_rank"):
+            self.officer_rank = {0: 0, 1: 0}
+        if not hasattr(self, "airstrike_used"):
+            self.airstrike_used = {0: False, 1: False}
+        if not hasattr(self, "airstrikes"):
+            self.airstrikes = []
 
     def _crew_positions_for_mg(self, mg: "MachineGun") -> list[tuple[int, int]]:
         """Tiles where crew can stand to operate this MG.
@@ -1429,6 +1464,10 @@ class TopowarGameState:
             round_type = action.get("round_type", "he")
             if round_type not in ("he", "airburst", "smoke"):
                 raise ValueError("Invalid round type.")
+            if round_type == "airburst" and self.officer_rank.get(owner, 0) < RANK_AIRBURST:
+                raise ValueError(f"Airburst rounds unlock at officer rank {RANK_AIRBURST}.")
+            if round_type == "smoke" and self.officer_rank.get(owner, 0) < RANK_SMOKE:
+                raise ValueError(f"Smoke rounds unlock at officer rank {RANK_SMOKE}.")
             if mortar.round_type == round_type:
                 return "Round type unchanged."
             mortar.round_type = round_type
@@ -1488,6 +1527,8 @@ class TopowarGameState:
             s.current_task = {"type": "build_sandbag", "sandbag_id": mid}
             return "Sandbag construction started."
         if t == "tw_fire_flare":
+            if self.officer_rank.get(owner, 0) < RANK_FLARES:
+                raise ValueError(f"Flares unlock at officer rank {RANK_FLARES}.")
             if self.flares_remaining.get(owner, 0) <= 0:
                 raise ValueError("No flares remaining.")
             officer = next(
@@ -1511,6 +1552,34 @@ class TopowarGameState:
             self.flare_shells.append(FlareShell(owner, src[0], src[1], src[0], src[1], (lx, ly)))
             self.flares_remaining[owner] -= 1
             return "Flare fired."
+        if t == "tw_airstrike":
+            if self.officer_rank.get(owner, 0) < RANK_AIRSTRIKE:
+                raise ValueError(f"Airstrike unlocks at officer rank {RANK_AIRSTRIKE}.")
+            if self.airstrike_used.get(owner, False):
+                raise ValueError("Airstrike already used.")
+            if not self._has_command(owner):
+                raise ValueError("No living officer to call an airstrike.")
+            target = tuple(map(int, action.get("tile", [])))
+            if len(target) != 2 or not self.map.in_bounds(target):
+                raise ValueError("Invalid airstrike target.")
+            # 5 HE shells walk along a random line ~10 tiles long centred on the
+            # target, landing sequentially over the next 10 seconds.
+            angle = self.random.uniform(0.0, 2.0 * math.pi)
+            ux, uy = math.cos(angle), math.sin(angle)
+            n_shells = 5
+            half = 5.0  # half the ~10-tile line length
+            self.airstrike_used[owner] = True
+            for i in range(n_shells):
+                # offset from -half..+half along the line
+                frac = (i / (n_shells - 1)) * 2.0 - 1.0
+                off = frac * half
+                tx = int(round(target[0] + ux * off))
+                ty = int(round(target[1] + uy * off))
+                tx = max(0, min(self.map.width - 1, tx))
+                ty = max(0, min(self.map.height - 1, ty))
+                fuse = 2.0 * (i + 1)  # 2,4,6,8,10 s
+                self.airstrikes.append(AirstrikeStrike(owner, (tx, ty), fuse))
+            return "Airstrike inbound."
         if t == "tw_assign_wire":
             sid = int(action.get("unit_id", -1))
             s = self.soldiers.get(sid)
@@ -2289,6 +2358,13 @@ class TopowarGameState:
             return
         victim.hp = 0
         self.kill_counts[killer_owner] += 1
+        # Promotion: an enemy kill promotes the killer's officer (if they still
+        # have one). Killing an enemy officer additionally resets that side's
+        # rank — wiping their unlocks — which is the main comeback lever.
+        if victim.owner != killer_owner and self._has_command(killer_owner):
+            self.officer_rank[killer_owner] = self.officer_rank.get(killer_owner, 0) + 1
+        if victim.is_officer:
+            self.officer_rank[victim.owner] = 0
         self.death_marks.append(DeathMark(victim.x, victim.y))
         # Remove any in-progress (unbuilt) sandbag this soldier was working on.
         task = victim.current_task or {}
@@ -2792,6 +2868,16 @@ class TopowarGameState:
             remaining.append(shell)
         self.flare_shells = remaining
 
+    def _update_airstrikes(self, dt: float):
+        remaining: list[AirstrikeStrike] = []
+        for strike in self.airstrikes:
+            strike.fuse -= dt
+            if strike.fuse <= 0.0:
+                self._mortar_impact(strike.tile, strike.owner, airburst=False)
+            else:
+                remaining.append(strike)
+        self.airstrikes = remaining
+
     def _update_effects(self, dt: float):
         for e in self.explosions:
             e.age += dt
@@ -2877,6 +2963,7 @@ class TopowarGameState:
         self._update_grenadiers(dt)
         self._update_grenade_shells(dt)
         self._update_flare_shells(dt)
+        self._update_airstrikes(dt)
         self._update_smoke_sources(dt)
         self._update_projectiles(dt)
         self._update_effects(dt)
@@ -2889,12 +2976,17 @@ class TopowarGameState:
             self.winner = 0 if alive0 > alive1 else 1 if alive1 > alive0 else None
             self.win_reason = "Elimination." if self.winner is not None else "Mutual elimination."
         elif self.time_elapsed >= self.rules.match_time_seconds:
-            if self.kill_counts[0] > self.kill_counts[1]:
+            # Timeout: higher officer rank wins; tie on rank breaks to kills.
+            r0, r1 = self.officer_rank.get(0, 0), self.officer_rank.get(1, 0)
+            if r0 != r1:
+                self.winner = 0 if r0 > r1 else 1
+                self.win_reason = "Time. Higher rank."
+            elif self.kill_counts[0] > self.kill_counts[1]:
                 self.winner = 0
-                self.win_reason = "Time. More kills."
+                self.win_reason = "Time. Equal rank, more kills."
             elif self.kill_counts[1] > self.kill_counts[0]:
                 self.winner = 1
-                self.win_reason = "Time. More kills."
+                self.win_reason = "Time. Equal rank, more kills."
             else:
                 self.winner = -1
                 self.win_reason = "Time. Tie."
@@ -3090,6 +3182,13 @@ class TopowarGameState:
             "win_reason": self.win_reason,
             "kill_counts": {"0": self.kill_counts[0], "1": self.kill_counts[1]},
             "command_available": {"0": self._has_command(0), "1": self._has_command(1)},
+            "officer_rank": {"0": self.officer_rank.get(0, 0), "1": self.officer_rank.get(1, 0)},
+            "airstrike_used": {"0": self.airstrike_used.get(0, False), "1": self.airstrike_used.get(1, False)},
+            "rank_unlocks": {
+                "flares": RANK_FLARES, "grenades": RANK_GRENADES,
+                "airburst": RANK_AIRBURST, "smoke": RANK_SMOKE, "airstrike": RANK_AIRSTRIKE,
+            },
+            "airstrikes": [{"x": a.tile[0], "y": a.tile[1], "fuse": a.fuse, "owner": a.owner} for a in self.airstrikes],
             "squads": [
                 {
                     "squad_id": sq.squad_id,
