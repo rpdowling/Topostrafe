@@ -1701,9 +1701,29 @@ body.info-modal-open {
 
 .fshape-row {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 4px;
 }
+
+.tactic-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+}
+
+.tactic-btn {
+  padding: 6px 4px;
+  border-radius: 7px;
+  border: 1px solid #2f3f52;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  transition: filter 0.08s;
+}
+.tactic-btn:hover { filter: brightness(1.15); }
+.tactic-killbox { background: linear-gradient(180deg, #d6452f 0%, #8a2418 100%); border-color: #ff7a5e; }
+.tactic-defend  { background: linear-gradient(180deg, #3a63d6 0%, #1d3486 100%); border-color: #6f96ff; }
 
 .fshape-btn {
   padding: 6px 4px;

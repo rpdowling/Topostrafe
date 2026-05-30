@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=67" />
+  <link rel="stylesheet" href="/static/app.css?v=68" />
 </head>
 <body>
   <div class="page game-layout topowar-layout">
@@ -95,7 +95,7 @@
         <div>
           <h2 class="section-title">Formation</h2>
           <div id="command-lost-hint" class="command-lost-hint">⚠ Officer down — squad &amp; formation orders disabled until your next recruit (an officer) arrives.</div>
-          <div class="muted formation-hint">Set count &amp; shape, then switch to Move (2) and left-click ground. Scatter places spots with right-click.</div>
+          <div class="muted formation-hint">Set count &amp; shape, then switch to Move (2) and left-click ground. Kill Box / Defend are squad orders: select a squad, click one, then drag a box on the map.</div>
           <div class="formation-controls top-6">
             <div class="fcount-row">
               <button id="fcount-1" class="fcount-btn active">1</button>
@@ -110,9 +110,10 @@
               <button id="fshape-vertical" class="fshape-btn" title="Vertical line formation">
                 <svg width="12" height="30" viewBox="0 0 12 30"><circle cx="6" cy="5" r="3.5" fill="currentColor"/><circle cx="6" cy="15" r="3.5" fill="currentColor"/><circle cx="6" cy="25" r="3.5" fill="currentColor"/></svg>
               </button>
-              <button id="fshape-scatter" class="fshape-btn" title="Scatter (right-click to place each position)">
-                <svg width="26" height="26" viewBox="0 0 26 26"><circle cx="4" cy="4" r="3.5" fill="currentColor"/><circle cx="22" cy="5" r="3.5" fill="currentColor"/><circle cx="7" cy="21" r="3.5" fill="currentColor"/><circle cx="21" cy="20" r="3.5" fill="currentColor"/></svg>
-              </button>
+            </div>
+            <div class="tactic-row top-6">
+              <button id="tactic-killbox" class="tactic-btn tactic-killbox" title="Kill Box (squad): pick a squad, click this, then drag a box from the corner your squad attacks from. The squad forms an L on the two near edges and fires into the box.">Kill Box</button>
+              <button id="tactic-defend" class="tactic-btn tactic-defend" title="Defend (squad): pick a squad, click this, then drag a box. The squad spreads out and holds the best ground (trenches and high ground) inside it.">Defend</button>
             </div>
           </div>
           <div id="squad-window" class="squad-window top-8"></div>
@@ -177,6 +178,6 @@
     </section>
   </div>
   <script>window.TOPOS_GAME_ID = "{{ game_id }}";</script>
-  <script src="/static/topowar_game.js?v=33"></script>
+  <script src="/static/topowar_game.js?v=34"></script>
 </body>
 </html>

@@ -108,8 +108,11 @@ let planDragging = false;
 let formationCount = 1;
 let formationShape = 'horizontal';
 let selectedSquad = null;
-let scatterPendingPositions = [];
 let buildFlyoutOpen = false;
+// Squad tactical boxes: squadId → {kind:'killbox'|'defend', x0,y0,x1,y1 (tile coords), ax,ay (approach corner tile)}
+let squadBoxes = new Map();
+let armedBoxKind = null;       // 'killbox' | 'defend' when the next board-drag will define a box
+let boxInteraction = null;     // active drag: {squadId, kind, mode:'create'|'resize', handle, ax, ay}
 const BUILD_MODES = new Set(['build', 'mortar', 'sandbag', 'wire', 'bunker']);
 
 // Smooth soldier interpolation: display position trails toward server position.
@@ -467,6 +470,7 @@ function selectSquad(squadId) {
 function disbandSquad(squadId) {
   send({ type: 'tw_disband_squad', squad_id: squadId });
   if (selectedSquad === squadId) selectedSquad = null;
+  squadBoxes.delete(squadId);
   render();
 }
 
@@ -509,6 +513,145 @@ function nearestUnusedTile(sx, sy, used, W, H) {
   return [sx, sy];
 }
 
+// === SQUAD TACTICAL BOXES (Kill Box / Defend) ===
+
+// Live alive soldier ids of a squad.
+function squadSoldierIds(squadId) {
+  const sq = getSquad(squadId);
+  if (!sq) return [];
+  return (sq.soldier_ids || []).filter(uid => (tw()?.soldiers || []).find(s => s.unit_id === uid && s.hp > 0));
+}
+
+// Defensive value of a tile: trenches rank highest (best cover), then high ground.
+function defenseScore(x, y) {
+  const tier = elevMap.get(`${x},${y}`);  // 0=trench, 2=hill, 3=mountain, undefined=ground
+  if (tier === 0) return 1000 + 2;          // trench: best cover (with its low base elev)
+  if (tier === 3) return 6;                 // mountain
+  if (tier === 2) return 5;                 // hill
+  return 4;                                 // ground
+}
+
+// Defend: spread the squad across the best-scoring ground inside the box, max-separated.
+function computeDefendPositions(box, n) {
+  const W = tw().map.width, H = tw().map.height;
+  const x0 = Math.max(0, Math.min(box.x0, box.x1)), x1 = Math.min(W - 1, Math.max(box.x0, box.x1));
+  const y0 = Math.max(0, Math.min(box.y0, box.y1)), y1 = Math.min(H - 1, Math.max(box.y0, box.y1));
+  const tiles = [];
+  for (let y = y0; y <= y1; y++)
+    for (let x = x0; x <= x1; x++)
+      tiles.push({ x, y, score: defenseScore(x, y) });
+  tiles.sort((a, b) => b.score - a.score);
+  // Greedy max-spread: prefer high score, but keep picks apart.
+  const chosen = [];
+  let minSpacing = Math.max(1, Math.floor(Math.min(x1 - x0, y1 - y0) / Math.max(1, n)));
+  while (chosen.length < n && minSpacing >= 0) {
+    for (const t of tiles) {
+      if (chosen.length >= n) break;
+      if (chosen.some(c => Math.max(Math.abs(c.x - t.x), Math.abs(c.y - t.y)) < minSpacing)) continue;
+      if (chosen.some(c => c.x === t.x && c.y === t.y)) continue;
+      chosen.push(t);
+    }
+    minSpacing--;
+  }
+  return chosen.slice(0, n).map(t => [t.x, t.y]);
+}
+
+// Kill Box: arrange the squad in an L on the two outer edges adjacent to the
+// approach corner, standing a couple tiles back so their fire reaches into the box.
+function computeKillBoxPositions(box, n) {
+  const W = tw().map.width, H = tw().map.height;
+  const minX = Math.min(box.x0, box.x1), maxX = Math.max(box.x0, box.x1);
+  const minY = Math.min(box.y0, box.y1), maxY = Math.max(box.y0, box.y1);
+  const cornerOnLeft = box.ax <= minX;
+  const cornerOnTop = box.ay <= minY;
+  const OFF = 2;  // tiles to stand back from the edge (outside the box)
+  const edgeX = cornerOnLeft ? minX - OFF : maxX + OFF;  // x for the vertical arm
+  const edgeY = cornerOnTop ? minY - OFF : maxY + OFF;   // y for the horizontal arm
+  // Split: longer edge gets proportionally more soldiers.
+  const wLen = maxX - minX + 1, hLen = maxY - minY + 1;
+  let nHoriz = Math.round(n * wLen / (wLen + hLen));
+  nHoriz = Math.max(0, Math.min(n, nHoriz));
+  let nVert = n - nHoriz;
+  if (n >= 2 && nHoriz === 0) { nHoriz = 1; nVert = n - 1; }
+  if (n >= 2 && nVert === 0) { nVert = 1; nHoriz = n - 1; }
+  const spread = (count, lo, hi) => {
+    const out = [];
+    if (count <= 0) return out;
+    if (count === 1) { out.push(Math.round((lo + hi) / 2)); return out; }
+    for (let i = 0; i < count; i++) out.push(Math.round(lo + (hi - lo) * i / (count - 1)));
+    return out;
+  };
+  const raw = [];
+  for (const px of spread(nHoriz, minX, maxX)) raw.push([px, edgeY]);   // horizontal arm
+  for (const py of spread(nVert, minY, maxY)) raw.push([edgeX, py]);    // vertical arm
+  const used = new Set();
+  const result = [];
+  for (let [x, y] of raw) {
+    let cx = Math.max(0, Math.min(W - 1, x)), cy = Math.max(0, Math.min(H - 1, y));
+    if (used.has(`${cx},${cy}`)) [cx, cy] = nearestUnusedTile(cx, cy, used, W, H);
+    used.add(`${cx},${cy}`);
+    result.push([cx, cy]);
+  }
+  return result;
+}
+
+// Compute and dispatch moves for a squad's tactical box.
+function dispatchSquadBox(squadId) {
+  const box = squadBoxes.get(squadId);
+  if (!box) return;
+  const ids = squadSoldierIds(squadId);
+  if (!ids.length) return;
+  const positions = box.kind === 'defend'
+    ? computeDefendPositions(box, ids.length)
+    : computeKillBoxPositions(box, ids.length);
+  // Assign nearest soldier to nearest position (greedy) to minimise crossing.
+  const soldiers = ids.map(uid => {
+    const s = (tw().soldiers || []).find(s => s.unit_id === uid);
+    return { uid, x: s.x, y: s.y };
+  });
+  const remaining = [...positions];
+  for (const sol of soldiers) {
+    if (!remaining.length) break;
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const d = Math.hypot(remaining[i][0] - sol.x, remaining[i][1] - sol.y);
+      if (d < bd) { bd = d; bi = i; }
+    }
+    const tile = remaining.splice(bi, 1)[0];
+    send({ type: 'tw_move_unit', unit_id: sol.uid, tile });
+  }
+  for (const p of positions) spawnMovePing(p);
+}
+
+// Canvas-space rectangle for a box (handles the player-2 vertical flip).
+function boxCanvasRect(box) {
+  const minX = Math.min(box.x0, box.x1), maxX = Math.max(box.x0, box.x1);
+  const minY = Math.min(box.y0, box.y1), maxY = Math.max(box.y0, box.y1);
+  const left = OX + minX * CELL;
+  const right = OX + (maxX + 1) * CELL;
+  const ya = tileTop(minY), yb = tileTop(maxY);
+  const top = Math.min(ya, yb);
+  const bottom = Math.max(ya, yb) + CELL;
+  return { left, top, right, bottom };
+}
+
+// Hit-test a canvas point against own squad boxes. Returns {squadId, hit} or null.
+function boxHitAt(cx, cy) {
+  for (const [squadId, box] of squadBoxes) {
+    const r = boxCanvasRect(box);
+    // Delete X at the visual top-right corner.
+    if (cx >= r.right - 18 && cx <= r.right && cy >= r.top && cy <= r.top + 18) {
+      return { squadId, hit: 'x' };
+    }
+    // Resize grab near the opposite corner (x1,y1) tile centre.
+    const rx = cpx(box.x1), ry = cpy(box.y1);
+    if (Math.hypot(cx - rx, cy - ry) <= 12) {
+      return { squadId, hit: 'resize' };
+    }
+  }
+  return null;
+}
+
 // === MODE MANAGEMENT ===
 
 function updateModeButtons() {
@@ -539,14 +682,14 @@ function setMode(m) {
     pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false;
     pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false;
     retargetMortarId = null;
-    scatterPendingPositions = [];
+    armedBoxKind = null;
     selectedSquad = null;
   } else {
     mode = m;
     if (m !== 'dig') plan = [];
     if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false; }
     if (m !== 'mortar') { pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false; }
-    if (m !== 'select' && m !== 'move') { scatterPendingPositions = []; }
+    if (m !== 'select' && m !== 'move') { armedBoxKind = null; }
     if (BUILD_MODES.has(m)) selectedUnits = new Set();
   }
   // Keep the build flyout open while a build mode is active; collapse otherwise.
@@ -757,8 +900,6 @@ board.addEventListener('click', (evt) => {
     } else if (selectedMg !== null || selectedMortar !== null) {
       // A structure was selected; clicking empty ground just deselects it (no move).
       selectedMg = null; selectedMortar = null;
-    } else if (mode === 'move' && formationShape === 'scatter') {
-      // Scatter uses right-click to place each position; left-click on ground is a no-op.
     } else if (mode === 'move' && soldiersAt(tile).length === 0 && !tileHasEquipment(tile)) {
       if (selectedUnits.size === 1 && selectedSquad === null) {
         // Single selected soldier: direct move, ignore formation count/shape
@@ -980,35 +1121,6 @@ board.addEventListener('contextmenu', (evt) => {
 
   const myS = mySoldiersAt(tile);
 
-  // Scatter formation (in Move mode): right-click empty ground places each
-  // position. Right-clicking a soldier still cancels (handled below).
-  if (mode === 'move' && formationShape === 'scatter' && !myS.length && !tileHasEquipment(tile)) {
-    const targetCount = selectedSquad !== null
-      ? ((getSquad(selectedSquad)?.soldier_ids || []).filter(uid => {
-          const s = (tw().soldiers || []).find(s => s.unit_id === uid);
-          return s && s.hp > 0;
-        }).length || formationCount)
-      : (selectedUnits.size > 0 ? selectedUnits.size : formationCount);
-    scatterPendingPositions.push(tile);
-    if (scatterPendingPositions.length >= targetCount) {
-      const positions = [...scatterPendingPositions];
-      scatterPendingPositions = [];
-      const payload = {
-        type: 'tw_formation_move',
-        tile: positions[0],
-        count: formationCount,
-        formation: 'scatter',
-        positions,
-      };
-      if (selectedSquad !== null) { payload.squad_id = selectedSquad; selectedSquad = null; }
-      else if (selectedUnits.size > 0) { payload.unit_ids = [...selectedUnits]; selectedUnits = new Set(); }
-      send(payload);
-      for (const pos of positions) spawnMovePing(pos);
-    }
-    render();
-    return;
-  }
-
   // Right-click own soldier: cancel their task immediately (any mode)
   if (myS.length) {
     send({ type: 'tw_cancel_task', unit_id: myS[0].unit_id });
@@ -1056,6 +1168,37 @@ let selectBoxConsumedClick = false; // suppress click when a drag was completed
 
 board.addEventListener('mousedown', (evt) => {
   if (evt.button !== 0) return;
+  const r0 = board.getBoundingClientRect();
+  const mcx = (evt.clientX - r0.left) * (board.width / r0.width);
+  const mcy = (evt.clientY - r0.top) * (board.height / r0.height);
+
+  // Arming a new tactical box: this drag defines it (approach corner = start tile).
+  if (armedBoxKind && selectedSquad !== null) {
+    const tile = tileFromEvent(evt);
+    if (tile) {
+      boxInteraction = { squadId: selectedSquad, kind: armedBoxKind, mode: 'create', ax: tile[0], ay: tile[1] };
+      squadBoxes.set(selectedSquad, { kind: armedBoxKind, x0: tile[0], y0: tile[1], x1: tile[0], y1: tile[1], ax: tile[0], ay: tile[1] });
+      armedBoxKind = null;
+      render();
+    }
+    return;
+  }
+  // Clicking an existing box's delete-X or resize handle.
+  const hit = boxHitAt(mcx, mcy);
+  if (hit) {
+    if (hit.hit === 'x') {
+      squadBoxes.delete(hit.squadId);
+      setStatus('Box removed.');
+      render();
+      return;
+    }
+    if (hit.hit === 'resize') {
+      if (!hasCommand()) { setStatus('No officer — squad orders unavailable.', true); return; }
+      boxInteraction = { squadId: hit.squadId, kind: squadBoxes.get(hit.squadId).kind, mode: 'resize' };
+      return;
+    }
+  }
+
   if (mode === 'dig') { planDragging = true; return; }
   if (mode === 'select' || mode === 'move') {
     // Start a potential box-select drag only if clicking empty ground.
@@ -1074,6 +1217,14 @@ board.addEventListener('mousedown', (evt) => {
 
 board.addEventListener('mouseup', (evt) => {
   planDragging = false;
+  if (boxInteraction) {
+    const squadId = boxInteraction.squadId;
+    boxInteraction = null;
+    selectBoxConsumedClick = true;  // don't let the click fall through to a move/select
+    dispatchSquadBox(squadId);
+    render();
+    return;
+  }
   if (selectBox !== null) {
     // Finalise box-select: pick all own soldiers whose tile falls inside the box.
     const x0 = Math.min(selectBox.x0, selectBox.x1);
@@ -1104,6 +1255,15 @@ board.addEventListener('mousemove', (evt) => {
   const r = board.getBoundingClientRect();
   mouseCanvas.x = (evt.clientX - r.left) * (board.width / r.width);
   mouseCanvas.y = (evt.clientY - r.top) * (board.height / r.height);
+  // Dragging a tactical box (create or resize): the moving corner follows the cursor.
+  if (boxInteraction) {
+    const tile = tileFromEvent(evt);
+    if (tile) {
+      const box = squadBoxes.get(boxInteraction.squadId);
+      if (box) { box.x1 = tile[0]; box.y1 = tile[1]; render(); }
+    }
+    return;
+  }
   if (mode === 'dig' && planDragging) {
     const tile = tileFromEvent(evt);
     if (tile) { addToPlan(tile); render(); }
@@ -2020,7 +2180,7 @@ function draw() {
   }
 
   // Formation move preview (Move mode, hovering ground)
-  if (mode === 'move' && formationShape !== 'scatter' && tw()) {
+  if (mode === 'move' && tw()) {
     const hoverTile = tileFromCanvas(mouseCanvas.x, mouseCanvas.y);
     const overEquip = hoverTile && (soldiersAt(hoverTile).length > 0 || tileHasEquipment(hoverTile));
     // Only preview when the click would actually issue a move (not over a unit/structure).
@@ -2045,27 +2205,6 @@ function draw() {
         ctx.strokeRect(tlx + 0.5, tly + 0.5, CELL - 2, CELL - 2);
       }
       ctx.setLineDash([]);
-      ctx.restore();
-    }
-  }
-
-  // Scatter pending positions preview
-  if (mode === 'move' && formationShape === 'scatter') {
-    for (let i = 0; i < scatterPendingPositions.length; i++) {
-      const [px, py] = scatterPendingPositions[i];
-      const tlx = OX + px * CELL;
-      const tly = tileTop(py);
-      ctx.save();
-      ctx.fillStyle = 'rgba(255, 175, 80, 0.28)';
-      ctx.strokeStyle = 'rgba(255, 175, 80, 0.9)';
-      ctx.lineWidth = 1.5;
-      ctx.fillRect(tlx, tly, CELL - 1, CELL - 1);
-      ctx.strokeRect(tlx + 0.5, tly + 0.5, CELL - 2, CELL - 2);
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 9px system-ui';
-      ctx.textAlign = 'center';
-      ctx.fillText(String(i + 1), tlx + CELL / 2, tly + CELL / 2 + 3);
-      ctx.textAlign = 'left';
       ctx.restore();
     }
   }
@@ -2760,6 +2899,9 @@ function draw() {
     ctx.textAlign = 'left';
   }
 
+  // Squad tactical boxes (Kill Box = red, Defend = blue)
+  drawSquadBoxes();
+
   // Box / marquee selection overlay
   if (selectBox !== null) {
     const bx = Math.min(selectBox.x0, selectBox.x1);
@@ -2774,6 +2916,83 @@ function draw() {
     ctx.fillStyle = 'rgba(100,200,255,0.08)';
     ctx.fillRect(bx, by, bw, bh);
     ctx.setLineDash([]);
+    ctx.restore();
+  }
+}
+
+// Draw the persistent squad tactical boxes with hatching, delete-X, and (for
+// Kill Box) an approach arrow in the corner the squad attacks from.
+function drawSquadBoxes() {
+  for (const [squadId, box] of squadBoxes) {
+    const r = boxCanvasRect(box);
+    const w = r.right - r.left, h = r.bottom - r.top;
+    const isKill = box.kind === 'killbox';
+    const stroke = isKill ? 'rgba(230,70,60,0.95)' : 'rgba(70,120,230,0.95)';
+    const fill = isKill ? 'rgba(230,70,60,0.10)' : 'rgba(70,120,230,0.10)';
+    const hatch = isKill ? 'rgba(230,70,60,0.16)' : 'rgba(70,120,230,0.16)';
+    ctx.save();
+    // Fill
+    ctx.fillStyle = fill;
+    ctx.fillRect(r.left, r.top, w, h);
+    // Diagonal hatching, clipped to the box
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(r.left, r.top, w, h);
+    ctx.clip();
+    ctx.strokeStyle = hatch;
+    ctx.lineWidth = 1;
+    for (let d = -h; d < w; d += 8) {
+      ctx.beginPath();
+      ctx.moveTo(r.left + d, r.top);
+      ctx.lineTo(r.left + d + h, r.bottom);
+      ctx.stroke();
+    }
+    ctx.restore();
+    // Border
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(r.left + 1, r.top + 1, w - 2, h - 2);
+
+    // Approach arrow for Kill Box: from the approach corner diagonally across.
+    if (isKill) {
+      const ax = cpx(box.ax), ay = cpy(box.ay);
+      const ox = cpx(box.x1), oy = cpy(box.y1);
+      const dx = ox - ax, dy = oy - ay;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len, uy = dy / len;
+      const tipX = ax + ux * Math.min(len, 26), tipY = ay + uy * Math.min(len, 26);
+      ctx.strokeStyle = stroke;
+      ctx.fillStyle = stroke;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(tipX, tipY);
+      ctx.stroke();
+      // arrowhead
+      const ah = 6;
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(tipX - ux * ah - uy * ah * 0.6, tipY - uy * ah + ux * ah * 0.6);
+      ctx.lineTo(tipX - ux * ah + uy * ah * 0.6, tipY - uy * ah - ux * ah * 0.6);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Delete-X button (top-right)
+    ctx.fillStyle = 'rgba(20,20,24,0.8)';
+    ctx.fillRect(r.right - 18, r.top, 18, 18);
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(r.right - 14, r.top + 4); ctx.lineTo(r.right - 4, r.top + 14);
+    ctx.moveTo(r.right - 4, r.top + 4); ctx.lineTo(r.right - 14, r.top + 14);
+    ctx.stroke();
+
+    // Resize handle at the opposite corner
+    const rx = cpx(box.x1), ry = cpy(box.y1);
+    ctx.fillStyle = stroke;
+    ctx.fillRect(rx - 4, ry - 4, 8, 8);
+
     ctx.restore();
   }
 }
@@ -2909,6 +3128,10 @@ function updateSquadWindow() {
 
 // Grey out squad/formation controls while the side has no officer.
 function updateCommandState() {
+  // Prune boxes whose squad no longer exists or has no living members.
+  for (const squadId of [...squadBoxes.keys()]) {
+    if (!getSquad(squadId) || squadSoldierIds(squadId).length === 0) squadBoxes.delete(squadId);
+  }
   const disabled = !hasCommand();
   for (const id of ['formation-controls', 'squad-window']) {
     const e = el(id);
@@ -2985,12 +3208,7 @@ function render() {
       n = selectedUnits.size;
       who = `${n} selected`;
     }
-    if (formationShape === 'scatter') {
-      const remaining = Math.max(0, n - scatterPendingPositions.length);
-      setStatus(`Move — right-click ${remaining} more scatter position${remaining !== 1 ? 's' : ''} (moving ${who}).`);
-    } else {
-      setStatus(`Move — left-click ground to move ${who} in ${formationShape} formation.`);
-    }
+    setStatus(`Move — left-click ground to move ${who} in ${formationShape} formation.`);
   } else {
     const bpr = tw()?.build_phase_remaining || 0;
     if (bpr > 0) setStatus(`Build phase: ${Math.ceil(bpr)}s (no firing / no crossing midline).`);
@@ -3065,16 +3283,29 @@ if (buildToggle) buildToggle.addEventListener('click', (evt) => {
   });
 });
 
-['horizontal', 'vertical', 'scatter'].forEach(shape => {
+['horizontal', 'vertical'].forEach(shape => {
   const btn = el(`fshape-${shape}`);
   if (btn) btn.addEventListener('click', () => {
     formationShape = shape;
-    scatterPendingPositions = [];
     document.querySelectorAll('.fshape-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     render();
   });
 });
+
+// Squad tactical boxes: arm a Kill Box / Defend draw (requires a selected squad + command).
+for (const [btnId, kind] of [['tactic-killbox', 'killbox'], ['tactic-defend', 'defend']]) {
+  const btn = el(btnId);
+  if (btn) btn.addEventListener('click', () => {
+    if (!hasCommand()) { setStatus('No officer — squad orders unavailable.', true); return; }
+    if (selectedSquad === null) { setStatus('Select a squad first, then draw a box.', true); return; }
+    armedBoxKind = kind;
+    setStatus(kind === 'killbox'
+      ? 'Kill Box — drag a box on the map from the corner your squad attacks from.'
+      : 'Defend — drag a box; the squad holds the best ground inside it.');
+    render();
+  });
+}
 
 el('cancel-task').addEventListener('click', () => {
   const smg = getSelectedMg();
