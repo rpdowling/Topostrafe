@@ -3233,6 +3233,7 @@ function updateSelectionPanel() {
 }
 
 let _lastSquadHtml = '';
+let _lastLogHtml = '';
 function updateSquadWindow() {
   const winEl = el('squad-window');
   if (!winEl || !tw()) return;
@@ -3427,10 +3428,14 @@ function render() {
   if (f1) f1.textContent = fr['1'] ?? 5;
 
   const logEl = el('log');
-  if (logEl) logEl.innerHTML = (state.log || []).slice(-20).map(m => `<div class="log-entry">${m}</div>`).join('');
-
-  updateModeButtons();
-  updateModeLabel();
+  if (logEl) {
+    const logHtml = (state.log || []).slice(-20).map(m => `<div class="log-entry">${m}</div>`).join('');
+    if (logHtml !== _lastLogHtml) {
+      _lastLogHtml = logHtml;
+      logEl.innerHTML = logHtml;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+  }
 }
 
 // === BUTTON WIRING ===
