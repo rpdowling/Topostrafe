@@ -113,6 +113,7 @@ let buildFlyoutOpen = false;
 let squadBoxes = new Map();
 let armedBoxKind = null;       // 'killbox' | 'defend' when the next board-drag will define a box
 let boxInteraction = null;     // active drag: {squadId, kind, mode:'create'|'resize', handle, ax, ay}
+let airstrikeFirst = null;     // first clicked tile [x,y] of a two-click airstrike line
 const BUILD_MODES = new Set(['build', 'mortar', 'sandbag', 'wire', 'bunker']);
 
 // Smooth soldier interpolation: display position trails toward server position.
@@ -577,29 +578,39 @@ function computeDefendPositions(box, n) {
 
 // Kill Box: arrange the squad in an L on the two outer edges adjacent to the
 // approach corner, standing a couple tiles back so their fire reaches into the box.
-function computeKillBoxPositions(box, n) {
+function computeKillBoxPositions(box, n, range) {
   const W = tw().map.width, H = tw().map.height;
   const minX = Math.min(box.x0, box.x1), maxX = Math.max(box.x0, box.x1);
   const minY = Math.min(box.y0, box.y1), maxY = Math.max(box.y0, box.y1);
   const cornerOnLeft = box.ax <= minX;
   const cornerOnTop = box.ay <= minY;
-  // Soldiers line the two near edges of the box itself (inside the kill zone perimeter).
-  const edgeX = cornerOnLeft ? minX : maxX;  // x-column for the vertical arm
-  const edgeY = cornerOnTop ? minY : maxY;   // y-row for the horizontal arm
-  // Split: longer edge gets proportionally more soldiers.
-  const wLen = maxX - minX + 1, hLen = maxY - minY + 1;
-  let nHoriz = Math.round(n * wLen / (wLen + hLen));
-  nHoriz = Math.max(0, Math.min(n, nHoriz));
-  let nVert = n - nHoriz;
-  if (n >= 2 && nHoriz === 0) { nHoriz = 1; nVert = n - 1; }
-  if (n >= 2 && nVert === 0) { nVert = 1; nHoriz = n - 1; }
+  const rng = Math.max(1, range || 10);
+
+  // Standoff: stand back from the near edge so the edge of range just touches
+  // the FAR side of the box. If the box is deeper than the range, sit just
+  // outside the near edge instead (range can't span it).
+  // Horizontal arm sits at a fixed y, spread across x. Vertical arm vice-versa.
+  const edgeY = cornerOnTop
+    ? Math.min(maxY - rng, minY - 1)   // above the box
+    : Math.max(minY + rng, maxY + 1);  // below the box
+  const edgeX = cornerOnLeft
+    ? Math.min(maxX - rng, minX - 1)   // left of the box
+    : Math.max(minX + rng, maxX + 1);  // right of the box
+
+  // Split soldiers: horizontal arm gets the extra one when odd (ceil/floor).
+  const nHoriz = Math.ceil(n / 2);
+  const nVert = Math.floor(n / 2);
+
+  // Evenly distribute `count` points across [lo,hi] with interior margins:
+  //  1 → middle; 2 → 1/3 & 2/3; 3 → 1/4,2/4,3/4; etc.
   const spread = (count, lo, hi) => {
     const out = [];
-    if (count <= 0) return out;
-    if (count === 1) { out.push(Math.round((lo + hi) / 2)); return out; }
-    for (let i = 0; i < count; i++) out.push(Math.round(lo + (hi - lo) * i / (count - 1)));
+    for (let i = 0; i < count; i++) {
+      out.push(Math.round(lo + (hi - lo) * (i + 1) / (count + 1)));
+    }
     return out;
   };
+
   const raw = [];
   for (const px of spread(nHoriz, minX, maxX)) raw.push([px, edgeY]);   // horizontal arm
   for (const py of spread(nVert, minY, maxY)) raw.push([edgeX, py]);    // vertical arm
@@ -614,20 +625,29 @@ function computeKillBoxPositions(box, n) {
   return result;
 }
 
+// Halt a squad's soldiers (used when a tactical box is dismissed mid-travel).
+function cancelSquadTravel(squadId) {
+  for (const uid of squadSoldierIds(squadId)) {
+    send({ type: 'tw_cancel_task', unit_id: uid });
+  }
+}
+
 // Compute and dispatch moves for a squad's tactical box.
 function dispatchSquadBox(squadId) {
   const box = squadBoxes.get(squadId);
   if (!box) return;
   const ids = squadSoldierIds(squadId);
   if (!ids.length) return;
-  const positions = box.kind === 'defend'
-    ? computeDefendPositions(box, ids.length)
-    : computeKillBoxPositions(box, ids.length);
-  // Assign nearest soldier to nearest position (greedy) to minimise crossing.
   const soldiers = ids.map(uid => {
     const s = (tw().soldiers || []).find(s => s.unit_id === uid);
-    return { uid, x: s.x, y: s.y };
+    return { uid, x: s.x, y: s.y, range: s.range || 10 };
   });
+  // Use the shortest range in the squad so every soldier can reach the far side.
+  const repRange = Math.min(...soldiers.map(s => s.range));
+  const positions = box.kind === 'defend'
+    ? computeDefendPositions(box, ids.length)
+    : computeKillBoxPositions(box, ids.length, repRange);
+  // Assign nearest soldier to nearest position (greedy) to minimise crossing.
   const remaining = [...positions];
   for (const sol of soldiers) {
     if (!remaining.length) break;
@@ -711,6 +731,7 @@ function setMode(m) {
     if (m !== 'select' && m !== 'move') { armedBoxKind = null; }
     if (BUILD_MODES.has(m)) selectedUnits = new Set();
   }
+  if (mode !== 'airstrike') airstrikeFirst = null;
   // Keep the build flyout open while a build mode is active; collapse otherwise.
   buildFlyoutOpen = BUILD_MODES.has(mode);
   updateModeButtons();
@@ -1071,8 +1092,15 @@ board.addEventListener('click', (evt) => {
       setStatus('Airstrike already used.', true);
     } else if (!myOfficer()) {
       setStatus('No living officer to call an airstrike.', true);
+    } else if (airstrikeFirst === null) {
+      // First click sets one end of the strike line.
+      airstrikeFirst = tile;
+      setStatus('Airstrike — click the second point to set the line (same spot = all 5 on one tile).');
+      render();
     } else {
-      send({ type: 'tw_airstrike', tile });
+      // Second click sends the line. Same tile twice → concentrated barrage.
+      send({ type: 'tw_airstrike', tile: airstrikeFirst, tile2: tile });
+      airstrikeFirst = null;
       setStatus('Airstrike inbound…');
       setMode('select');
     }
@@ -1221,8 +1249,9 @@ board.addEventListener('mousedown', (evt) => {
   const hit = boxHitAt(mcx, mcy);
   if (hit) {
     if (hit.hit === 'x') {
+      cancelSquadTravel(hit.squadId);
       squadBoxes.delete(hit.squadId);
-      setStatus('Box removed.');
+      setStatus('Box removed — squad halted.');
       render();
       return;
     }
@@ -2593,14 +2622,33 @@ function draw() {
     }
   }
 
-  // Airstrike targeting preview: a red reticle at the aim tile.
+  // Airstrike targeting preview: reticle at the aim tile, plus the strike line
+  // with its 5 impact points once the first point has been placed.
   if (mode === 'airstrike') {
     const hover = tileFromCanvas(mouseCanvas.x, mouseCanvas.y);
-    if (hover) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 70, 50, 0.95)';
+    ctx.lineWidth = 2;
+    if (airstrikeFirst && hover) {
+      // Draw the A→B line and the 5 evenly spaced impact markers.
+      const ax = cpx(airstrikeFirst[0]), ay = cpy(airstrikeFirst[1]);
+      const bx = cpx(hover[0]), by = cpy(hover[1]);
+      ctx.setLineDash([6, 5]);
+      ctx.beginPath();
+      ctx.moveTo(ax, ay); ctx.lineTo(bx, by);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      for (let i = 0; i < 5; i++) {
+        const f = i / 4;
+        const px = ax + (bx - ax) * f, py = ay + (by - ay) * f;
+        ctx.fillStyle = 'rgba(255, 60, 40, 0.30)';
+        ctx.fillRect(px - CELL * 0.5, py - CELL * 0.5, CELL, CELL);
+        ctx.beginPath();
+        ctx.arc(px, py, CELL * 0.32, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    } else if (hover) {
       const cx = cpx(hover[0]), cy = cpy(hover[1]);
-      ctx.save();
-      ctx.strokeStyle = 'rgba(255, 70, 50, 0.95)';
-      ctx.lineWidth = 2;
       ctx.setLineDash([5, 4]);
       ctx.strokeRect(cx - CELL * 0.5, cy - CELL * 0.5, CELL, CELL);
       ctx.beginPath();
@@ -2611,15 +2659,15 @@ function draw() {
       ctx.moveTo(cx - CELL * 1.4, cy); ctx.lineTo(cx + CELL * 1.4, cy);
       ctx.moveTo(cx, cy - CELL * 1.4); ctx.lineTo(cx, cy + CELL * 1.4);
       ctx.stroke();
-      ctx.restore();
     }
+    ctx.restore();
   }
 
   // Incoming airstrike telegraphs: a shrinking red crosshair per pending shell.
   for (const a of data.airstrikes || []) {
     const cx = cpx(a.x), cy = cpy(a.y);
     const fuse = Math.max(0, a.fuse || 0);
-    const t = Math.min(1, fuse / 2.0);          // ring closes in over the last 2s
+    const t = Math.min(1, fuse / 0.6);           // ring closes in over the last 0.6s
     const r = CELL * (0.5 + 1.6 * t);
     const pulse = 0.55 + 0.45 * Math.abs(Math.sin(performance.now() / 130));
     ctx.save();
