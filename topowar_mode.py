@@ -1579,8 +1579,12 @@ class TopowarGameState:
             self.airstrike_used[owner] = True
             for i in range(n_shells):
                 frac = i / (n_shells - 1)  # 0..1 across the line
-                tx = int(round(a[0] + (b[0] - a[0]) * frac))
-                ty = int(round(a[1] + (b[1] - a[1]) * frac))
+                ex = a[0] + (b[0] - a[0]) * frac
+                ey = a[1] + (b[1] - a[1]) * frac
+                angle = self.random.uniform(0.0, 2.0 * math.pi)
+                scatter = self.random.uniform(0.0, 2.5)
+                tx = int(round(ex + math.cos(angle) * scatter))
+                ty = int(round(ey + math.sin(angle) * scatter))
                 tx = max(0, min(self.map.width - 1, tx))
                 ty = max(0, min(self.map.height - 1, ty))
                 fuse = 0.5 * (i + 1)  # 0.5, 1.0, 1.5, 2.0, 2.5 s
