@@ -849,6 +849,7 @@ class GameStore:
                     "unit_id",
                     "plan",
                     "tile",
+                    "tile2",
                     "target",
                     "target_tile",
                     "facing",

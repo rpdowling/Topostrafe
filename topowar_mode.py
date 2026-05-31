@@ -1564,25 +1564,26 @@ class TopowarGameState:
                 raise ValueError("Airstrike already used.")
             if not self._has_command(owner):
                 raise ValueError("No living officer to call an airstrike.")
-            target = tuple(map(int, action.get("tile", [])))
-            if len(target) != 2 or not self.map.in_bounds(target):
+            a = tuple(map(int, action.get("tile", [])))
+            # Second point defines the strike line; defaults to the first point
+            # (all 5 shells land on the same spot) when omitted or equal.
+            b_raw = action.get("tile2")
+            b = tuple(map(int, b_raw)) if b_raw else a
+            if len(a) != 2 or not self.map.in_bounds(a):
                 raise ValueError("Invalid airstrike target.")
-            # 5 HE shells walk along a random line ~10 tiles long centred on the
-            # target, landing sequentially over the next 10 seconds.
-            angle = self.random.uniform(0.0, 2.0 * math.pi)
-            ux, uy = math.cos(angle), math.sin(angle)
+            if len(b) != 2 or not self.map.in_bounds(b):
+                b = a
+            # 5 HE shells distributed evenly along the A→B line, landing
+            # sequentially 0.5 s apart.
             n_shells = 5
-            half = 5.0  # half the ~10-tile line length
             self.airstrike_used[owner] = True
             for i in range(n_shells):
-                # offset from -half..+half along the line
-                frac = (i / (n_shells - 1)) * 2.0 - 1.0
-                off = frac * half
-                tx = int(round(target[0] + ux * off))
-                ty = int(round(target[1] + uy * off))
+                frac = i / (n_shells - 1)  # 0..1 across the line
+                tx = int(round(a[0] + (b[0] - a[0]) * frac))
+                ty = int(round(a[1] + (b[1] - a[1]) * frac))
                 tx = max(0, min(self.map.width - 1, tx))
                 ty = max(0, min(self.map.height - 1, ty))
-                fuse = 2.0 * (i + 1)  # 2,4,6,8,10 s
+                fuse = 0.5 * (i + 1)  # 0.5, 1.0, 1.5, 2.0, 2.5 s
                 self.airstrikes.append(AirstrikeStrike(owner, (tx, ty), fuse))
             return "Airstrike inbound."
         if t == "tw_assign_wire":
