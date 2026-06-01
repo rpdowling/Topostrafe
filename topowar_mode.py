@@ -906,13 +906,17 @@ class TopowarGameState:
     def _has_combat_los(self, a: tuple[int, int], b: tuple[int, int]) -> bool:
         """LOS check for rifle and MG fire, respecting elevation.
 
-        Trench and ground are treated as the same surface tier — a trench is a
-        dug-in position on the ground plane, not an underground bunker, so a
-        trench soldier can see and shoot across open ground and vice versa.
+        Trench-to-trench: must be connected by contiguous trench tiles with no
+        open ground between them (soldiers in a trench cannot see/shoot across
+        open ground at another trench).
+
+        Trench and ground are otherwise treated as the same surface tier for the
+        elevation threshold calculation (a trench soldier can see and shoot across
+        open ground at an above-ground target, and vice versa).
 
         Threshold (passed to _has_terrain_los as "block if tile > threshold"):
 
-          Same surface (trench/ground ↔ trench/ground, hill ↔ hill, mountain ↔ mountain):
+          Same surface (ground ↔ ground, hill ↔ hill, mountain ↔ mountain):
             threshold = surface_elev  →  only tiles above that tier block.
 
           Downhill (surface_a > surface_b, e.g. hill→ground):
@@ -923,6 +927,9 @@ class TopowarGameState:
         """
         a_elev = self.map.elevation_at(a)
         b_elev = self.map.elevation_at(b)
+        # Trench-to-trench: require an unbroken trench path (no open ground between).
+        if a_elev == ELEV_TRENCH and b_elev == ELEV_TRENCH:
+            return self._has_los_through_trenches(a, b)
         # Normalise: trench (2) → ground (4) for the threshold calculation only.
         a_surf = max(a_elev, ELEV_GROUND)
         b_surf = max(b_elev, ELEV_GROUND)
