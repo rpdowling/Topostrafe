@@ -29,6 +29,7 @@ async def broadcast_state(game_id: str, message: str | None = None):
     game = store.get_game(game_id)
     if game is None:
         return
+    store.advance_game(game_id)
     async with conn_lock:
         sockets = list(connections.get(game_id, set()))
     if not sockets:
