@@ -1281,10 +1281,17 @@ board.addEventListener('mousedown', (evt) => {
 });
 
 board.addEventListener('mouseup', (evt) => {
-  if (mode === 'dig' && planDragging && plan.length) {
-    send({ type: 'tw_assign_dig', plan: [...plan] });
+  if (mode === 'dig' && planDragging) {
+    // Only a genuine multi-tile drag commits a plan here. A single tile (often
+    // just pointer jitter during a click) is left for the click handler so it can
+    // toggle the tile: cancel it if already queued, otherwise queue it. Without
+    // this, a click on a queued tile would re-queue it via the 1-tile jitter plan
+    // and suppress the cancel.
+    if (plan.length >= 2) {
+      send({ type: 'tw_assign_dig', plan: [...plan] });
+      planConsumedClick = true;
+    }
     plan = [];
-    planConsumedClick = true;
     render();
   }
   planDragging = false;
