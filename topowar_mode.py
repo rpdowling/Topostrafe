@@ -1000,10 +1000,14 @@ class TopowarGameState:
     def _is_concealed_by_elevation(self, shooter_tile: tuple[int, int], target_tile: tuple[int, int]) -> bool:
         """Dead-ground concealment: target is concealed if it is adjacent to a tile at a higher
         elevation than itself, and that tile is in the general direction of the shooter.
-        Only applies when shooter is at strictly higher elevation than target.
+        Only applies when shooter is at strictly higher elevation than the target AND the
+        target is dug into a trench — a unit standing in the open in dead ground is exposed
+        to plunging fire; only a trench hides it.
         Exception: concealment does not apply if shooter is directly adjacent (8-connected) to target."""
-        s_elev = self.map.elevation_at(shooter_tile)
         t_elev = self.map.elevation_at(target_tile)
+        if t_elev != ELEV_TRENCH:
+            return False
+        s_elev = self.map.elevation_at(shooter_tile)
         if s_elev <= t_elev:
             return False
         tx, ty = target_tile
