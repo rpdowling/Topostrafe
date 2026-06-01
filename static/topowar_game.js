@@ -105,6 +105,7 @@ let lastPanelHtml = '';
 let elevMap = new Map();
 const pendingWaypoints = new Map(); // unit_id → [[x,y],...] queued after current path
 let planDragging = false;
+let planConsumedClick = false;
 let formationCount = 1;
 let formationShape = 'horizontal';
 let selectedSquad = null;
@@ -725,6 +726,7 @@ function setMode(m) {
     selectedSquad = null;
   } else {
     mode = m;
+    if (m !== 'dig' && plan.length) { send({ type: 'tw_assign_dig', plan: [...plan] }); }
     if (m !== 'dig') plan = [];
     if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false; }
     if (m !== 'mortar') { pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false; }
@@ -963,19 +965,14 @@ board.addEventListener('click', (evt) => {
     // In pure select mode, clicking empty ground does nothing — no accidental moves.
 
   } else if (mode === 'dig') {
-    if (myS.length) {
-      // Click own soldier: select it; if a plan was traced, assign it immediately
-      const uid = myS[0].unit_id;
-      selectedUnits = new Set([uid]);
-      if (plan.length) { send({ type: 'tw_assign_dig', unit_id: uid, plan: [...plan] }); plan = []; }
-    } else {
-      const uid = firstSelected();
-      if (uid !== null && plan.length === 0) {
-        // Soldier selected, no plan started: immediate single-tile dig
-        send({ type: 'tw_assign_dig', unit_id: uid, plan: [tile] });
-      } else {
-        // Accumulate plan (no soldier yet, or plan already started)
-        addToPlan(tile);
+    if (planConsumedClick) { planConsumedClick = false; }
+    else {
+      const digQ = new Set((tw()?.dig_jobs || []).map(t => t[0] + ',' + t[1]));
+      const tileKey = tile ? tile[0] + ',' + tile[1] : null;
+      if (tileKey && digQ.has(tileKey)) {
+        send({ type: 'tw_cancel_dig', tiles: [tile] });
+      } else if (tile) {
+        send({ type: 'tw_assign_dig', plan: [tile] });
       }
     }
 
@@ -1279,6 +1276,12 @@ board.addEventListener('mousedown', (evt) => {
 });
 
 board.addEventListener('mouseup', (evt) => {
+  if (mode === 'dig' && planDragging && plan.length) {
+    send({ type: 'tw_assign_dig', plan: [...plan] });
+    plan = [];
+    planConsumedClick = true;
+    render();
+  }
   planDragging = false;
   if (boxInteraction) {
     const squadId = boxInteraction.squadId;
@@ -1763,26 +1766,23 @@ function draw() {
     ctx.fillRect(tlx + 1, tly + 1, 3, 3);
   }
 
-  // Active dig plan overlays from assigned soldier tasks
-  for (const s of data.soldiers || []) {
-    if (!s.task || s.task.type !== 'dig' || !s.task.plan || !s.task.plan.length) continue;
-    const digPlan = s.task.plan;
-    const isOwn = s.owner === mySeat();
-    const lineColor = isOwn ? 'rgba(244,200,78,0.65)' : 'rgba(255,110,110,0.65)';
-    const fillColor = isOwn ? 'rgba(244,200,78,0.12)' : 'rgba(255,110,110,0.10)';
-    ctx.strokeStyle = lineColor;
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([3, 3]);
-    ctx.beginPath();
-    digPlan.forEach((t, i) => {
-      if (i === 0) ctx.moveTo(cpx(t[0]), cpy(t[1]));
-      else ctx.lineTo(cpx(t[0]), cpy(t[1]));
-    });
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.lineWidth = 1;
-    ctx.fillStyle = fillColor;
-    for (const t of digPlan) ctx.fillRect(OX + t[0] * CELL, tileTop(t[1]), CELL - 1, CELL - 1);
+  // Dig queue overlay (server-side queue for this player's side)
+  {
+    const digQueue = tw()?.dig_jobs || [];
+    const digClaimed = new Set();
+    for (const s of data.soldiers || []) {
+      if (s.owner === mySeat() && s.task && s.task.type === 'dig' && s.task.target) {
+        digClaimed.add(s.task.target[0] + ',' + s.task.target[1]);
+      }
+    }
+    ctx.fillStyle = 'rgba(244,200,78,0.13)';
+    for (const [tx, ty] of digQueue) {
+      if (!digClaimed.has(tx + ',' + ty)) ctx.fillRect(OX + tx * CELL, tileTop(ty), CELL - 1, CELL - 1);
+    }
+    ctx.fillStyle = 'rgba(244,200,78,0.32)';
+    for (const [tx, ty] of digQueue) {
+      if (digClaimed.has(tx + ',' + ty)) ctx.fillRect(OX + tx * CELL, tileTop(ty), CELL - 1, CELL - 1);
+    }
   }
 
   // Local (unsent) dig plan overlay
@@ -3454,9 +3454,21 @@ function render() {
       : (state.win_reason || 'Game over.');
     setStatus(msg);
   } else if (mode === 'dig') {
-    if (plan.length) setStatus(`Dig/Plan — ${plan.length} tile plan traced. Click a soldier to assign, or keep dragging.`);
-    else if (!selectedUnits.size) setStatus('Dig/Plan — click a soldier to select, then click a tile. Or drag to trace a multi-tile plan.');
-    else setStatus('Dig/Plan — click a tile to dig. Drag to trace a longer plan.');
+    const twD = tw();
+    const digQueue = twD?.dig_jobs || [];
+    const digSecs = twD?.rules?.dig_seconds_per_tile || 4;
+    const mySoldiers = (twD?.soldiers || []).filter(s => s.owner === mySeat());
+    const diggers = mySoldiers.filter(s => !s.squad_id && (!s.task || s.task.type === 'dig')).length;
+    if (digQueue.length) {
+      const est = diggers > 0 ? Math.ceil(digQueue.length * digSecs / diggers) : '?';
+      const bpRem = Math.ceil(twD?.build_phase_remaining || 0);
+      const urgent = bpRem > 0 && typeof est === 'number' && est > bpRem;
+      setStatus(`Dig queue: ${digQueue.length} tile${digQueue.length !== 1 ? 's' : ''} · ≈${est}s with ${diggers} digger${diggers !== 1 ? 's' : ''}${urgent ? ' ⚠ exceeds build phase' : ''}. Click queued tile to cancel.`);
+    } else if (plan.length) {
+      setStatus(`Dig — ${plan.length} tile${plan.length !== 1 ? 's' : ''} painted. Release to queue.`);
+    } else {
+      setStatus('Dig — drag to paint trench plan. Click to add tiles. Click queued tile to cancel. Idle un-squadded soldiers auto-dig.');
+    }
   } else if (mode === 'sandbag') {
     const inBuildPhase = (tw()?.build_phase_remaining || 0) > 0;
     if (inBuildPhase) {
