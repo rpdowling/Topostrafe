@@ -59,6 +59,9 @@ class RulesConfig:
     projectile_speed: float = 8.0
     grenade_range: float = 7.0
     grenade_windup_seconds: float = 3.0
+    # Seconds a soldier is entangled while crossing a single barbed-wire tile.
+    # During the crossing the soldier cannot shoot or throw grenades.
+    wire_cross_seconds: float = 15.0
     generate_terrain: bool = True
 
 
@@ -119,6 +122,9 @@ class Soldier(Unit):
     grenade_target: tuple[int, int] | None = None
     grenade_windup: float = 0.0
     grenade_cooldown: float = 0.0
+    # True while the soldier is entangled crossing a barbed-wire tile; it cannot
+    # shoot or throw until it steps clear.
+    crossing_wire: bool = False
     sandbag_queue: list[int] = field(default_factory=list)
     wire_queue: list[int] = field(default_factory=list)
     squad_id: int | None = None
@@ -301,8 +307,13 @@ class Squad:
 
 
 class PathfindingService:
-    def __init__(self, grid: GridMap):
+    def __init__(self, grid: GridMap, wire_provider=None):
         self.grid = grid
+        # Optional callable returning the current set of crossable wire tiles.
+        # Wire is passable but very slow, so it is modelled as a high step cost
+        # rather than a hard block: soldiers route around it when a reasonable
+        # detour exists and cross only when going around would take longer.
+        self._wire_provider = wire_provider
 
     # Tiny per-tile discount applied when stepping onto a trench tile. It is
     # small enough that it never overrides true shortest-distance (a path that
@@ -310,6 +321,11 @@ class PathfindingService:
     # alternative on a map of this size), so soldiers prefer trenches only when
     # a trench route is as short as — or shorter than — the open-ground route.
     TRENCH_DISCOUNT = 0.001
+
+    # Extra cost of stepping onto a wire tile, in step-equivalents. Chosen to
+    # roughly match the ~15 s crossing time (≈ wire_cross_seconds * move_speed),
+    # so the path planner trades a wire crossing against a detour of equal time.
+    WIRE_STEP_COST = 18.0
 
     def find_path(self, start: tuple[int, int], goal: tuple[int, int], trench_only: bool = False, blocked: set[tuple[int, int]] | None = None, stop_adjacent: bool = False) -> list[tuple[int, int]]:
         """Weighted shortest path (Dijkstra) over the 4-connected grid.
@@ -329,6 +345,7 @@ class PathfindingService:
         if start == goal:
             return [start]
         blocked = (blocked or set()) - {goal}
+        wire = (self._wire_provider() if self._wire_provider else set())
 
         # (cost, insertion_order, tile) — insertion_order keeps expansion
         # deterministic and goal-directed (mirrors the old BFS neighbour order)
@@ -354,6 +371,8 @@ class PathfindingService:
                 if not _elevation_adjacent(cur_elev, self.grid.elevation_at(nt)):
                     continue
                 step = 1.0 - (self.TRENCH_DISCOUNT if nt in self.grid.trenches else 0.0)
+                if nt in wire and nt != goal:
+                    step += self.WIRE_STEP_COST
                 nd = d + step
                 if nd < dist.get(nt, float("inf")):
                     dist[nt] = nd
@@ -399,7 +418,7 @@ class TopowarGameState:
     def __init__(self, rules: RulesConfig, seed: int = 1):
         self.rules = rules
         self.map = GridMap(rules.map_width, rules.map_height, rules.default_elevation)
-        self.path = PathfindingService(self.map)
+        self.path = PathfindingService(self.map, wire_provider=self._wire_tile_set)
         self.random = random.Random(seed)
         self.time_elapsed = 0.0
         self.winner: int | None = None
@@ -736,6 +755,8 @@ class TopowarGameState:
             self.rules.grenade_range = 7.0
         if not hasattr(self.rules, "grenade_windup_seconds"):
             self.rules.grenade_windup_seconds = 3.0
+        if not hasattr(self.rules, "wire_cross_seconds"):
+            self.rules.wire_cross_seconds = 15.0
         for s in self.soldiers.values():
             if not hasattr(s, "grenade_target"):
                 s.grenade_target = None
@@ -743,6 +764,8 @@ class TopowarGameState:
                 s.grenade_windup = 0.0
             if not hasattr(s, "grenade_cooldown"):
                 s.grenade_cooldown = 0.0
+            if not hasattr(s, "crossing_wire"):
+                s.crossing_wire = False
         for mg in self.mgs.values():
             if not hasattr(mg, "arc_center"):
                 mg.arc_center = getattr(mg, "facing", 0.0)
@@ -1174,6 +1197,26 @@ class TopowarGameState:
             if e2 < dx:
                 err += dx
                 cy += sy
+
+    def _target_sandbag_cover(self, shooter_tile: tuple[int, int], target_tile: tuple[int, int]) -> bool:
+        """True if a built sandbag sits adjacent to the target on the side facing
+        the shooter — the target is hunkered behind it and gains cover. The sandbag
+        must be next to the target (not merely somewhere on the line of fire)."""
+        sandbags = self._sandbag_tile_set()
+        if not sandbags:
+            return False
+        tx, ty = target_tile
+        dir_x = shooter_tile[0] - tx
+        dir_y = shooter_tile[1] - ty
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                if (tx + dx, ty + dy) not in sandbags:
+                    continue
+                if dx * dir_x + dy * dir_y > 0:   # sandbag lies toward the shooter
+                    return True
+        return False
 
     def _soldier_visible_to(self, target: "Soldier", viewer: int) -> bool:
         """Enemy in a trench: visible if a friendly trench soldier has LOS, or a friendly
@@ -1726,7 +1769,10 @@ class TopowarGameState:
             target = tuple(map(int, action.get("tile", [])))
             if len(target) != 2 or not self.map.in_bounds(target):
                 raise ValueError("Invalid move target.")
-            occ = set(self._occupied_tiles().keys()) | self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set() | self._wire_tile_set()
+            # Wire is intentionally omitted: it is crossable (slowly), so the
+            # planner routes through it at a high cost rather than treating it
+            # as an impassable blocker.
+            occ = set(self._occupied_tiles().keys()) | self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
             s.current_task = {"type": "move", "goal": list(target)}
             s.combat_halt = False
             s.path = self.path.find_path(s.tile, target, trench_only=False, blocked=occ - {s.tile})
@@ -1901,11 +1947,11 @@ class TopowarGameState:
                 sol.tile for sol in self.soldiers.values()
                 if sol.hp > 0 and sol.unit_id not in formation_unit_ids
             }
+            # Wire omitted: crossable at a high planner cost, not a hard block.
             static_blocked = (
                 self._mg_tile_set()
                 | self._mortar_tile_set()
                 | self._sandbag_tile_set()
-                | self._wire_tile_set()
             )
             blocked_base = other_soldier_tiles | static_blocked
             for s, pos in assignments:
@@ -2008,7 +2054,8 @@ class TopowarGameState:
             return
         occ = self._occupied_tiles()
         # Bunker tiles are traversable (entry restricted by the check above); exclude them here.
-        structure_tiles = (self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()) | self._wire_tile_set()
+        # Wire is traversable too — it is handled below as a slow crossing, not a block.
+        structure_tiles = self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
         if target in structure_tiles or (target in occ and occ[target] != s.unit_id):
             s.blocked = True
             s.blocked_for += dt
@@ -2017,15 +2064,27 @@ class TopowarGameState:
         s.blocked = False
         s.blocked_for = 0.0
         # One full tile-step takes (1 / (soldier_move_speed * terrain_mult)) seconds.
-        # Hill tiles cost 10% more time; mountain tiles cost 25% more time.
+        # Hill tiles cost 10% more time; mountain tiles cost 25% more time. Stepping
+        # ONTO a wire tile instead takes wire_cross_seconds: the soldier is entangled
+        # and cannot shoot or throw (crossing_wire) until the step completes.
+        crossing = target in self._wire_tile_set()
+        # If a replan flipped the next step between wire and open ground, restart
+        # the timer so a normal step never inherits the long wire timer (or vice-versa).
+        if s.crossing_wire != crossing:
+            s.move_cooldown = 0.0
         if s.move_cooldown <= 0.0:
-            terrain_mult = self._terrain_speed_multiplier(target)
-            s.move_cooldown = 1.0 / max(0.001, self.rules.soldier_move_speed * terrain_mult)
+            if crossing:
+                s.move_cooldown = self.rules.wire_cross_seconds
+            else:
+                terrain_mult = self._terrain_speed_multiplier(target)
+                s.move_cooldown = 1.0 / max(0.001, self.rules.soldier_move_speed * terrain_mult)
+        s.crossing_wire = crossing
         s.move_cooldown -= dt
         if s.move_cooldown <= 0.0:
             s.x, s.y = float(target[0]), float(target[1])
             s.path.pop(0)
             s.move_cooldown = 0.0
+            s.crossing_wire = False
 
     def _rifle_combat(self, dt: float):
         if self.time_elapsed < self.rules.build_phase_seconds:
@@ -2033,6 +2092,11 @@ class TopowarGameState:
         smoke_tiles = self._smoke_blocked_tiles()
         for s in self.soldiers.values():
             if s.hp <= 0 or s.is_grenadier:
+                continue
+
+            # Entangled in barbed wire: cannot shoot until clear.
+            if s.crossing_wire:
+                s.combat_halt = False
                 continue
 
             # Halt to engage an open-ground enemy when crossing open ground.
@@ -2088,11 +2152,22 @@ class TopowarGameState:
             target_elev = self.map.elevation_at(target_tile)
             effective_range = self._soldier_effective_range(s, target_tile)
 
-            # Hit chance: 35% when moving through open ground toward a trench enemy;
-            # 65% when stationary (halted or already in a trench).
+            # Base hit chance falls off with range: 90% at point-blank down to
+            # 40% at the edge of effective range.
+            dist = best[0]
+            frac = min(1.0, dist / max(1.0, effective_range))
+            chance = 0.90 - 0.50 * frac
+            # Assaulting an entrenched enemy across open ground is much harder.
             is_moving = advancing and not s.combat_halt
-            target_in_trench = target_elev == ELEV_TRENCH
-            chance = 0.35 if (is_moving and target_in_trench) else 0.65
+            if is_moving and target_elev == ELEV_TRENCH:
+                chance *= 0.55
+            # Hard cover caps the chance regardless of range: a target inside a
+            # bunker is very hard to hit; one hunkered next to a sandbag (on the
+            # shooter's side) is well protected.
+            if target_tile in self._bunker_tile_set():
+                chance = min(chance, 0.10)
+            elif self._target_sandbag_cover(s.tile, target_tile):
+                chance = min(chance, 0.25)
 
             s.rifle_cooldown = 2.0
             will_hit = self.random.random() <= chance
@@ -2131,8 +2206,10 @@ class TopowarGameState:
         occ = self._occupied_tiles()
         # Static structure tiles never move, so a soldier whose current path runs
         # through one (e.g. a sandbag placed after the path was planned) should
-        # reroute immediately rather than walking into it and stalling.
-        structure_blockers = self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set() | self._wire_tile_set()
+        # reroute immediately rather than walking into it and stalling. Wire is
+        # omitted — it is crossable (slowly), so soldiers traverse it rather than
+        # rerouting, and the planner already prices it as a high-cost step.
+        structure_blockers = self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
         blocked_keys = set(occ.keys()) | structure_blockers
         for s in self.soldiers.values():
             if s.hp <= 0:
@@ -2772,6 +2849,9 @@ class TopowarGameState:
         for s in self.soldiers.values():
             if s.hp <= 0 or not s.is_grenadier:
                 continue
+            # Entangled in barbed wire: cannot throw until clear.
+            if s.crossing_wire:
+                continue
             s.grenade_cooldown = max(0.0, s.grenade_cooldown - dt)
 
             # Already committed to a throw: wind up and release at the LOCKED tile.
@@ -2797,8 +2877,9 @@ class TopowarGameState:
                 continue
 
             # Acquire the nearest visible enemy that is in range but far enough
-            # away that the blast won't catch the thrower.
-            rng = self._soldier_effective_range(s, s.tile)
+            # away that the blast won't catch the thrower. Grenades use the
+            # dedicated (shorter) throw range, not the rifle range.
+            rng = self.rules.grenade_range
             best: tuple[float, "Soldier"] | None = None
             for s2 in self.soldiers.values():
                 if s2.hp <= 0 or s2.owner == s.owner:
@@ -3089,6 +3170,7 @@ class TopowarGameState:
                 "rifle_cooldown": s.rifle_cooldown,
                 "name": s.name,
                 "combat_halt": s.combat_halt,
+                "crossing_wire": s.crossing_wire,
                 "is_grenadier": s.is_grenadier,
                 "is_officer": s.is_officer,
                 "squad_id": s.squad_id,
