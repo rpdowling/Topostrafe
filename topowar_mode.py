@@ -436,6 +436,7 @@ class TopowarGameState:
         self.squads: dict[int, Squad] = {}
         self.next_squad_id: int = 1
         self.dig_jobs: dict[int, list[tuple[int, int]]] = {0: [], 1: []}
+        self._tick_cache: dict = {}
         self.soldiers: dict[int, Soldier] = {}
         self.mgs: dict[int, MachineGun] = {}
         self.mortars: dict[int, Mortar] = {}
@@ -663,24 +664,34 @@ class TopowarGameState:
 
     def _mg_tile_set(self) -> set[tuple[int, int]]:
         """Tiles physically occupied by machine guns (treated as solid)."""
-        return {mg.tile for mg in self.mgs.values() if mg.hp > 0}
+        if 'mg_tiles' not in self._tick_cache:
+            self._tick_cache['mg_tiles'] = {mg.tile for mg in self.mgs.values() if mg.hp > 0}
+        return self._tick_cache['mg_tiles']
 
     def _mortar_tile_set(self) -> set[tuple[int, int]]:
-        return {m.tile for m in self.mortars.values() if m.hp > 0}
+        if 'mortar_tiles' not in self._tick_cache:
+            self._tick_cache['mortar_tiles'] = {m.tile for m in self.mortars.values() if m.hp > 0}
+        return self._tick_cache['mortar_tiles']
 
     def _sandbag_tile_set(self) -> set[tuple[int, int]]:
-        return {sb.tile for sb in self.sandbags.values() if sb.hp > 0}
+        if 'sandbag_tiles' not in self._tick_cache:
+            self._tick_cache['sandbag_tiles'] = {sb.tile for sb in self.sandbags.values() if sb.hp > 0}
+        return self._tick_cache['sandbag_tiles']
 
     def _wire_tile_set(self) -> set[tuple[int, int]]:
         """Built wire tiles that block soldier movement."""
-        return {w.tile for w in self.barbed_wire.values() if w.hp > 0 and w.built}
+        if 'wire_tiles' not in self._tick_cache:
+            self._tick_cache['wire_tiles'] = {w.tile for w in self.barbed_wire.values() if w.hp > 0 and w.built}
+        return self._tick_cache['wire_tiles']
 
     def _wire_structure_tile_set(self) -> set[tuple[int, int]]:
         """All wire tiles including under-construction (for placement checks)."""
         return {w.tile for w in self.barbed_wire.values() if w.hp > 0}
 
     def _bunker_tile_set(self) -> set[tuple[int, int]]:
-        return {b.tile for b in self.bunkers.values() if b.hp > 0}
+        if 'bunker_tiles' not in self._tick_cache:
+            self._tick_cache['bunker_tiles'] = {b.tile for b in self.bunkers.values() if b.hp > 0}
+        return self._tick_cache['bunker_tiles']
 
     def _structure_tile_set(self) -> set[tuple[int, int]]:
         return self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set() | self._bunker_tile_set()
@@ -760,6 +771,8 @@ class TopowarGameState:
             self.rules.wire_cross_seconds = 10.0
         if not hasattr(self, "dig_jobs"):
             self.dig_jobs = {0: [], 1: []}
+        if not hasattr(self, "_tick_cache"):
+            self._tick_cache = {}
         for s in self.soldiers.values():
             if not hasattr(s, "grenade_target"):
                 s.grenade_target = None
@@ -2953,6 +2966,8 @@ class TopowarGameState:
 
     def _smoke_blocked_tiles(self) -> set[tuple[int, int]]:
         """Tiles currently obscured by smoke-round sources (blocks rifle/MG LOS)."""
+        if 'smoke_tiles' in self._tick_cache:
+            return self._tick_cache['smoke_tiles']
         result: set[tuple[int, int]] = set()
         for src in self.smoke_sources:
             grown = min(9, int(src.age * self._SMOKE_GROW_SPEED) + 1)
@@ -2963,6 +2978,7 @@ class TopowarGameState:
             for x in range(x0 + faded, x0 + grown):
                 if self.map.in_bounds((x, y_center)):
                     result.add((x, y_center))
+        self._tick_cache['smoke_tiles'] = result
         return result
 
     def _has_smoke_between(self, a: tuple[int, int], b: tuple[int, int], smoke_tiles: set[tuple[int, int]]) -> bool:
@@ -3122,6 +3138,7 @@ class TopowarGameState:
         self._ensure_runtime_compat()
         if self.winner is not None:
             return
+        self._tick_cache = {}
         self.time_elapsed += dt
         self._try_spawn_recruits()
         self._assign_dig_jobs()

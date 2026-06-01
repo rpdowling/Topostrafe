@@ -862,17 +862,22 @@ document.addEventListener('keydown', (evt) => {
 
   if (key === 'C') {
     evt.preventDefault();
-    const smg = getSelectedMg();
-    if (smg && !smg.built) {
-      send({ type: 'tw_cancel_build_mg', mg_id: smg.structure_id });
-      selectedMg = null;
+    if (mode === 'dig') {
+      send({ type: 'tw_cancel_dig', tiles: [] });
+      plan = [];
     } else {
-      const sm = getSelectedMortar();
-      if (sm && !sm.built) {
-        send({ type: 'tw_cancel_build_mortar', mortar_id: sm.structure_id });
-        selectedMortar = null;
+      const smg = getSelectedMg();
+      if (smg && !smg.built) {
+        send({ type: 'tw_cancel_build_mg', mg_id: smg.structure_id });
+        selectedMg = null;
       } else {
-        for (const uid of selectedUnits) send({ type: 'tw_cancel_task', unit_id: uid });
+        const sm = getSelectedMortar();
+        if (sm && !sm.built) {
+          send({ type: 'tw_cancel_build_mortar', mortar_id: sm.structure_id });
+          selectedMortar = null;
+        } else {
+          for (const uid of selectedUnits) send({ type: 'tw_cancel_task', unit_id: uid });
+        }
       }
     }
     render();
@@ -3632,17 +3637,22 @@ for (const [btnId, kind] of [['tactic-killbox', 'killbox'], ['tactic-defend', 'd
 }
 
 el('cancel-task').addEventListener('click', () => {
-  const smg = getSelectedMg();
-  if (smg && !smg.built) {
-    send({ type: 'tw_cancel_build_mg', mg_id: smg.structure_id });
-    selectedMg = null;
+  if (mode === 'dig') {
+    send({ type: 'tw_cancel_dig', tiles: [] });
+    plan = [];
   } else {
-    const sm = getSelectedMortar();
-    if (sm && !sm.built) {
-      send({ type: 'tw_cancel_build_mortar', mortar_id: sm.structure_id });
-      selectedMortar = null;
+    const smg = getSelectedMg();
+    if (smg && !smg.built) {
+      send({ type: 'tw_cancel_build_mg', mg_id: smg.structure_id });
+      selectedMg = null;
     } else {
-      for (const uid of selectedUnits) send({ type: 'tw_cancel_task', unit_id: uid });
+      const sm = getSelectedMortar();
+      if (sm && !sm.built) {
+        send({ type: 'tw_cancel_build_mortar', mortar_id: sm.structure_id });
+        selectedMortar = null;
+      } else {
+        for (const uid of selectedUnits) send({ type: 'tw_cancel_task', unit_id: uid });
+      }
     }
   }
   render();
