@@ -2319,14 +2319,19 @@ function draw() {
     // Task / combat-state label
     {
       let lbl = null;
-      if (s.combat_halt) {
+      let lblColor = 'rgba(255,220,80,0.95)';
+      if (s.crossing_wire) {
+        lbl = '#';  // entangled crossing barbed wire (cannot shoot/throw)
+        lblColor = 'rgba(255,150,40,0.98)';
+      } else if (s.combat_halt) {
         lbl = '■';  // halted to engage open enemy
+        lblColor = 'rgba(255,80,80,0.95)';
       } else if (s.task) {
         const taskLabels = { dig: 'DIG', build_mg: 'BLD', operate_mg: 'CREW', move: '→' };
         lbl = taskLabels[s.task.type] || null;
       }
       if (lbl) {
-        ctx.fillStyle = s.combat_halt ? 'rgba(255,80,80,0.95)' : 'rgba(255,220,80,0.95)';
+        ctx.fillStyle = lblColor;
         ctx.font = '7px system-ui';
         ctx.textAlign = 'center';
         ctx.fillText(lbl, scx, scy - 9);
