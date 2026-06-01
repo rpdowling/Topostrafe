@@ -1360,6 +1360,44 @@ function cpy(gy) { return OY + flipY(gy) * CELL + CELL / 2; }
 // Top-left pixel y of a tile (integer or float game-y).
 function tileTop(gy) { return OY + Math.floor(flipY(gy)) * CELL; }
 
+// Real elevation of a tile in server units (trench 2 / ground 4 / hill 5 / mountain 6).
+// elevMap stores tiers: 0=trench, 2=hill, 3=mountain, undefined=ground.
+function elevAtTile(x, y) {
+  const tier = elevMap.get(`${x},${y}`);
+  if (tier === 0) return 2;
+  if (tier === 2) return 5;
+  if (tier === 3) return 6;
+  return 4;
+}
+
+// First Bresenham step (in GAME space) from (x0,y0) along game-space angle `ang`.
+// Mirrors the server's _bresenham_first_step so the client classifies the same tile.
+function mgFirstStepGame(x0, y0, ang) {
+  const adx = Math.abs(Math.cos(ang)), ady = Math.abs(Math.sin(ang));
+  const sx = Math.cos(ang) >= 0 ? 1 : -1, sy = Math.sin(ang) >= 0 ? 1 : -1;
+  let nx = x0, ny = y0;
+  if (adx > ady / 2) nx = x0 + sx;   // step x if dx > dy/2
+  if (ady > adx / 2) ny = y0 + sy;   // step y if dy > dx/2
+  return [nx, ny];
+}
+
+// Summed downhill direction (GAME space unit vector) over the 8 neighbours that
+// sit strictly lower than this tile, or null if none (not an edge) or symmetric.
+function mgEdgeDownhillDir(x, y) {
+  const me = elevAtTile(x, y);
+  let vx = 0, vy = 0, any = false;
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      if (!dx && !dy) continue;
+      if (elevAtTile(x + dx, y + dy) < me) { vx += dx; vy += dy; any = true; }
+    }
+  }
+  if (!any) return null;
+  const len = Math.hypot(vx, vy);
+  if (len < 0.01) return { vx: 0, vy: 0, allAround: true };
+  return { vx: vx / len, vy: vy / len, allAround: false };
+}
+
 // Deterministic per-tile brightness noise: returns a small offset in [-1, 1].
 function tileNoise(x, y) {
   let h = ((x * 374761393 + y * 668265263) | 0);
@@ -1893,11 +1931,62 @@ function draw() {
       if (isSelected) {
         // Range arc for selected MG (pinned to arc_center, elevation-dependent)
         const mgEffRange = (mg.effective_range ?? MG_RANGE);
+        const R = mgEffRange * CELL;
+        const mgElev = elevAtTile(mx, my);
+        if (mgElev > 4) {
+          // Hill/mountain MG: split the range wedge into sectors it can rake
+          // downhill (solid) vs sectors where it is set back from the crest and
+          // cannot depress over the lip (hatched). Same-tier fire still works;
+          // this overlay advertises downhill field of fire only.
+          const seat1 = mySeat() === 1;
+          const tf = g => (seat1 ? -g : g);
+          const STEP = 3 * Math.PI / 180;
+          const a0 = arcCenterRad - arcHalfRad, a1 = arcCenterRad + arcHalfRad;
+          const classify = ang => {
+            const [fx, fy] = mgFirstStepGame(mx, my, ang);
+            return elevAtTile(fx, fy) < mgElev;   // can rake downhill this way
+          };
+          const runs = [];
+          let g = a0, curStart = a0, cur = null;
+          while (g < a1 - 1e-6) {
+            const ng = Math.min(g + STEP, a1);
+            const k = classify((g + ng) / 2);
+            if (cur === null) { cur = k; curStart = g; }
+            else if (k !== cur) { runs.push([curStart, g, cur]); cur = k; curStart = g; }
+            g = ng;
+          }
+          if (cur !== null) runs.push([curStart, a1, cur]);
+          for (const [gs, ge, reach] of runs) {
+            ctx.beginPath();
+            ctx.moveTo(mcx, mcy);
+            ctx.arc(mcx, mcy, R, tf(gs), tf(ge), seat1);
+            ctx.closePath();
+            if (reach) {
+              ctx.fillStyle = 'rgba(255,220,80,0.16)';
+              ctx.fill();
+            } else {
+              ctx.fillStyle = 'rgba(90,90,90,0.18)';
+              ctx.fill();
+              ctx.save();
+              ctx.clip();
+              ctx.strokeStyle = 'rgba(150,150,150,0.55)';
+              ctx.lineWidth = 1;
+              for (let d = -2 * R; d < 2 * R; d += 7) {
+                ctx.beginPath();
+                ctx.moveTo(mcx - R + d, mcy - R);
+                ctx.lineTo(mcx + R + d, mcy + R);
+                ctx.stroke();
+              }
+              ctx.restore();
+            }
+          }
+        }
+        // Range boundary arc (max-range reference, full arc)
         ctx.strokeStyle = 'rgba(255,220,80,0.75)';
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
-        ctx.arc(mcx, mcy, mgEffRange * CELL, arcVa - arcHalfRad, arcVa + arcHalfRad);
+        ctx.arc(mcx, mcy, R, arcVa - arcHalfRad, arcVa + arcHalfRad);
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.lineWidth = 1;
@@ -1924,6 +2013,40 @@ function draw() {
     ctx.stroke();
     ctx.lineCap = 'butt';
     ctx.lineWidth = 1;
+
+    // Persistent forward-edge cue: a tick + arrowhead toward the downhill side for
+    // a built hill/mountain MG sited on an edge (able to depress over the lip).
+    if (mg.built && elevAtTile(mx, my) > 4) {
+      const dh = mgEdgeDownhillDir(mx, my);
+      if (dh) {
+        if (dh.allAround) {
+          // crest on every side — small open ring (downhill any direction)
+          ctx.strokeStyle = 'rgba(255,235,150,0.9)';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(mcx, mcy, CELL * 0.52, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.lineWidth = 1;
+        } else {
+          const ca = Math.atan2((mySeat() === 1 ? -dh.vy : dh.vy), dh.vx);
+          const r0 = CELL * 0.42, r1 = CELL * 0.64;
+          const tipx = mcx + Math.cos(ca) * r1, tipy = mcy + Math.sin(ca) * r1;
+          ctx.strokeStyle = 'rgba(255,235,150,0.95)';
+          ctx.lineWidth = 2;
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.moveTo(mcx + Math.cos(ca) * r0, mcy + Math.sin(ca) * r0);
+          ctx.lineTo(tipx, tipy);
+          ctx.moveTo(tipx, tipy);
+          ctx.lineTo(tipx + Math.cos(ca + Math.PI - 0.5) * 5, tipy + Math.sin(ca + Math.PI - 0.5) * 5);
+          ctx.moveTo(tipx, tipy);
+          ctx.lineTo(tipx + Math.cos(ca + Math.PI + 0.5) * 5, tipy + Math.sin(ca + Math.PI + 0.5) * 5);
+          ctx.stroke();
+          ctx.lineCap = 'butt';
+          ctx.lineWidth = 1;
+        }
+      }
+    }
 
     // Selection ring
     if (isSelected) {
