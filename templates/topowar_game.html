@@ -60,7 +60,7 @@
             <button id="mode-move" class="cmd-btn cmd-select" title="Left-click ground to move selected soldiers in formation. With nothing selected, the nearest soldiers move. Right-click a soldier to cancel its task.">
               <span class="cmd-key">2</span><span class="cmd-label">Move</span>
             </button>
-            <button id="mode-dig" class="cmd-btn cmd-dig" title="Click a tile to dig 1 square (soldier must be selected). Drag or multi-click to trace a longer plan, then click a soldier to assign it. Right-click any soldier to cancel their task.">
+            <button id="mode-dig" class="cmd-btn cmd-dig" title="Build phase only. Click a tile to dig it into trench instantly (costs 1 from your dig bank). Drag or multi-click to dig a line. Each side has a limited bank of dig tiles.">
               <span class="cmd-key">D</span><span class="cmd-label">Dig/Plan</span>
             </button>
             <button id="build-flyout-toggle" class="cmd-btn cmd-build" title="Place structures: MG, mortar, sandbag, wire, bunker (B)">
@@ -91,6 +91,9 @@
             </button>
             <button id="mode-bunker" class="cmd-btn cmd-build" title="Place a bunker on a trench tile (build phase only, 5 per side). Direct mortar hits negated; nodes inside go underground.">
               <span class="cmd-key">U</span><span class="cmd-label">Bunker</span>
+            </button>
+            <button id="mode-erase" class="cmd-btn cmd-cancel" title="Build phase only. Undo a dig: click (or drag across) a trench you dug to fill it back to open ground and refund it to your dig bank.">
+              <span class="cmd-key">E</span><span class="cmd-label">Undo Dig</span>
             </button>
           </div>
         </div>

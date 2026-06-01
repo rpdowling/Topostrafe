@@ -115,7 +115,7 @@ let squadBoxes = new Map();
 let armedBoxKind = null;       // 'killbox' | 'defend' when the next board-drag will define a box
 let boxInteraction = null;     // active drag: {squadId, kind, mode:'create'|'resize', handle, ax, ay}
 let airstrikeFirst = null;     // first clicked tile [x,y] of a two-click airstrike line
-const BUILD_MODES = new Set(['build', 'mortar', 'sandbag', 'wire', 'bunker']);
+const BUILD_MODES = new Set(['build', 'mortar', 'sandbag', 'wire', 'bunker', 'erase']);
 
 // Smooth soldier interpolation: display position trails toward server position.
 const soldierDisplayPos = new Map(); // unit_id → {x, y}
@@ -695,7 +695,7 @@ function boxHitAt(cx, cy) {
 // === MODE MANAGEMENT ===
 
 function updateModeButtons() {
-  const modes = ['select','move','dig','build','mortar','sandbag','wire','bunker','flare','airstrike'];
+  const modes = ['select','move','dig','build','mortar','sandbag','wire','bunker','erase','flare','airstrike'];
   for (const m of modes) {
     const btn = el('mode-' + m);
     if (btn) btn.classList.toggle('active', mode === m);
@@ -716,6 +716,7 @@ function applyBuildFlyout() {
 }
 
 function setMode(m) {
+  const prev = mode;
   if (mode === m) {
     mode = 'select';
     plan = [];
@@ -726,8 +727,10 @@ function setMode(m) {
     selectedSquad = null;
   } else {
     mode = m;
-    if (m !== 'dig' && plan.length) { send({ type: 'tw_assign_dig', plan: [...plan] }); }
-    if (m !== 'dig') plan = [];
+    // Flush any painted-but-uncommitted plan when leaving dig/erase.
+    if (prev === 'dig' && m !== 'dig' && plan.length) { send({ type: 'tw_assign_dig', plan: [...plan] }); }
+    if (prev === 'erase' && m !== 'erase' && plan.length) { send({ type: 'tw_cancel_dig', tiles: [...plan] }); }
+    if (m !== 'dig' && m !== 'erase') plan = [];
     if (m !== 'build') { pendingBuildTile = null; pendingBuildFacing = null; pendingMgDispatch = false; }
     if (m !== 'mortar') { pendingMortarTile = null; pendingMortarTarget = null; pendingMortarDispatch = false; }
     if (m !== 'select' && m !== 'move') { armedBoxKind = null; }
@@ -744,7 +747,7 @@ function setMode(m) {
 function updateModeLabel() {
   const labels = {
     select: 'Select', move: 'Move',
-    dig: 'Dig/Plan', build: 'Build MG', mortar: 'Build Mortar', sandbag: 'Build Sandbag', wire: 'Wire', bunker: 'Bunker', flare: 'Flare',
+    dig: 'Dig/Plan', build: 'Build MG', mortar: 'Build Mortar', sandbag: 'Build Sandbag', wire: 'Wire', bunker: 'Bunker', erase: 'Undo Dig', flare: 'Flare',
   };
   const e = el('mode-line');
   if (e) e.textContent = labels[mode] || 'Select / Move';
@@ -852,7 +855,7 @@ document.addEventListener('keydown', (evt) => {
     return;
   }
 
-  const shortcutMap = { '1':'select','2':'move','V':'move','D':'dig','B':'build','M':'mortar','G':'sandbag','W':'wire','U':'bunker','F':'flare','A':'airstrike' };
+  const shortcutMap = { '1':'select','2':'move','V':'move','D':'dig','B':'build','M':'mortar','G':'sandbag','W':'wire','U':'bunker','E':'erase','F':'flare','A':'airstrike' };
   if (shortcutMap[key]) {
     evt.preventDefault();
     setMode(shortcutMap[key]);
@@ -862,7 +865,8 @@ document.addEventListener('keydown', (evt) => {
 
   if (key === 'C') {
     evt.preventDefault();
-    if (mode === 'dig') {
+    if (mode === 'dig' || mode === 'erase') {
+      // Undo every dig this side has made (full refund to the bank).
       send({ type: 'tw_cancel_dig', tiles: [] });
       plan = [];
     } else {
@@ -971,14 +975,25 @@ board.addEventListener('click', (evt) => {
 
   } else if (mode === 'dig') {
     if (planConsumedClick) { planConsumedClick = false; }
-    else {
-      const digQ = new Set((tw()?.dig_jobs || []).map(t => t[0] + ',' + t[1]));
+    else if ((tw()?.build_phase_remaining || 0) <= 0) {
+      setStatus('Digging is only allowed during the build phase.', true);
+    } else {
+      // Clicking a tile you already dug erases it (refund); otherwise dig it.
+      const dug = new Set((tw()?.dug_tiles || []).map(t => t[0] + ',' + t[1]));
       const tileKey = tile ? tile[0] + ',' + tile[1] : null;
-      if (tileKey && digQ.has(tileKey)) {
+      if (tileKey && dug.has(tileKey)) {
         send({ type: 'tw_cancel_dig', tiles: [tile] });
       } else if (tile) {
         send({ type: 'tw_assign_dig', plan: [tile] });
       }
+    }
+
+  } else if (mode === 'erase') {
+    if (planConsumedClick) { planConsumedClick = false; }
+    else if ((tw()?.build_phase_remaining || 0) <= 0) {
+      setStatus('Undo Dig is only allowed during the build phase.', true);
+    } else if (tile) {
+      send({ type: 'tw_cancel_dig', tiles: [tile] });
     }
 
   } else if (mode === 'build') {
@@ -1264,7 +1279,7 @@ board.addEventListener('mousedown', (evt) => {
     }
   }
 
-  if (mode === 'dig') { planDragging = true; return; }
+  if (mode === 'dig' || mode === 'erase') { planDragging = true; return; }
   if (mode === 'select' || mode === 'move') {
     // Start a potential box-select drag only if clicking empty ground.
     const tile = tileFromEvent(evt);
@@ -1281,14 +1296,14 @@ board.addEventListener('mousedown', (evt) => {
 });
 
 board.addEventListener('mouseup', (evt) => {
-  if (mode === 'dig' && planDragging) {
+  if ((mode === 'dig' || mode === 'erase') && planDragging) {
     // Only a genuine multi-tile drag commits a plan here. A single tile (often
     // just pointer jitter during a click) is left for the click handler so it can
-    // toggle the tile: cancel it if already queued, otherwise queue it. Without
-    // this, a click on a queued tile would re-queue it via the 1-tile jitter plan
-    // and suppress the cancel.
+    // toggle the tile: dig it / erase it. Without this, a click on a tile would
+    // be double-handled via the 1-tile jitter plan.
     if (plan.length >= 2) {
-      send({ type: 'tw_assign_dig', plan: [...plan] });
+      if (mode === 'erase') send({ type: 'tw_cancel_dig', tiles: [...plan] });
+      else send({ type: 'tw_assign_dig', plan: [...plan] });
       planConsumedClick = true;
     }
     plan = [];
@@ -1342,7 +1357,7 @@ board.addEventListener('mousemove', (evt) => {
     }
     return;
   }
-  if (mode === 'dig' && planDragging) {
+  if ((mode === 'dig' || mode === 'erase') && planDragging) {
     const tile = tileFromEvent(evt);
     if (tile) { addToPlan(tile); render(); }
   }
@@ -1593,7 +1608,8 @@ function drawBuildPhaseOverlay(data) {
   const sbRem = data.build_sandbags_remaining ?? 0;
   const wireRem = data.build_wire_remaining ?? 0;
   const bunkerRem = data.build_bunkers_remaining ?? 0;
-  const resourceLabel = `Sandbags: ${sbRem}   Wire: ${wireRem}   Bunkers: ${bunkerRem}`;
+  const digRem = data.dig_bank ?? 0;
+  const resourceLabel = `Dig: ${digRem}   Sandbags: ${sbRem}   Wire: ${wireRem}   Bunkers: ${bunkerRem}`;
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
@@ -1778,28 +1794,18 @@ function draw() {
     ctx.fillRect(tlx + 1, tly + 1, 3, 3);
   }
 
-  // Dig queue overlay (server-side queue for this player's side)
-  {
-    const digQueue = tw()?.dig_jobs || [];
-    const digClaimed = new Set();
-    for (const s of data.soldiers || []) {
-      if (s.owner === mySeat() && s.task && s.task.type === 'dig' && s.task.target) {
-        digClaimed.add(s.task.target[0] + ',' + s.task.target[1]);
-      }
-    }
-    ctx.fillStyle = 'rgba(244,200,78,0.13)';
-    for (const [tx, ty] of digQueue) {
-      if (!digClaimed.has(tx + ',' + ty)) ctx.fillRect(OX + tx * CELL, tileTop(ty), CELL - 1, CELL - 1);
-    }
-    ctx.fillStyle = 'rgba(244,200,78,0.32)';
-    for (const [tx, ty] of digQueue) {
-      if (digClaimed.has(tx + ',' + ty)) ctx.fillRect(OX + tx * CELL, tileTop(ty), CELL - 1, CELL - 1);
-    }
+  // Dug-tile overlay: in dig/erase mode, highlight the trenches this player
+  // dug so they can see what an Undo Dig (erase) would refund.
+  if (mode === 'dig' || mode === 'erase') {
+    const dug = tw()?.dug_tiles || [];
+    ctx.fillStyle = mode === 'erase' ? 'rgba(229,115,115,0.26)' : 'rgba(244,200,78,0.16)';
+    for (const [tx, ty] of dug) ctx.fillRect(OX + tx * CELL, tileTop(ty), CELL - 1, CELL - 1);
   }
 
-  // Local (unsent) dig plan overlay
+  // Local (unsent) dig/erase plan overlay
   if (plan.length) {
-    ctx.strokeStyle = '#f4c84e';
+    const planColor = mode === 'erase' ? '#e57373' : '#f4c84e';
+    ctx.strokeStyle = planColor;
     ctx.lineWidth = 2;
     ctx.setLineDash([4, 3]);
     ctx.beginPath();
@@ -1810,9 +1816,9 @@ function draw() {
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.lineWidth = 1;
-    ctx.fillStyle = 'rgba(244,200,78,0.18)';
+    ctx.fillStyle = mode === 'erase' ? 'rgba(229,115,115,0.22)' : 'rgba(244,200,78,0.18)';
     for (const t of plan) ctx.fillRect(OX + t[0] * CELL, tileTop(t[1]), CELL - 1, CELL - 1);
-    ctx.strokeStyle = '#f4c84e';
+    ctx.strokeStyle = planColor;
     ctx.strokeRect(OX + plan[0][0] * CELL + 1, tileTop(plan[0][1]) + 1, CELL - 3, CELL - 3);
   }
 
@@ -2318,16 +2324,6 @@ function draw() {
       ctx.textAlign = 'left';
     }
 
-    // Dig progress bar on target tile
-    if (s.task && s.task.type === 'dig' && s.task.target) {
-      const [tx, ty] = s.task.target;
-      const prog = Math.max(0, Math.min(1, (s.task.progress || 0) / (data.rules.dig_seconds_per_tile || 5)));
-      ctx.fillStyle = '#000';
-      ctx.fillRect(OX + tx * CELL + 2, tileTop(ty) + CELL - 5, CELL - 4, 3);
-      ctx.fillStyle = '#f4c84e';
-      ctx.fillRect(OX + tx * CELL + 2, tileTop(ty) + CELL - 5, (CELL - 4) * prog, 3);
-    }
-
     // Task / combat-state label
     {
       let lbl = null;
@@ -2339,7 +2335,7 @@ function draw() {
         lbl = '■';  // halted to engage open enemy
         lblColor = 'rgba(255,80,80,0.95)';
       } else if (s.task) {
-        const taskLabels = { dig: 'DIG', build_mg: 'BLD', operate_mg: 'CREW', move: '→' };
+        const taskLabels = { build_mg: 'BLD', operate_mg: 'CREW', move: '→' };
         lbl = taskLabels[s.task.type] || null;
       }
       if (lbl) {
@@ -3467,19 +3463,25 @@ function render() {
     setStatus(msg);
   } else if (mode === 'dig') {
     const twD = tw();
-    const digQueue = twD?.dig_jobs || [];
-    const digSecs = twD?.rules?.dig_seconds_per_tile || 4;
-    const mySoldiers = (twD?.soldiers || []).filter(s => s.owner === mySeat());
-    const diggers = mySoldiers.filter(s => !s.squad_id && !s.is_officer && (!s.task || s.task.type === 'dig')).length;
-    if (digQueue.length) {
-      const est = diggers > 0 ? Math.ceil(digQueue.length * digSecs / diggers) : '?';
-      const bpRem = Math.ceil(twD?.build_phase_remaining || 0);
-      const urgent = bpRem > 0 && typeof est === 'number' && est > bpRem;
-      setStatus(`Dig queue: ${digQueue.length} tile${digQueue.length !== 1 ? 's' : ''} · ≈${est}s with ${diggers} digger${diggers !== 1 ? 's' : ''}${urgent ? ' ⚠ exceeds build phase' : ''}. Click queued tile to cancel.`);
+    const bank = twD?.dig_bank ?? 0;
+    const inBuildPhase = (twD?.build_phase_remaining || 0) > 0;
+    if (!inBuildPhase) {
+      setStatus('Dig is only available during the build phase.', true);
     } else if (plan.length) {
-      setStatus(`Dig — ${plan.length} tile${plan.length !== 1 ? 's' : ''} painted. Release to queue.`);
+      setStatus(`Dig — ${plan.length} tile${plan.length !== 1 ? 's' : ''} painted. Release to dig (${bank} left in bank).`);
     } else {
-      setStatus('Dig — drag to paint trench plan. Click to add tiles. Click queued tile to cancel. Idle un-squadded soldiers auto-dig.');
+      setStatus(`Dig — click or drag to dig trenches instantly (${bank} tile${bank !== 1 ? 's' : ''} left in bank). Click a dug tile to undo it. Use Undo Dig (E) to erase more.`);
+    }
+  } else if (mode === 'erase') {
+    const twD = tw();
+    const bank = twD?.dig_bank ?? 0;
+    const inBuildPhase = (twD?.build_phase_remaining || 0) > 0;
+    if (!inBuildPhase) {
+      setStatus('Undo Dig is only available during the build phase.', true);
+    } else if (plan.length) {
+      setStatus(`Undo Dig — ${plan.length} tile${plan.length !== 1 ? 's' : ''} painted. Release to fill back in.`);
+    } else {
+      setStatus(`Undo Dig — click or drag across trenches you dug to fill them back to open ground (refunds your bank: ${bank} left). Press C to undo all.`);
     }
   } else if (mode === 'sandbag') {
     const inBuildPhase = (tw()?.build_phase_remaining || 0) > 0;
@@ -3594,7 +3596,7 @@ function render() {
 
 [
   ['mode-select','select'], ['mode-move','move'],
-  ['mode-dig','dig'], ['mode-build','build'], ['mode-mortar','mortar'], ['mode-sandbag','sandbag'], ['mode-wire','wire'], ['mode-bunker','bunker'], ['mode-flare','flare'], ['mode-airstrike','airstrike'],
+  ['mode-dig','dig'], ['mode-build','build'], ['mode-mortar','mortar'], ['mode-sandbag','sandbag'], ['mode-wire','wire'], ['mode-bunker','bunker'], ['mode-erase','erase'], ['mode-flare','flare'], ['mode-airstrike','airstrike'],
 ].forEach(([id, m]) => {
   const btn = el(id);
   if (btn) btn.addEventListener('click', (evt) => { evt.stopPropagation(); setMode(m); render(); });

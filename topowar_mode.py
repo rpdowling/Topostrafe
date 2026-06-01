@@ -51,7 +51,11 @@ class RulesConfig:
     dig_seconds_per_tile: float = 4.0
     mg_build_seconds: float = 30.0
     match_time_seconds: int = 1200
-    build_phase_seconds: int = 180
+    build_phase_seconds: int = 120
+    # Tiles each side may dig during the build phase. Digging is immediate and
+    # only allowed before the build phase ends; each dug tile spends one from
+    # this bank (erasing a dug tile refunds it).
+    dig_bank: int = 100
     # Starting soldiers per side; the starting trench spans this many tiles.
     starting_troops: int = 20
     # Soldiers move discretely: one tile per (1 / soldier_move_speed) seconds.
@@ -435,7 +439,11 @@ class TopowarGameState:
         self.next_structure_id = 1
         self.squads: dict[int, Squad] = {}
         self.next_squad_id: int = 1
-        self.dig_jobs: dict[int, list[tuple[int, int]]] = {0: [], 1: []}
+        # Build-phase dig bank: tiles each side may dig (immediate). dug_tiles
+        # records each dug tile's pre-dig elevation so an erase can restore the
+        # terrain and refund the bank.
+        self.dig_bank: dict[int, int] = {0: self.rules.dig_bank, 1: self.rules.dig_bank}
+        self.dug_tiles: dict[int, dict[tuple[int, int], int]] = {0: {}, 1: {}}
         self._tick_cache: dict = {}
         self.soldiers: dict[int, Soldier] = {}
         self.mgs: dict[int, MachineGun] = {}
@@ -769,8 +777,12 @@ class TopowarGameState:
             self.rules.grenade_windup_seconds = 3.0
         if not hasattr(self.rules, "wire_cross_seconds"):
             self.rules.wire_cross_seconds = 10.0
-        if not hasattr(self, "dig_jobs"):
-            self.dig_jobs = {0: [], 1: []}
+        if not hasattr(self.rules, "dig_bank"):
+            self.rules.dig_bank = 100
+        if not hasattr(self, "dig_bank"):
+            self.dig_bank = {0: self.rules.dig_bank, 1: self.rules.dig_bank}
+        if not hasattr(self, "dug_tiles"):
+            self.dug_tiles = {0: {}, 1: {}}
         if not hasattr(self, "_tick_cache"):
             self._tick_cache = {}
         for s in self.soldiers.values():
@@ -1345,40 +1357,67 @@ class TopowarGameState:
         self._ensure_runtime_compat()
         t = action.get("type")
         if t == "tw_assign_dig":
+            if self.time_elapsed >= self.rules.build_phase_seconds:
+                raise ValueError("Digging is only allowed during the build phase.")
             plan = [tuple(map(int, c)) for c in action.get("plan", [])]
             if not plan:
                 raise ValueError("No dig plan.")
-            queue = self.dig_jobs.setdefault(owner, [])
-            queue_set = set(queue)
-            added = 0
+            structures = self._structure_tile_set()
+            dug = self.dug_tiles.setdefault(owner, {})
+            bank = self.dig_bank.get(owner, 0)
+            done = 0
             for p in plan:
                 if not self.map.in_bounds(p):
                     raise ValueError("Dig target out of bounds.")
+                if not self._on_owner_side(owner, p):
+                    raise ValueError("You can only dig on your own side.")
+                # Already a plain trench (e.g. the starting trench, or a tile
+                # already dug): nothing to do and costs nothing.
                 if self._dig_already_done(p):
                     continue
-                if p not in queue_set:
-                    queue.append(p)
-                    queue_set.add(p)
-                    added += 1
-            if added == 0:
-                return "All tiles already queued or dug."
-            return f"{added} tile(s) added to dig queue."
+                # Can't dig a tile occupied by a structure.
+                if p in structures:
+                    continue
+                if bank <= 0:
+                    break
+                dug[p] = self.map.elevation_at(p)
+                self.map.mountains.discard(p)
+                self.map.hills.discard(p)
+                self.map.trenches.add(p)
+                bank -= 1
+                done += 1
+            self.dig_bank[owner] = bank
+            if done == 0:
+                if bank <= 0:
+                    return "Dig bank empty."
+                return "Nothing to dig there."
+            return f"Dug {done} tile(s); {bank} left in bank."
         if t == "tw_cancel_dig":
+            if self.time_elapsed >= self.rules.build_phase_seconds:
+                raise ValueError("Digging is only allowed during the build phase.")
             tiles = {tuple(map(int, c)) for c in action.get("tiles", [])}
-            queue = self.dig_jobs.get(owner, [])
-            if not tiles:
-                self.dig_jobs[owner] = []
-                tiles = set(queue)
-            else:
-                self.dig_jobs[owner] = [tile for tile in queue if tile not in tiles]
-            for s in self.soldiers.values():
-                if (s.owner == owner and s.current_task
-                        and s.current_task.get("type") == "dig"
-                        and s.current_task.get("auto")
-                        and tuple(s.current_task["target"]) in tiles):
-                    s.current_task = None
-                    s.path = []
-            return "Dig cancelled."
+            dug = self.dug_tiles.setdefault(owner, {})
+            targets = set(dug.keys()) if not tiles else (tiles & set(dug.keys()))
+            structures = self._structure_tile_set()
+            removed = 0
+            for p in targets:
+                # Don't fill in a trench that now has a structure on it (e.g. a
+                # bunker placed after digging) — remove the structure first.
+                if p in structures:
+                    continue
+                orig = dug.pop(p, None)
+                if orig is None:
+                    continue
+                self.map.trenches.discard(p)
+                if orig == ELEV_MOUNTAIN:
+                    self.map.mountains.add(p)
+                elif orig == ELEV_HILL:
+                    self.map.hills.add(p)
+                self.dig_bank[owner] = self.dig_bank.get(owner, 0) + 1
+                removed += 1
+            if removed == 0:
+                return "No dug tiles to erase."
+            return f"Erased {removed} tile(s); {self.dig_bank[owner]} left in bank."
         if t == "tw_assign_build_mg":
             tile = tuple(map(int, action.get("tile", [])))
             if len(tile) != 2 or not self.map.in_bounds(tile):
@@ -2223,55 +2262,6 @@ class TopowarGameState:
             return False
         return not any(b.hp > 0 and b.tile == tile for b in self.bunkers.values())
 
-    def _advance_dig_plan(self, s: "Soldier", task: dict[str, Any], pop_current: bool = True) -> bool:
-        """Advance a dig task to its next still-diggable tile.
-
-        Pops the current head (when `pop_current`) then skips any tiles that are
-        already dug (plain trench). Sets the new target / resets progress / clears
-        the path, or clears the task when nothing remains. Returns True if a
-        diggable target remains."""
-        plan = task.get("plan", [])
-        if pop_current and plan:
-            plan.pop(0)
-        while plan and self._dig_already_done(tuple(plan[0])):
-            plan.pop(0)
-        if not plan:
-            s.current_task = None
-            return False
-        task["target"] = list(plan[0])
-        task["progress"] = 0.0
-        s.path = []
-        return True
-
-    def _assign_dig_jobs(self):
-        """Assign queued dig tiles to idle un-squadded soldiers (greedy nearest)."""
-        for owner in (0, 1):
-            queue = self.dig_jobs.get(owner, [])
-            if not queue:
-                continue
-            claimed = {
-                tuple(s.current_task["target"])
-                for s in self.soldiers.values()
-                if s.hp > 0 and s.owner == owner
-                and s.current_task and s.current_task.get("type") == "dig"
-            }
-            idle = [
-                s for s in self.soldiers.values()
-                if s.hp > 0 and s.owner == owner
-                and s.squad_id is None and s.current_task is None
-                and not s.combat_halt and not s.is_officer
-            ]
-            for s in idle:
-                avail = [tile for tile in queue if tile not in claimed]
-                if not avail:
-                    break
-                nbrs = {(s.tile[0] + dx, s.tile[1] + dy) for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))}
-                local = [tile for tile in avail if tile in nbrs]
-                tgt = local[0] if local else min(avail, key=lambda tile: math.dist(s.tile, tile))
-                s.current_task = {"type": "dig", "target": list(tgt), "progress": 0.0, "auto": True}
-                s.path = []
-                claimed.add(tgt)
-
     def _update_tasks(self, dt: float):
         occ = self._occupied_tiles()
         # Static structure tiles never move, so a soldier whose current path runs
@@ -2298,91 +2288,6 @@ class TopowarGameState:
                 path_hits_structure = any(t in structure_blockers for t in s.path)
                 if not s.path or s.path[-1] != goal or path_hits_structure or (s.blocked and s.blocked_for >= 0.3):
                     s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
-            elif task["type"] == "dig":
-                tgt = tuple(task["target"])
-                # Skip any current target that needs no digging (already a plain
-                # trench) — lets a plan be traced straight across existing trenches.
-                if self._dig_already_done(tgt):
-                    if task.get("auto"):
-                        q = self.dig_jobs.get(s.owner, [])
-                        if tgt in q:
-                            q.remove(tgt)
-                        s.current_task = None
-                        continue
-                    if not self._advance_dig_plan(s, task, pop_current=True):
-                        continue
-                    tgt = tuple(task["target"])
-                tgt_bunker = next((b for b in self.bunkers.values() if b.hp > 0 and b.tile == tgt), None)
-                tgt_sandbag = next((sb for sb in self.sandbags.values() if sb.hp > 0 and sb.tile == tgt), None)
-                adj4_tgt = [(tgt[0]+dx, tgt[1]+dy) for dx, dy in ((1,0),(-1,0),(0,1),(0,-1))]
-                tgt_elev = self.map.elevation_at(tgt)
-                # Reroute immediately if the planned approach now runs through a
-                # structure (e.g. a sandbag placed after the path was traced).
-                path_hits_structure = any(t in structure_blockers for t in s.path)
-                if tgt_bunker:
-                    # Bunker removal: soldier must be adjacent, takes 60 seconds
-                    in_position = s.tile in set(adj4_tgt)
-                    if not in_position:
-                        if not s.path or path_hits_structure or (s.blocked and s.blocked_for >= 0.4):
-                            s.path = []
-                            goals = [t for t in adj4_tgt if self.map.in_bounds(t)]
-                            if goals:
-                                goal = min(goals, key=lambda g: math.dist(s.tile, g))
-                                s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
-                            else:
-                                s.current_task = None
-                        continue
-                    task["progress"] = task.get("progress", 0.0) + dt
-                    if task["progress"] >= 60.0:
-                        del self.bunkers[tgt_bunker.structure_id]
-                        self._advance_dig_plan(s, task, pop_current=True)
-                    continue
-                # All dig types: soldier just needs to be adjacent to the target tile
-                in_position = s.tile in set(adj4_tgt)
-                if not in_position:
-                    if not s.path or path_hits_structure or (s.blocked and s.blocked_for >= 0.4):
-                        s.path = []
-                        goals = [t for t in adj4_tgt if self.map.in_bounds(t)]
-                        if not goals:
-                            s.current_task = None
-                        else:
-                            # Try all adjacent goals (nearest first); skip tile if none reachable
-                            best = None
-                            for g in sorted(goals, key=lambda g: math.dist(s.tile, g)):
-                                p = self.path.find_path(s.tile, g, trench_only=False, blocked=blocked_keys - {s.tile})
-                                if p:
-                                    best = p
-                                    break
-                            if best:
-                                s.path = best
-                            else:
-                                # All approaches permanently blocked — evict from queue
-                                # so _assign_dig_jobs doesn't re-assign it every tick,
-                                # triggering a full Dijkstra flood per idle soldier.
-                                if task.get("auto"):
-                                    q = self.dig_jobs.get(s.owner, [])
-                                    if tgt in q:
-                                        q.remove(tgt)
-                                self._advance_dig_plan(s, task, pop_current=True)
-                    continue
-                task["progress"] = task.get("progress", 0.0) + dt
-                if task["progress"] >= self.rules.dig_seconds_per_tile:
-                    if tgt_sandbag:
-                        del self.sandbags[tgt_sandbag.structure_id]
-                    elif tgt_elev == ELEV_MOUNTAIN:
-                        self.map.mountains.discard(tgt)
-                        self.map.hills.add(tgt)
-                    elif tgt_elev == ELEV_HILL:
-                        self.map.hills.discard(tgt)
-                    else:
-                        self.map.trenches.add(tgt)
-                    if task.get("auto"):
-                        q = self.dig_jobs.get(s.owner, [])
-                        if tgt in q:
-                            q.remove(tgt)
-                        s.current_task = None
-                    else:
-                        self._advance_dig_plan(s, task, pop_current=True)
             elif task["type"] == "build_mg":
                 mg = self.mgs.get(task["mg_id"])
                 if not mg or mg.hp <= 0 or mg.built:
@@ -3174,7 +3079,6 @@ class TopowarGameState:
         self._tick_cache = {}
         self.time_elapsed += dt
         self._try_spawn_recruits()
-        self._assign_dig_jobs()
         self._update_tasks(dt)
         self._enforce_structure_ground_integrity()
         for s in self.soldiers.values():
@@ -3396,7 +3300,8 @@ class TopowarGameState:
             "flares_remaining": {"0": self.flares_remaining.get(0, 0), "1": self.flares_remaining.get(1, 0)},
             "build_sandbags_remaining": self.build_sandbags_remaining.get(viewer, 0) if viewer is not None else None,
             "build_wire_remaining": self.build_wire_remaining.get(viewer, 0) if viewer is not None else None,
-            "dig_jobs": [[t[0], t[1]] for t in self.dig_jobs.get(viewer, [])] if viewer is not None else {str(o): [[t[0], t[1]] for t in self.dig_jobs.get(o, [])] for o in (0, 1)},
+            "dig_bank": self.dig_bank.get(viewer, 0) if viewer is not None else {str(o): self.dig_bank.get(o, 0) for o in (0, 1)},
+            "dug_tiles": [[t[0], t[1]] for t in self.dug_tiles.get(viewer, {})] if viewer is not None else {str(o): [[t[0], t[1]] for t in self.dug_tiles.get(o, {})] for o in (0, 1)},
             "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "intended_target": list(ms.intended_target), "owner": ms.owner, "round_type": ms.round_type, "popped": ms.popped} for ms in self.mortar_shells],
             "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
             "projectiles": [{"x": p.x, "y": p.y, "dx": p.dx, "dy": p.dy, "owner": p.owner, "source": p.source, "will_hit": p.will_hit} for p in self.projectiles],
