@@ -998,17 +998,28 @@ class TopowarGameState:
         return self._soldier_effective_range(s, s.tile)
 
     def _is_concealed_by_elevation(self, shooter_tile: tuple[int, int], target_tile: tuple[int, int]) -> bool:
-        """Dead-ground concealment: target is concealed if it is adjacent to a tile at a higher
-        elevation than itself, and that tile is in the general direction of the shooter.
-        Only applies when shooter is at strictly higher elevation than the target AND the
-        target is dug into a trench — a unit standing in the open in dead ground is exposed
-        to plunging fire; only a trench hides it.
-        Exception: concealment does not apply if shooter is directly adjacent (8-connected) to target."""
+        """Dead-ground concealment for a trench target.
+
+        A trench is a depression in the ground. A shooter firing flat across open
+        ground cannot see into the trench pocket past its near lip, so a trench
+        enemy tucked behind that lip is in dead ground and cannot be hit from
+        ground level. A shooter up on a hill or mountain, by contrast, looks down
+        into the trench (plunging fire) and is unaffected.
+
+        Concealment therefore applies ONLY when all of these hold:
+          - the target is dug into a trench, AND
+          - the shooter is at ground level (flat trajectory), AND
+          - the shooter is not 8-adjacent (can't fire over the near lip at range), AND
+          - a tile higher than the trench sits adjacent to the target toward the
+            shooter (the lip). Firing straight down a trench's own axis is not
+            concealed (enfilade).
+
+        Hill/mountain shooters and trench-to-trench shooters bypass this entirely."""
         t_elev = self.map.elevation_at(target_tile)
         if t_elev != ELEV_TRENCH:
             return False
         s_elev = self.map.elevation_at(shooter_tile)
-        if s_elev <= t_elev:
+        if s_elev != ELEV_GROUND:
             return False
         tx, ty = target_tile
         sx, sy = shooter_tile
@@ -1038,6 +1049,22 @@ class TopowarGameState:
         if mg_elev == ELEV_HILL:
             return 17.0
         return 15.0
+
+    def _mg_can_fire_downhill(self, mg_tile: tuple[int, int], target_tile: tuple[int, int]) -> bool:
+        """Military-crest rule: an MG can engage a target at strictly lower elevation
+        only when its own tile steps down toward that target — i.e. the gun is sited
+        on the forward edge of the hill/mountain and can depress its barrel over the
+        lip. A gun set back on the plateau (the first tile toward the target is still
+        at the gun's own elevation) cannot rake that slope. Targets at the gun's own
+        elevation are unaffected by this rule."""
+        mg_elev = self.map.elevation_at(mg_tile)
+        tgt_elev = self.map.elevation_at(target_tile)
+        if tgt_elev >= mg_elev:
+            return True  # not a downhill shot — this rule does not restrict it
+        step = self._bresenham_first_step(mg_tile, target_tile)
+        if step is None:
+            return True
+        return self.map.elevation_at(step) < mg_elev
 
     def _degrade_tile(self, tile: tuple[int, int]) -> bool:
         """Lower tile one elevation level. Returns True if it just became a trench (collapse)."""
@@ -2321,6 +2348,8 @@ class TopowarGameState:
                     continue  # MG cannot fire at higher elevation
                 if sv_elev == ELEV_TRENCH and mg_elev > ELEV_TRENCH:
                     continue  # open-ground MG cannot see into trenches
+                if not self._mg_can_fire_downhill(mg.tile, sv.tile):
+                    continue  # set back from the crest — can't depress over the lip here
                 if not self._has_combat_los(mg.tile, sv.tile):
                     continue  # blocked by terrain above target's elevation
                 if self._is_concealed_by_elevation(mg.tile, sv.tile):
@@ -2357,6 +2386,7 @@ class TopowarGameState:
             tgt_elev = self.map.elevation_at(target)
             can_fire = (tgt_elev <= mg_elev
                         and not (tgt_elev == ELEV_TRENCH and mg_elev > ELEV_TRENCH)
+                        and self._mg_can_fire_downhill(mg.tile, target)
                         and self._has_combat_los(mg.tile, target)
                         and not self._is_concealed_by_elevation(mg.tile, target)
                         and not self._has_smoke_between(mg.tile, target, smoke_tiles))
