@@ -826,6 +826,7 @@ class GameStore:
             if t in {
                 "tw_order_mode",
                 "tw_assign_dig",
+                "tw_cancel_dig",
                 "tw_assign_build_mg",
                 "tw_toggle_operate_mg",
                 "tw_force_fire",
@@ -854,6 +855,7 @@ class GameStore:
                     "unit_ids",
                     "unit_id",
                     "plan",
+                    "tiles",
                     "tile",
                     "tile2",
                     "target",
