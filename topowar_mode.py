@@ -2356,7 +2356,13 @@ class TopowarGameState:
                             if best:
                                 s.path = best
                             else:
-                                # All approaches blocked — skip this dig tile and move to next
+                                # All approaches permanently blocked — evict from queue
+                                # so _assign_dig_jobs doesn't re-assign it every tick,
+                                # triggering a full Dijkstra flood per idle soldier.
+                                if task.get("auto"):
+                                    q = self.dig_jobs.get(s.owner, [])
+                                    if tgt in q:
+                                        q.remove(tgt)
                                 self._advance_dig_plan(s, task, pop_current=True)
                     continue
                 task["progress"] = task.get("progress", 0.0) + dt
@@ -3216,8 +3222,13 @@ class TopowarGameState:
             return
         dt_total = max(0.0, now_monotonic - self.last_tick_monotonic)
         step = 1.0 / max(1, self.rules.tick_rate)
+        # Cap catch-up to 10 s of game time. If the server was idle longer (e.g.
+        # a tab slept or the process paused), drop the excess ticks rather than
+        # running thousands of Dijkstra/combat passes in a single blocking call
+        # which would starve the async event loop.
+        max_loops = self.rules.tick_rate * 10
         loops = 0
-        while dt_total >= step and loops < 10_000:
+        while dt_total >= step and loops < max_loops:
             self.tick(step)
             dt_total -= step
             loops += 1
