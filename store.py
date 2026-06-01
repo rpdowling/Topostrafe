@@ -552,6 +552,12 @@ class GameStore:
             game.status = "finished"
             game.log.append(game.state.win_reason)
 
+    def advance_game(self, game_id: str) -> None:
+        with self.lock:
+            game = self.games.get(game_id)
+            if game and game.game_mode == "topowar" and game.status == "active":
+                game.state.advance_to_time(time.monotonic())
+
     def serialize(self, game_id: str, player_key: str | None) -> dict[str, Any]:
         with self.lock:
             self._prune_expired_open_games_locked()
