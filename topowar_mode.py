@@ -2219,7 +2219,7 @@ class TopowarGameState:
                 s for s in self.soldiers.values()
                 if s.hp > 0 and s.owner == owner
                 and s.squad_id is None and s.current_task is None
-                and not s.combat_halt
+                and not s.combat_halt and not s.is_officer
             ]
             for s in idle:
                 avail = [tile for tile in queue if tile not in claimed]
