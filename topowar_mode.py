@@ -1236,20 +1236,47 @@ class TopowarGameState:
 
     def _soldier_visible_to(self, target: "Soldier", viewer: int) -> bool:
         """Enemy in a trench: visible if a friendly trench soldier has LOS, or a friendly
-        soldier in the open is within rifle range (5 tiles) of the target."""
+        soldier in the open is within rifle range of the target. Open-ground enemies are
+        always visible.
+
+        Per-tick memoized: the set of spotted trench enemies is computed once per viewer
+        per tick and cached in _tick_cache. Soldier positions and hp are stable during the
+        combat phase (damage is applied later via projectile resolution), so the memo is
+        exact within a tick. This turns what was an O(n) friendly scan inside every
+        shooter×enemy pair — overall O(n^3) — into an O(1) lookup over an O(n^2) precompute."""
         if target.tile not in self.map.trenches:
             return True
+        cache = self._tick_cache.setdefault('visible_trench', {})
+        spotted = cache.get(viewer)
+        if spotted is None:
+            spotted = self._spotted_trench_enemies(viewer)
+            cache[viewer] = spotted
+        return target.unit_id in spotted
+
+    def _spotted_trench_enemies(self, viewer: int) -> set[int]:
+        """Unit ids of enemy soldiers in trenches currently spotted by `viewer`'s side."""
+        friends_trench: list[tuple[int, int]] = []
+        friends_open: list["Soldier"] = []
         for s in self.soldiers.values():
             if s.hp <= 0 or s.owner != viewer:
                 continue
             if s.tile in self.map.trenches:
-                if self._has_los_through_trenches(s.tile, target.tile):
-                    return True
+                friends_trench.append(s.tile)
             else:
-                # Soldier in the open can spot nearby enemies within rifle range
-                if math.dist(s.tile, target.tile) <= self._soldier_max_range(s):
-                    return True
-        return False
+                friends_open.append(s)
+        spotted: set[int] = set()
+        for target in self.soldiers.values():
+            if target.hp <= 0 or target.owner == viewer or target.tile not in self.map.trenches:
+                continue
+            seen = any(self._has_los_through_trenches(ft, target.tile) for ft in friends_trench)
+            if not seen:
+                seen = any(
+                    math.dist(s.tile, target.tile) <= self._soldier_max_range(s)
+                    for s in friends_open
+                )
+            if seen:
+                spotted.add(target.unit_id)
+        return spotted
 
     def _formation_positions(self, target: tuple[int, int], formation: str, count: int) -> list[tuple[int, int]]:
         """Return count distinct tile positions in the given formation centered near target.
