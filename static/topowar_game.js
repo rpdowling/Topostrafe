@@ -3458,7 +3458,7 @@ function render() {
     const digQueue = twD?.dig_jobs || [];
     const digSecs = twD?.rules?.dig_seconds_per_tile || 4;
     const mySoldiers = (twD?.soldiers || []).filter(s => s.owner === mySeat());
-    const diggers = mySoldiers.filter(s => !s.squad_id && (!s.task || s.task.type === 'dig')).length;
+    const diggers = mySoldiers.filter(s => !s.squad_id && !s.is_officer && (!s.task || s.task.type === 'dig')).length;
     if (digQueue.length) {
       const est = diggers > 0 ? Math.ceil(digQueue.length * digSecs / diggers) : '?';
       const bpRem = Math.ceil(twD?.build_phase_remaining || 0);
