@@ -61,7 +61,7 @@ class RulesConfig:
     grenade_windup_seconds: float = 3.0
     # Seconds a soldier is entangled while crossing a single barbed-wire tile.
     # During the crossing the soldier cannot shoot or throw grenades.
-    wire_cross_seconds: float = 15.0
+    wire_cross_seconds: float = 10.0
     generate_terrain: bool = True
 
 
@@ -323,9 +323,9 @@ class PathfindingService:
     TRENCH_DISCOUNT = 0.001
 
     # Extra cost of stepping onto a wire tile, in step-equivalents. Chosen to
-    # roughly match the ~15 s crossing time (≈ wire_cross_seconds * move_speed),
+    # roughly match the ~10 s crossing time (≈ wire_cross_seconds * move_speed),
     # so the path planner trades a wire crossing against a detour of equal time.
-    WIRE_STEP_COST = 18.0
+    WIRE_STEP_COST = 12.0
 
     def find_path(self, start: tuple[int, int], goal: tuple[int, int], trench_only: bool = False, blocked: set[tuple[int, int]] | None = None, stop_adjacent: bool = False) -> list[tuple[int, int]]:
         """Weighted shortest path (Dijkstra) over the 4-connected grid.
@@ -756,7 +756,7 @@ class TopowarGameState:
         if not hasattr(self.rules, "grenade_windup_seconds"):
             self.rules.grenade_windup_seconds = 3.0
         if not hasattr(self.rules, "wire_cross_seconds"):
-            self.rules.wire_cross_seconds = 15.0
+            self.rules.wire_cross_seconds = 10.0
         for s in self.soldiers.values():
             if not hasattr(s, "grenade_target"):
                 s.grenade_target = None
@@ -1540,8 +1540,8 @@ class TopowarGameState:
                     raise ValueError("Target is blocked by a mountain.")
             mortar.target = new_target
             mortar.ready = False
-            mortar.cooldown = 15.0
-            return "Mortar retargeted (15 s cooldown)."
+            mortar.cooldown = 20.0
+            return "Mortar retargeted (20 s cooldown)."
         if t == "tw_set_mortar_round":
             mid = int(action.get("mortar_id", -1))
             mortar = self.mortars.get(mid)
@@ -1558,8 +1558,8 @@ class TopowarGameState:
                 return "Round type unchanged."
             mortar.round_type = round_type
             mortar.ready = False
-            mortar.cooldown = 15.0
-            return f"Round type set to {round_type} (15 s cooldown)."
+            mortar.cooldown = 20.0
+            return f"Round type set to {round_type} (20 s cooldown)."
         if t == "tw_toggle_mortar_hold_fire":
             mid = int(action.get("mortar_id", -1))
             mortar = self.mortars.get(mid)
@@ -2064,12 +2064,13 @@ class TopowarGameState:
         s.blocked = False
         s.blocked_for = 0.0
         # One full tile-step takes (1 / (soldier_move_speed * terrain_mult)) seconds.
-        # Hill tiles cost 10% more time; mountain tiles cost 25% more time. Stepping
-        # ONTO a wire tile instead takes wire_cross_seconds: the soldier is entangled
-        # and cannot shoot or throw (crossing_wire) until the step completes.
-        crossing = target in self._wire_tile_set()
-        # If a replan flipped the next step between wire and open ground, restart
-        # the timer so a normal step never inherits the long wire timer (or vice-versa).
+        # Hill tiles cost 10% more time; mountain tiles cost 25% more time. A soldier
+        # already standing ON a wire tile takes wire_cross_seconds before exiting —
+        # they are visible on the wire and cannot shoot or throw (crossing_wire=True).
+        # Stepping onto a wire tile uses normal speed; the delay applies on departure.
+        crossing = s.tile in self._wire_tile_set()
+        # If the crossing state changed (e.g. arrived on wire or wire was removed),
+        # reset the timer so the new state gets its correct duration.
         if s.crossing_wire != crossing:
             s.move_cooldown = 0.0
         if s.move_cooldown <= 0.0:
@@ -2547,7 +2548,7 @@ class TopowarGameState:
             round_type=mortar.round_type,
         ))
         mortar.ready = False
-        mortar.cooldown = 15.0
+        mortar.cooldown = 20.0
 
     def _mortar_impact(self, landing: tuple[int, int], owner: int, airburst: bool = False):
         lx, ly = landing
