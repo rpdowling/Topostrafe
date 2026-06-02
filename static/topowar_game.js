@@ -1027,10 +1027,9 @@ board.addEventListener('click', (evt) => {
     } else if (myMortar) {
       selectedMortar = myMortar.structure_id; selectedMg = null; selectedUnits = new Set();
       if (myMortar.built) {
-        if (myMortar.ready && (myMortar.hold_fire ?? false)) {
+        if (myMortar.ready) {
           send({ type: 'tw_fire_mortar', mortar_id: myMortar.structure_id });
         } else {
-          // Auto-crew with the nearest 2 available soldiers.
           crewStructure('mortar', myMortar, 2);
         }
       }
@@ -2666,7 +2665,7 @@ function draw() {
       ctx.fillText('BUILD', mcx, tly + CELL - 2);
       ctx.textAlign = 'left';
     } else if (!mortar.ready) {
-      const cdFrac = 1 - mortar.cooldown / 15;
+      const cdFrac = 1 - mortar.cooldown / 10;
       ctx.fillStyle = '#222';
       ctx.fillRect(tlx + 2, tly + CELL + 1, CELL - 4, 3);
       ctx.fillStyle = '#f4a020';
@@ -3433,16 +3432,16 @@ function updateSelectionPanel() {
     const side = mortar.owner === 0 ? 'Red' : 'Blue';
     const hp = Math.round((mortar.hp / (mortar.hp_max || 10)) * 100);
     const ops = (mortar.operators || []).length;
-    const holdFire = mortar.hold_fire ?? false;
     let stateStr;
     if (!mortar.built) {
-      stateStr = `Building ${Math.round((mortar.build_progress / (mortar.build_required || 60)) * 100)}%`;
+      stateStr = `Building ${Math.round((mortar.build_progress / (mortar.build_required || 30)) * 100)}%`;
     } else if (mortar.ready) {
-      stateStr = holdFire
-        ? '<span style="color:#f4a020">READY — click to fire</span>'
-        : '<span style="color:#65e06f">READY — auto-firing</span>';
+      stateStr = '<span style="color:#f4a020">LOADED — click to fire</span>';
+    } else if (mortar.round_loaded) {
+      stateStr = `Aiming ${mortar.cooldown.toFixed(1)}s`;
     } else {
-      stateStr = `Reloading ${mortar.cooldown.toFixed(1)}s`;
+      const avail = (tw()?.mortar_ammo?.[String(mySeat())]?.[mortar.round_type] ?? 0);
+      stateStr = avail > 0 ? `Loading ${mortar.cooldown.toFixed(1)}s` : '<span style="color:#888">Out of ammo</span>';
     }
     const tgt = mortar.target ? `(${mortar.target[0]}, ${mortar.target[1]})` : '—';
     const operableTag = mortar.operable === false ? '<span class="sel-blocked">Inoperable: restore 3×3 ground</span>' : '';
@@ -3454,12 +3453,15 @@ function updateSelectionPanel() {
     const smDis = unlocked('smoke') ? '' : ' disabled';
     const abTitle = unlocked('airburst') ? '' : ` title="Unlocks at officer rank ${rankUnlock('airburst')}"`;
     const smTitle = unlocked('smoke') ? '' : ` title="Unlocks at officer rank ${rankUnlock('smoke')}"`;
+    const myAmmo = tw()?.mortar_ammo?.[String(mySeat())] || {};
+    const heCount = myAmmo.he ?? 0;
+    const abCount = myAmmo.airburst ?? 0;
+    const smCount = myAmmo.smoke ?? 0;
     const ammoRow = mortar.built && mortar.owner === mySeat() ? `
       <div class="sel-ammo-btns">
-        <button class="sel-ammo-btn${!isAirburst && !isSmoke ? ' active' : ''}" onclick="setMortarRound('he')">HE</button>
-        <button class="sel-ammo-btn${isAirburst ? ' active' : ''}${abLock}"${abDis}${abTitle} onclick="setMortarRound('airburst')">Airburst${unlocked('airburst') ? '' : ' 🔒'}</button>
-        <button class="sel-ammo-btn${isSmoke ? ' active' : ''}${smLock}"${smDis}${smTitle} onclick="setMortarRound('smoke')">Smoke${unlocked('smoke') ? '' : ' 🔒'}</button>
-        <button class="sel-ammo-btn${holdFire ? ' active' : ''}" onclick="toggleMortarHoldFire()">Hold Fire</button>
+        <button class="sel-ammo-btn${!isAirburst && !isSmoke ? ' active' : ''}" onclick="setMortarRound('he')">HE (${heCount})</button>
+        <button class="sel-ammo-btn${isAirburst ? ' active' : ''}${abLock}"${abDis}${abTitle} onclick="setMortarRound('airburst')">Airburst (${abCount})${unlocked('airburst') ? '' : ' 🔒'}</button>
+        <button class="sel-ammo-btn${isSmoke ? ' active' : ''}${smLock}"${smDis}${smTitle} onclick="setMortarRound('smoke')">Smoke (${smCount})${unlocked('smoke') ? '' : ' 🔒'}</button>
       </div>` : '';
     html = `
       <div class="sel-grid">
@@ -3691,6 +3693,17 @@ function render() {
   const f0 = el('flares0'), f1 = el('flares1');
   if (f0) f0.textContent = fr['0'] ?? 5;
   if (f1) f1.textContent = fr['1'] ?? 5;
+
+  const ma = tw()?.mortar_ammo || {};
+  const ma0 = ma['0'] || {}, ma1 = ma['1'] || {};
+  const ahe0 = el('ammo0-he'), aab0 = el('ammo0-ab'), asm0 = el('ammo0-sm');
+  const ahe1 = el('ammo1-he'), aab1 = el('ammo1-ab'), asm1 = el('ammo1-sm');
+  if (ahe0) ahe0.textContent = ma0.he ?? 5;
+  if (aab0) aab0.textContent = ma0.airburst ?? 0;
+  if (asm0) asm0.textContent = ma0.smoke ?? 0;
+  if (ahe1) ahe1.textContent = ma1.he ?? 5;
+  if (aab1) aab1.textContent = ma1.airburst ?? 0;
+  if (asm1) asm1.textContent = ma1.smoke ?? 0;
 
   const logEl = el('log');
   if (logEl) {
