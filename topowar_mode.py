@@ -176,7 +176,7 @@ class Mortar(Structure):
     hp: int = 10
     built: bool = False
     build_progress: float = 0.0
-    build_required: float = 60.0
+    build_required: float = 30.0
     target: tuple[int, int] | None = None
     ready: bool = False        # True when primed and crew can fire
     cooldown: float = 0.0      # shared reload / retarget cooldown (seconds remaining)
@@ -184,7 +184,8 @@ class Mortar(Structure):
     base_elevation: int = ELEV_GROUND
     operable: bool = True
     round_type: str = 'he'     # 'he', 'airburst', or 'smoke'
-    hold_fire: bool = False    # When True, only fires on player click; default is auto-fire
+    hold_fire: bool = False
+    round_loaded: bool = False  # True when a round has been consumed from the stockpile into the tube
 
 
 @dataclass
@@ -459,6 +460,7 @@ class TopowarGameState:
         self.flare_shells: list[FlareShell] = []
         self.smoke_sources: list[SmokeSource] = []
         self.flares_remaining: dict[int, int] = {0: 5, 1: 5}
+        self.mortar_ammo: dict[int, dict[str, int]] = {0: {"he": 5, "airburst": 0, "smoke": 0}, 1: {"he": 5, "airburst": 0, "smoke": 0}}
         self.build_sandbags_remaining: dict[int, int] = {0: 30, 1: 30}
         self.build_wire_remaining: dict[int, int] = {0: 40, 1: 40}
         self.projectiles: list[Projectile] = []
@@ -663,11 +665,22 @@ class TopowarGameState:
                     self._spawn_soldier(owner, tile, is_grenadier=is_grenadier, is_officer=need_officer)
                     return
 
+    def _resupply_mortar_ammo(self, owner: int):
+        ammo = self.mortar_ammo[owner]
+        ammo["he"] = ammo.get("he", 0) + 5
+        rank = self.officer_rank.get(owner, 0)
+        has_officer = self._has_command(owner)
+        if has_officer and rank >= RANK_AIRBURST:
+            ammo["airburst"] = ammo.get("airburst", 0) + 5
+        if has_officer and rank >= RANK_SMOKE:
+            ammo["smoke"] = ammo.get("smoke", 0) + 5
+
     def _try_spawn_recruits(self):
         for owner in (0, 1):
             if self.time_elapsed >= self.next_recruit_time[owner]:
                 self.next_recruit_time[owner] += 180.0
                 self._spawn_recruit(owner)
+                self._resupply_mortar_ammo(owner)
 
     def _occupied_tiles(self) -> dict[tuple[int, int], int]:
         return {s.tile: sid for sid, s in self.soldiers.items() if s.hp > 0}
@@ -1634,8 +1647,8 @@ class TopowarGameState:
                     raise ValueError("Target is blocked by a mountain.")
             mortar.target = new_target
             mortar.ready = False
-            mortar.cooldown = 20.0
-            return "Mortar retargeted (20 s cooldown)."
+            mortar.cooldown = 10.0
+            return "Mortar retargeted (10 s cooldown)."
         if t == "tw_set_mortar_round":
             mid = int(action.get("mortar_id", -1))
             mortar = self.mortars.get(mid)
@@ -1650,10 +1663,13 @@ class TopowarGameState:
                 raise ValueError(f"Smoke rounds unlock at officer rank {RANK_SMOKE}.")
             if mortar.round_type == round_type:
                 return "Round type unchanged."
+            if mortar.round_loaded:
+                self.mortar_ammo[owner][mortar.round_type] = self.mortar_ammo[owner].get(mortar.round_type, 0) + 1
+                mortar.round_loaded = False
             mortar.round_type = round_type
             mortar.ready = False
-            mortar.cooldown = 20.0
-            return f"Round type set to {round_type} (20 s cooldown)."
+            mortar.cooldown = 10.0
+            return f"Round type set to {round_type} (10 s cooldown)."
         if t == "tw_toggle_mortar_hold_fire":
             mid = int(action.get("mortar_id", -1))
             mortar = self.mortars.get(mid)
@@ -2572,8 +2588,9 @@ class TopowarGameState:
             mortar.target,
             round_type=mortar.round_type,
         ))
+        mortar.round_loaded = False
         mortar.ready = False
-        mortar.cooldown = 20.0
+        mortar.cooldown = 10.0
 
     def _mortar_impact(self, landing: tuple[int, int], owner: int, airburst: bool = False):
         lx, ly = landing
@@ -2750,15 +2767,15 @@ class TopowarGameState:
                 continue
             mortar.cooldown = max(0.0, mortar.cooldown - dt)
             if mortar.cooldown <= 0.0 and not mortar.ready:
-                mortar.ready = True
-            # Auto-fire when ready, target is set, and hold_fire is off
-            if (mortar.ready and not mortar.hold_fire and mortar.target
-                    and self.time_elapsed >= self.rules.build_phase_seconds):
-                live_crew = [s for s in self.soldiers.values()
-                             if s.hp > 0 and s.owner == mortar.owner
-                             and 0 < math.dist(s.tile, mortar.tile) <= 1.5]
-                if len(live_crew) >= 2:
-                    self._fire_mortar(mortar)
+                if mortar.round_loaded:
+                    mortar.ready = True  # round already in tube (e.g. after retarget)
+                else:
+                    avail = self.mortar_ammo[mortar.owner].get(mortar.round_type, 0)
+                    if avail > 0:
+                        self.mortar_ammo[mortar.owner][mortar.round_type] = avail - 1
+                        mortar.round_loaded = True
+                        mortar.ready = True
+                    # else: out of ammo for this round type — stays not ready
 
     def _update_mortar_shells(self, dt: float):
         remaining: list[MortarShell] = []
@@ -3265,6 +3282,7 @@ class TopowarGameState:
                 "operators": sorted(list(mortar.operators)),
                 "round_type": mortar.round_type,
                 "hold_fire": mortar.hold_fire,
+                "round_loaded": mortar.round_loaded,
             })
         sandbags_out = []
         for sb in self.sandbags.values():
@@ -3359,6 +3377,7 @@ class TopowarGameState:
             "command_available": {"0": self._has_command(0), "1": self._has_command(1)},
             "officer_rank": {"0": self.officer_rank.get(0, 0), "1": self.officer_rank.get(1, 0)},
             "airstrike_used": {"0": self.airstrike_used.get(0, False), "1": self.airstrike_used.get(1, False)},
+            "mortar_ammo": {"0": dict(self.mortar_ammo.get(0, {})), "1": dict(self.mortar_ammo.get(1, {}))},
             "rank_unlocks": {
                 "flares": RANK_FLARES, "grenades": RANK_GRENADES,
                 "airburst": RANK_AIRBURST, "smoke": RANK_SMOKE, "airstrike": RANK_AIRSTRIKE,
