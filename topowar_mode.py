@@ -2895,8 +2895,11 @@ class TopowarGameState:
                     continue
                 if not self._has_combat_los(s.tile, s2.tile):
                     continue
-                if self._is_concealed_by_elevation(s.tile, s2.tile):
-                    continue
+                # NB: no dead-ground concealment check here. A grenade is lobbed,
+                # not fired flat, so it arcs over the trench lip that conceals an
+                # entrenched enemy from rifle/MG fire — clearing trenches and cover
+                # is the grenadier's whole purpose. (_has_combat_los still blocks
+                # lobs through genuinely tall terrain such as mountains.)
                 if self._has_smoke_between(s.tile, s2.tile, smoke_tiles):
                     continue
                 if best is None or d2 < best[0]:
