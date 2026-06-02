@@ -66,6 +66,10 @@ class RulesConfig:
     # During the crossing the soldier cannot shoot or throw grenades.
     wire_cross_seconds: float = 10.0
     generate_terrain: bool = True
+    # When True (combat phase only), tiles your side has no line-of-sight to are
+    # fogged: enemy units/structures there are hidden and trenches render as open
+    # ground. Set False to fully restore the old always-visible behaviour.
+    fog_of_war: bool = True
 
 
 @dataclass
@@ -470,6 +474,8 @@ class TopowarGameState:
         self.last_tick_monotonic = 0.0
         self._name_pool: list[str] = []
         self.next_recruit_time: dict[int, float] = {0: 180.0, 1: 180.0}
+        # Per-side line-of-sight cache: owner -> (sources_signature, visible_tiles, time).
+        self._fog_cache: dict[int, tuple] = {}
         self._setup()
 
     def _setup(self):
@@ -850,6 +856,10 @@ class TopowarGameState:
             self.airstrikes = []
         if not hasattr(self, "mortar_ammo"):
             self.mortar_ammo = {0: {"he": 5, "airburst": 0, "smoke": 0}, 1: {"he": 5, "airburst": 0, "smoke": 0}}
+        if not hasattr(self, "_fog_cache"):
+            self._fog_cache = {}
+        if not hasattr(self.rules, "fog_of_war"):
+            self.rules.fog_of_war = True
 
     def _crew_positions_for_mg(self, mg: "MachineGun") -> list[tuple[int, int]]:
         """Tiles where crew can stand to operate this MG.
@@ -3045,6 +3055,73 @@ class TopowarGameState:
                             result.add(t)
         return result
 
+    def _visible_tiles_for(self, owner: int) -> set[tuple[int, int]] | None:
+        """Tiles `owner`'s side currently has terrain line-of-sight to.
+
+        Returns None as a fast-path sentinel meaning "everything is visible"
+        when the map has no elevation that can block sight. Cached per side and
+        recomputed only when the set of (tile, view-tier) of that side's living
+        soldiers changes, throttled to ~6.7 Hz — so a standoff costs nothing and
+        active movement stays bounded.
+        """
+        if not self.map.hills and not self.map.mountains:
+            return None  # no blockers anywhere → full visibility
+        sources = tuple(sorted(
+            (s.tile, max(self.map.elevation_at(s.tile), ELEV_GROUND))
+            for s in self.soldiers.values() if s.hp > 0 and s.owner == owner
+        ))
+        if not sources:
+            return set()  # no living soldiers → no eyes on the field
+        cached = self._fog_cache.get(owner)
+        if cached is not None:
+            c_sig, c_vis, c_time = cached
+            if c_sig == sources or (self.time_elapsed - c_time) < 0.15:
+                return c_vis
+        vis = self._compute_visible_tiles(sources)
+        self._fog_cache[owner] = (sources, vis, self.time_elapsed)
+        return vis
+
+    def _compute_visible_tiles(self, sources) -> set[tuple[int, int]]:
+        """Union of line-of-sight from each source, cast as Bresenham rays out to
+        the map perimeter. A ray marks tiles until it meets terrain higher than
+        the soldier's view tier (that blocking tile is itself visible; nothing
+        beyond it is). Trench/ground share a tier, so a ground or trench soldier
+        is blocked only by hills/mountains; a hill soldier sees over hills."""
+        W, H = self.map.width, self.map.height
+        elevation_at = self.map.elevation_at
+        visible: set[tuple[int, int]] = set()
+        perim: list[tuple[int, int]] = []
+        for x in range(W):
+            perim.append((x, 0))
+            perim.append((x, H - 1))
+        for y in range(1, H - 1):
+            perim.append((0, y))
+            perim.append((W - 1, y))
+        for (sx, sy), e_s in sources:
+            visible.add((sx, sy))
+            for px, py in perim:
+                dx = abs(px - sx)
+                dy = abs(py - sy)
+                stepx = 1 if px >= sx else -1
+                stepy = 1 if py >= sy else -1
+                err = dx - dy
+                cx, cy = sx, sy
+                while True:
+                    if cx != sx or cy != sy:
+                        visible.add((cx, cy))
+                        if elevation_at((cx, cy)) > e_s:
+                            break
+                    if cx == px and cy == py:
+                        break
+                    e2 = 2 * err
+                    if e2 > -dy:
+                        err -= dy
+                        cx += stepx
+                    if e2 < dx:
+                        err += dx
+                        cy += stepy
+        return visible
+
     def _update_flare_shells(self, dt: float):
         remaining: list[FlareShell] = []
         for shell in self.flare_shells:
@@ -3204,6 +3281,15 @@ class TopowarGameState:
         self._ensure_runtime_compat()
         in_build_phase = self.time_elapsed < self.rules.build_phase_seconds
         illuminated = self._illuminated_tiles()
+        # Line-of-sight fog (combat phase only; build phase keeps its own
+        # side-based hiding). visible_set is None when fog is off or the map has
+        # no blockers, in which case _fogged() never hides anything.
+        fog_active = (getattr(self.rules, "fog_of_war", True) and viewer is not None and not in_build_phase)
+        visible_set = self._visible_tiles_for(viewer) if fog_active else None
+
+        def _fogged(tile):
+            return visible_set is not None and tile not in visible_set and tile not in illuminated
+
         soldiers = []
         for s in self.soldiers.values():
             if s.hp <= 0:
@@ -3212,6 +3298,7 @@ class TopowarGameState:
                 hidden = (
                     (in_build_phase and not self._on_owner_side(viewer, s.tile))
                     or not self._soldier_visible_to(s, viewer)
+                    or _fogged(s.tile)
                 )
                 if hidden and (s.tile not in illuminated or s.tile in self._bunker_tile_set()):
                     continue
@@ -3246,8 +3333,11 @@ class TopowarGameState:
         for mg in self.mgs.values():
             if mg.hp <= 0:
                 continue
-            if viewer is not None and mg.owner != viewer and in_build_phase and not self._on_owner_side(viewer, mg.tile) and mg.tile not in illuminated:
-                continue
+            if viewer is not None and mg.owner != viewer:
+                if in_build_phase and not self._on_owner_side(viewer, mg.tile) and mg.tile not in illuminated:
+                    continue
+                if _fogged(mg.tile):
+                    continue
             mgs.append({
                 "structure_id": mg.structure_id,
                 "owner": mg.owner,
@@ -3273,6 +3363,8 @@ class TopowarGameState:
                     continue
                 if mortar.tile in self.map.trenches and not lit:
                     continue
+                if _fogged(mortar.tile):
+                    continue
             mortars_out.append({
                 "structure_id": mortar.structure_id,
                 "owner": mortar.owner,
@@ -3295,8 +3387,11 @@ class TopowarGameState:
         for sb in self.sandbags.values():
             if sb.hp <= 0:
                 continue
-            if viewer is not None and sb.owner != viewer and in_build_phase and not self._on_owner_side(viewer, sb.tile) and sb.tile not in illuminated:
-                continue
+            if viewer is not None and sb.owner != viewer:
+                if in_build_phase and not self._on_owner_side(viewer, sb.tile) and sb.tile not in illuminated:
+                    continue
+                if _fogged(sb.tile):
+                    continue
             sandbags_out.append({
                 "structure_id": sb.structure_id,
                 "owner": sb.owner,
@@ -3311,8 +3406,11 @@ class TopowarGameState:
         for b in self.bunkers.values():
             if b.hp <= 0:
                 continue
-            if viewer is not None and b.owner != viewer and in_build_phase and not self._on_owner_side(viewer, b.tile) and b.tile not in illuminated:
-                continue
+            if viewer is not None and b.owner != viewer:
+                if in_build_phase and not self._on_owner_side(viewer, b.tile) and b.tile not in illuminated:
+                    continue
+                if _fogged(b.tile):
+                    continue
             bunkers_out.append({
                 "structure_id": b.structure_id,
                 "owner": b.owner,
@@ -3323,8 +3421,11 @@ class TopowarGameState:
         for w in self.barbed_wire.values():
             if w.hp <= 0:
                 continue
-            if viewer is not None and w.owner != viewer and in_build_phase and not self._on_owner_side(viewer, w.tile) and w.tile not in illuminated:
-                continue
+            if viewer is not None and w.owner != viewer:
+                if in_build_phase and not self._on_owner_side(viewer, w.tile) and w.tile not in illuminated:
+                    continue
+                if _fogged(w.tile):
+                    continue
             wire_out.append({
                 "structure_id": w.structure_id,
                 "owner": w.owner,
@@ -3341,6 +3442,21 @@ class TopowarGameState:
             visible_trenches = {t for t in self.map.trenches if self._on_owner_side(viewer, t) or t in illuminated}
             visible_hills = {t for t in self.map.hills if self._on_owner_side(viewer, t) or t in illuminated}
             visible_mountains = {t for t in self.map.mountains if self._on_owner_side(viewer, t) or t in illuminated}
+        elif fog_active and visible_set is not None:
+            # Trenches you can't see render as plain ground; hills/mountains stay
+            # visible (they are the terrain landmarks that block the view).
+            visible_trenches = {t for t in self.map.trenches if t in visible_set or t in illuminated}
+
+        # Fogged tiles (combat LOS) for the client's dim overlay, as flat y*W+x
+        # indices. Empty when fog is off, in build phase, or the map has no blockers.
+        fog_tiles: list[int] = []
+        if fog_active and visible_set is not None:
+            Wd = self.map.width
+            for ty in range(self.map.height):
+                base = ty * Wd
+                for tx in range(Wd):
+                    if (tx, ty) not in visible_set and (tx, ty) not in illuminated:
+                        fog_tiles.append(base + tx)
         return {
             "rules": self.rules.__dict__.copy(),
             "build_phase_remaining": max(0.0, self.rules.build_phase_seconds - self.time_elapsed),
@@ -3352,6 +3468,7 @@ class TopowarGameState:
                 "hills": [list(t) for t in sorted(visible_hills)],
                 "mountains": [list(t) for t in sorted(visible_mountains)],
             },
+            "fog_tiles": fog_tiles,
             "soldiers": soldiers,
             "machine_guns": mgs,
             "mortars": mortars_out,

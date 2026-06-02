@@ -152,6 +152,10 @@ let lastStateTime = performance.now();
 let moveOrderPings = []; // {x, y, age} — brief confirmation ring at a move destination
 let smokeParticles = [];
 let smokeLayer = null;  // offscreen canvas for mortar puffs — caps stacking opacity
+let fogLayer = null;          // offscreen canvas: dim overlay for tiles with no LOS (rebuilt per state)
+let _lastSeenEnemies = new Map(); // unit_id -> {x, y, tile, is_grenadier, is_officer}
+let enemyGhosts = new Map();      // unit_id -> {x, y, is_grenadier, is_officer, bornAt} — fading last-seen markers
+const GHOST_MS = 4000;            // how long a last-seen ghost lingers before fading out
 let lastSmokeTick = performance.now();
 let poppedAirburstShells = new Set();
 let _prevMortarShellKeys = new Set();   // mortar-shell keys seen last state → detect new launches
@@ -314,6 +318,7 @@ function connect() {
       lastStateTime = performance.now();
       const newTw = state?.topowar;
       if (newTw?.map) rebuildElevMap(newTw.map);
+      if (newTw) { rebuildFogLayer(newTw); updateEnemyGhosts(newTw); }
       // Prune tactical boxes for squads that no longer exist or have no living members.
       for (const squadId of [...squadBoxes.keys()]) {
         if (!getSquad(squadId) || squadSoldierIds(squadId).length === 0) squadBoxes.delete(squadId);
@@ -1481,6 +1486,59 @@ function cpx(gx) { return OX + gx * CELL + CELL / 2; }
 function flipY(gy) {
   return (mySeat() === 1 && tw()) ? (tw().map.height - 1 - gy) : gy;
 }
+
+// Rebuild the fog-of-war dim overlay onto an offscreen canvas. Called once per
+// incoming state (not per frame), so the 60 fps loop just blits one image.
+function rebuildFogLayer(data) {
+  const fog = data?.fog_tiles || [];
+  if (!fog.length) { fogLayer = null; return; }
+  const W = data.map.width, H = data.map.height;
+  const lay = document.createElement('canvas');
+  lay.width = OX * 2 + W * CELL;
+  lay.height = OY * 2 + H * CELL;
+  const lctx = lay.getContext('2d');
+  lctx.fillStyle = 'rgba(10,12,16,0.40)';
+  const flip = mySeat() === 1;
+  for (const idx of fog) {
+    const x = idx % W;
+    const y = idx / W | 0;
+    const dy = flip ? (H - 1 - y) : y;
+    lctx.fillRect(OX + x * CELL, OY + dy * CELL, CELL - 1, CELL - 1);
+  }
+  fogLayer = lay;
+}
+
+// Track enemies that have slipped out of sight and keep a fading "last seen"
+// ghost wherever they were when their tile went dark. Re-spotting clears it;
+// an enemy that vanishes on a still-visible tile (i.e. it died) leaves none.
+function updateEnemyGhosts(data) {
+  const seat = mySeat();
+  if (seat !== 0 && seat !== 1) { _lastSeenEnemies.clear(); enemyGhosts.clear(); return; }
+  const W = data.map?.width || 0;
+  const fog = new Set(data.fog_tiles || []);
+  const now = performance.now();
+  const curIds = new Set();
+  for (const s of data.soldiers || []) {
+    if (s.owner === seat) continue;
+    curIds.add(s.unit_id);
+    _lastSeenEnemies.set(s.unit_id, { x: s.x, y: s.y, tile: s.tile, is_grenadier: s.is_grenadier, is_officer: s.is_officer });
+    enemyGhosts.delete(s.unit_id); // back in sight → drop any ghost
+  }
+  for (const [uid, info] of _lastSeenEnemies) {
+    if (curIds.has(uid)) continue;
+    const inFog = fog.has(info.tile[1] * W + info.tile[0]);
+    if (inFog) {
+      if (!enemyGhosts.has(uid)) {
+        enemyGhosts.set(uid, { x: info.x, y: info.y, is_grenadier: info.is_grenadier, is_officer: info.is_officer, bornAt: now });
+      }
+    } else {
+      _lastSeenEnemies.delete(uid); // last seen on a visible tile and now gone → killed/left, no ghost
+    }
+  }
+  for (const [uid, g] of enemyGhosts) {
+    if (now - g.bornAt > GHOST_MS) { enemyGhosts.delete(uid); _lastSeenEnemies.delete(uid); }
+  }
+}
 function cpy(gy) { return OY + flipY(gy) * CELL + CELL / 2; }
 // Top-left pixel y of a tile (integer or float game-y).
 function tileTop(gy) { return OY + Math.floor(flipY(gy)) * CELL; }
@@ -1839,6 +1897,10 @@ function draw() {
   // Slight global darken so muzzle flashes and flares feel more illuminating
   ctx.fillStyle = 'rgba(0,0,0,0.06)';
   ctx.fillRect(OX, OY, data.map.width * CELL, data.map.height * CELL);
+
+  // Fog of war: dim tiles with no friendly line-of-sight (combat phase). Drawn
+  // over terrain/trenches but before units — own units are never in fog.
+  if (fogLayer) ctx.drawImage(fogLayer, 0, 0);
 
   drawBuildPhaseOverlay(data);
 
@@ -2308,6 +2370,34 @@ function draw() {
           ctx.strokeRect(OX + ax * CELL + 0.5, tileTop(ay) + 0.5, CELL - 2, CELL - 2);
         }
       }
+    }
+  }
+
+  // Last-seen ghosts: faded markers for enemies that slipped into the fog.
+  if (enemyGhosts.size) {
+    const enemyOwner = mySeat() === 0 ? 1 : 0;
+    const ghostColor = enemyOwner === 0 ? '232,48,48' : '61,108,223';
+    const now = performance.now();
+    for (const [, g] of enemyGhosts) {
+      const a = Math.max(0, 1 - (now - g.bornAt) / GHOST_MS) * 0.5;
+      if (a <= 0.02) continue;
+      const gx = cpx(g.x), gy = cpy(g.y);
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.fillStyle = `rgba(${ghostColor},1)`;
+      ctx.beginPath();
+      ctx.arc(gx, gy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      // dashed ring + "?" to read as an uncertain last-known position
+      ctx.globalAlpha = a + 0.2;
+      ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath();
+      ctx.arc(gx, gy, 9, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
     }
   }
 
