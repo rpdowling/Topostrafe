@@ -821,6 +821,8 @@ class TopowarGameState:
                 mortar.base_elevation = ELEV_TRENCH if old else ELEV_GROUND
             if not hasattr(mortar, "operable"):
                 mortar.operable = True
+            if not hasattr(mortar, "round_loaded"):
+                mortar.round_loaded = False
         if not hasattr(self, "build_sandbags_remaining"):
             self.build_sandbags_remaining = {0: 0, 1: 0}
         if not hasattr(self, "build_wire_remaining"):
@@ -846,6 +848,8 @@ class TopowarGameState:
             self.airstrike_used = {0: False, 1: False}
         if not hasattr(self, "airstrikes"):
             self.airstrikes = []
+        if not hasattr(self, "mortar_ammo"):
+            self.mortar_ammo = {0: {"he": 5, "airburst": 0, "smoke": 0}, 1: {"he": 5, "airburst": 0, "smoke": 0}}
 
     def _crew_positions_for_mg(self, mg: "MachineGun") -> list[tuple[int, int]]:
         """Tiles where crew can stand to operate this MG.
@@ -2439,7 +2443,11 @@ class TopowarGameState:
             mortar.build_progress += dt
             if mortar.build_progress >= mortar.build_required:
                 mortar.built = True
-                mortar.ready = True
+                # Don't go ready directly — run the normal load cycle so the
+                # first round is pulled from the stockpile like any other.
+                mortar.ready = False
+                mortar.round_loaded = False
+                mortar.cooldown = 0.0
 
     def _update_mgs(self, dt: float):
         if self.time_elapsed < self.rules.build_phase_seconds:
