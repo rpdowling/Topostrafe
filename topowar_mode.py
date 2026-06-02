@@ -2033,7 +2033,7 @@ class TopowarGameState:
             else:
                 eligible = [
                     s for s in self.soldiers.values()
-                    if s.owner == owner and s.hp > 0 and s.squad_id is None
+                    if s.owner == owner and s.hp > 0 and s.squad_id is None and not s.is_officer
                 ]
                 eligible.sort(key=lambda s: math.dist(s.tile, target))
                 soldiers_to_move = eligible[:count]
@@ -3189,11 +3189,10 @@ class TopowarGameState:
             return
         dt_total = max(0.0, now_monotonic - self.last_tick_monotonic)
         step = 1.0 / max(1, self.rules.tick_rate)
-        # Cap catch-up to 10 s of game time. If the server was idle longer (e.g.
-        # a tab slept or the process paused), drop the excess ticks rather than
-        # running thousands of Dijkstra/combat passes in a single blocking call
-        # which would starve the async event loop.
-        max_loops = self.rules.tick_rate * 10
+        # Cap catch-up to 2 s of game time to bound the blocking time of a
+        # single synchronous call in the async event loop thread. Excess ticks
+        # are dropped rather than stalling all WebSocket connections.
+        max_loops = self.rules.tick_rate * 2
         loops = 0
         while dt_total >= step and loops < max_loops:
             self.tick(step)
