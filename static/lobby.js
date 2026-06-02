@@ -20,7 +20,7 @@ const topotakMapLabels = {
 const umDefaults = defaults.um_defaults || { board_width: 6, board_height: 6, max_corners: 1, board_color: "yellow", require_move_confirmation: false, infinite_board: true, size_preset: "small", time_limit_enabled: true, time_bank_seconds: 300, game_end_mode: "death", starting_nodes: 0 };
 const umBoardColors = defaults.um_board_colors || { yellow: "#e8cf52" };
 const umSizePresets = defaults.um_size_presets || { small: { board_width: 6, board_height: 6 }, medium: { board_width: 10, board_height: 10 }, large: { board_width: 20, board_height: 20 } };
-const topowarDefaults = defaults.topowar_defaults || { map_width: 30, map_height: 30, tick_rate: 20, match_time_seconds: 600, dig_seconds_per_tile: 5, mg_build_seconds: 30 };
+const topowarDefaults = defaults.topowar_defaults || { map_width: 30, map_height: 30, tick_rate: 20, match_time_seconds: 600, mg_build_seconds: 30 };
 
 function displayMapType(name) {
   return mapTypeLabels[name] || name;
@@ -103,7 +103,6 @@ function buildForm() {
   if (el('tw_tick_rate')) el('tw_tick_rate').value = String(topowarDefaults.tick_rate ?? 20);
   if (el('tw_match_minutes')) el('tw_match_minutes').value = String(((topowarDefaults.match_time_seconds ?? 600) / 60));
   if (el('tw_build_phase_minutes')) el('tw_build_phase_minutes').value = String(((topowarDefaults.build_phase_seconds ?? 180) / 60));
-  if (el('tw_dig_seconds')) el('tw_dig_seconds').value = String(topowarDefaults.dig_seconds_per_tile ?? 5);
   if (el('tw_mg_build_seconds')) el('tw_mg_build_seconds').value = String(topowarDefaults.mg_build_seconds ?? 30);
   if (el('tw_generate_terrain')) el('tw_generate_terrain').checked = topowarDefaults.generate_terrain !== false;
 }
@@ -317,7 +316,7 @@ function collectTopowarPayload() {
       tick_rate: Number(el('tw_tick_rate')?.value || 20),
       match_minutes: Number(el('tw_match_minutes')?.value || 10),
       build_phase_minutes: Number(el('tw_build_phase_minutes')?.value || 3),
-      dig_seconds_per_tile: Number(el('tw_dig_seconds')?.value || 5),
+
       mg_build_seconds: Number(el('tw_mg_build_seconds')?.value || 30),
       generate_terrain: el('tw_generate_terrain')?.checked !== false,
     },

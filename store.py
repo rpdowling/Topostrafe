@@ -152,7 +152,6 @@ class GameStore:
             map_height=max(12, min(80, int(raw.get("map_height", 30)))),
             default_elevation=max(1, min(5, int(raw.get("default_elevation", 4)))),
             tick_rate=max(5, min(60, int(raw.get("tick_rate", 20)))),
-            dig_seconds_per_tile=max(1.0, min(30.0, float(raw.get("dig_seconds_per_tile", 5.0)))),
             mg_build_seconds=max(5.0, min(120.0, float(raw.get("mg_build_seconds", 30.0)))),
             match_time_seconds=max(60, min(3600, int(float(raw.get("match_minutes", 20)) * 60))),
             build_phase_seconds=max(0, min(900, int(float(raw.get("build_phase_minutes", 3)) * 60))),
