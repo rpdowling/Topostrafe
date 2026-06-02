@@ -48,7 +48,6 @@ class RulesConfig:
     map_height: int = 40
     default_elevation: int = 4
     tick_rate: int = 20
-    dig_seconds_per_tile: float = 4.0
     mg_build_seconds: float = 30.0
     match_time_seconds: int = 1200
     build_phase_seconds: int = 120
@@ -2040,9 +2039,12 @@ class TopowarGameState:
                     s.tile, pos, trench_only=False, blocked=blocked_base - {s.tile}
                 )
 
-            # Squad management (only when NOT moving an existing squad)
-            if len(soldiers_to_move) > 1 and squad_id_arg is None:
-                # Remove soldiers from any existing squads
+            # Squad management (only when NOT moving an existing squad).
+            # Officers are excluded from squads — they move with formations but
+            # are not tracked as squad members (they have independent command).
+            squad_members = [s for s in soldiers_to_move if not s.is_officer]
+            if len(squad_members) > 1 and squad_id_arg is None:
+                # Remove all moved soldiers (including officer) from existing squads.
                 affected_old_squads: set[int] = set()
                 for s in soldiers_to_move:
                     if s.squad_id is not None:
@@ -2062,19 +2064,15 @@ class TopowarGameState:
                                     sol.squad_id = None
                             self.squads.pop(osqid, None)
 
-                # Create new squad; avoid reusing colors already active for this owner
-                has_officer = any(s.is_officer for s in soldiers_to_move)
-                if has_officer:
-                    color = 'gold'
-                else:
-                    used = {sq.color for sq in self.squads.values() if sq.owner == owner and sq.color != 'gold'}
-                    available = [c for c in SQUAD_COLORS if c not in used]
-                    color = self.random.choice(available if available else SQUAD_COLORS)
+                # Create new squad from non-officer soldiers only.
+                used = {sq.color for sq in self.squads.values() if sq.owner == owner and sq.color != 'gold'}
+                available = [c for c in SQUAD_COLORS if c not in used]
+                color = self.random.choice(available if available else SQUAD_COLORS)
                 sqid = self.next_squad_id
                 self.next_squad_id += 1
-                new_squad = Squad(sqid, owner, [s.unit_id for s in soldiers_to_move], color)
+                new_squad = Squad(sqid, owner, [s.unit_id for s in squad_members], color)
                 self.squads[sqid] = new_squad
-                for s in soldiers_to_move:
+                for s in squad_members:
                     s.squad_id = sqid
 
             return f"{len(soldiers_to_move)} soldier(s) moving in {formation} formation."
@@ -2370,6 +2368,19 @@ class TopowarGameState:
                         s.current_task = {"type": "build_wire", "wire_id": s.wire_queue.pop(0), "progress": 0.0}
                     else:
                         s.current_task = None
+
+        # Auto-cancel unbuilt MGs whose assigned builder has been killed or
+        # had their task changed. Any unbuilt MG with no living soldier actively
+        # holding a build_mg task for it is removed.
+        assigned_mg_ids: set[int] = {
+            int(s.current_task["mg_id"])
+            for s in self.soldiers.values()
+            if s.hp > 0 and s.current_task and s.current_task.get("type") == "build_mg"
+        }
+        for mg_id in list(self.mgs.keys()):
+            mg = self.mgs.get(mg_id)
+            if mg and mg.hp > 0 and not mg.built and mg_id not in assigned_mg_ids:
+                del self.mgs[mg_id]
 
     def _update_mortar_construction(self, dt: float):
         """Advance all unfinished mortars when at least two adjacent friendly soldiers are present.
