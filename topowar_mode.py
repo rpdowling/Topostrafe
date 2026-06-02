@@ -50,7 +50,7 @@ class RulesConfig:
     tick_rate: int = 20
     mg_build_seconds: float = 30.0
     match_time_seconds: int = 1200
-    build_phase_seconds: int = 120
+    build_phase_seconds: int = 180
     # Tiles each side may dig during the build phase. Digging is immediate and
     # only allowed before the build phase ends; each dug tile spends one from
     # this bank (erasing a dug tile refunds it).

@@ -65,11 +65,53 @@ function toggleBuildMusic() {
 
 // Unlock deferred play after first user interaction
 document.addEventListener('pointerdown', () => {
+  _ensureSfx();
   if (_musicPendingPlay && _musicEnabled && _wasBuildPhase) {
     _musicPendingPlay = false;
     startBuildMusic();
   }
 }, { capture: true });
+
+// === COMBAT SOUND EFFECTS ===
+// Each sound keeps a small pool of <audio> elements played round-robin, so
+// overlapping events (rapid gunfire, a cluster of explosions) can stack without
+// cutting one another off. The fixed pool size also caps how many copies of a
+// sound can play at once, which doubles as spam control in dense firefights.
+let _sfxEnabled = localStorage.getItem('tw_sfx_enabled') !== 'false';
+const _sfxDefs = {
+  rifle:           { src: '/static/sfx_rifle.wav',           volume: 0.22, pool: 4 },
+  mg:              { src: '/static/sfx_mg.wav',              volume: 0.30, pool: 4 },
+  mortar_fire:     { src: '/static/sfx_mortar_fire.wav',     volume: 0.50, pool: 3 },
+  mortar_incoming: { src: '/static/sfx_mortar_incoming.ogg', volume: 0.55, pool: 3 },
+  mortar_impact:   { src: '/static/sfx_mortar_impact.wav',   volume: 0.60, pool: 4 },
+};
+const _sfxPools = {};
+function _ensureSfx() {
+  if (Object.keys(_sfxPools).length) return;
+  for (const [name, def] of Object.entries(_sfxDefs)) {
+    const pool = [];
+    for (let i = 0; i < def.pool; i++) {
+      const a = new Audio(def.src);
+      a.volume = def.volume;
+      a.preload = 'auto';
+      pool.push(a);
+    }
+    _sfxPools[name] = { pool, idx: 0 };
+  }
+}
+function playSfx(name) {
+  if (!_sfxEnabled) return;
+  _ensureSfx();
+  const slot = _sfxPools[name];
+  if (!slot) return;
+  const a = slot.pool[slot.idx];
+  slot.idx = (slot.idx + 1) % slot.pool.length;
+  try {
+    a.currentTime = 0;
+    const p = a.play();
+    if (p && p.catch) p.catch(() => {});
+  } catch (e) { /* autoplay gated or not ready — ignore */ }
+}
 
 
 const playerKey = new URLSearchParams(window.location.search).get('player') || '';
@@ -101,6 +143,8 @@ let smokeParticles = [];
 let smokeLayer = null;  // offscreen canvas for mortar puffs — caps stacking opacity
 let lastSmokeTick = performance.now();
 let poppedAirburstShells = new Set();
+let _prevMortarShellKeys = new Set();   // mortar-shell keys seen last state → detect new launches
+let _mortarIncomingPlayed = new Set();  // shells that have triggered the 25%-flight incoming whistle
 let lastPanelHtml = '';
 let elevMap = new Map();
 const pendingWaypoints = new Map(); // unit_id → [[x,y],...] queued after current path
@@ -263,8 +307,10 @@ function connect() {
       }
       if (prevTw && newTw) {
         const prevPos = new Set((prevTw.explosions || []).map(e => `${Math.round(e.x)},${Math.round(e.y)}`));
+        let _impactSfx = 0;
         for (const ex of newTw.explosions || []) {
           if (!prevPos.has(`${Math.round(ex.x)},${Math.round(ex.y)}`)) {
+            if (_impactSfx++ < 3) playSfx('mortar_impact');
             if (ex.airburst) {
               const kr = ex.kill_radius || 3.0;
               const cx = Math.round(ex.x), cy = Math.round(ex.y);
@@ -302,6 +348,15 @@ function connect() {
         for (const k of poppedAirburstShells) {
           if (!activeShellKeys.has(k)) poppedAirburstShells.delete(k);
         }
+        // Mortar launch tell: any shell key not present last state is a fresh firing.
+        for (const k of activeShellKeys) {
+          if (!_prevMortarShellKeys.has(k)) playSfx('mortar_fire');
+        }
+        _prevMortarShellKeys = activeShellKeys;
+        // Forget the incoming-whistle mark for shells that have landed (key can recur).
+        for (const k of _mortarIncomingPlayed) {
+          if (!activeShellKeys.has(k)) _mortarIncomingPlayed.delete(k);
+        }
 
         // Hit/miss tells: new death_marks → kill spark; vanished projectiles → dirt puff
         const prevDmKeys = new Set((_prevProjectiles._dmKeys) || []);
@@ -329,6 +384,17 @@ function connect() {
             newProjSig[sig]--;
           }
         }
+        // Leftover positive sig counts are projectiles that appeared this state =
+        // shots just fired. Play a crack per new shot, capped so a volley doesn't roar.
+        let _rifleShots = 0, _mgShots = 0;
+        for (const sig in newProjSig) {
+          let n = newProjSig[sig];
+          if (n <= 0) continue;
+          const isMg = sig.split(',')[1] === 'mg';
+          while (n-- > 0) { if (isMg) _mgShots++; else _rifleShots++; }
+        }
+        for (let i = 0; i < Math.min(_rifleShots, 3); i++) playSfx('rifle');
+        for (let i = 0; i < Math.min(_mgShots, 2); i++) playSfx('mg');
         const nextPrev = [...(newTw.projectiles || [])];
         nextPrev._dmKeys = newDmKeys;
         _prevProjectiles = nextPrev;
@@ -2597,6 +2663,13 @@ function draw() {
       const totalDist = Math.hypot(ms.target[0] - ms.sx, ms.target[1] - ms.sy);
       const traveledDist = Math.hypot(ex - ms.sx, ey - ms.sy);
       const progress = totalDist > 0 ? Math.min(1, traveledDist / totalDist) : 0;
+
+      // Incoming whistle: fire once each shell is ~25% into its flight.
+      const incKey = `${ms.sx},${ms.sy},${ms.target[0]},${ms.target[1]}`;
+      if (progress >= 0.25 && !_mortarIncomingPlayed.has(incKey)) {
+        _mortarIncomingPlayed.add(incKey);
+        playSfx('mortar_incoming');
+      }
 
       if (ms.round_type === 'airburst') {
         const popKey = `${ms.sx},${ms.sy},${ms.target[0]},${ms.target[1]}`;
