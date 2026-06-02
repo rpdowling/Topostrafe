@@ -84,6 +84,10 @@ const _sfxDefs = {
   mortar_fire:     { src: '/static/sfx_mortar_fire.wav',     volume: 0.50, pool: 3 },
   mortar_incoming: { src: '/static/sfx_mortar_incoming.ogg', volume: 0.55, pool: 3 },
   mortar_impact:   { src: '/static/sfx_mortar_impact.wav',   volume: 0.60, pool: 4 },
+  grenade:         { src: '/static/sfx_grenade.wav',         volume: 0.55, pool: 3 },
+  death:           { src: '/static/sfx_death.wav',           volume: 0.40, pool: 4 },
+  flare:           { src: '/static/sfx_flare.m4a',           volume: 0.50, pool: 2 },
+  rank10:          { src: '/static/sfx_rank10.wav',          volume: 0.75, pool: 1 },
 };
 const _sfxPools = {};
 function _ensureSfx() {
@@ -111,6 +115,13 @@ function playSfx(name) {
     const p = a.play();
     if (p && p.catch) p.catch(() => {});
   } catch (e) { /* autoplay gated or not ready — ignore */ }
+}
+// Loaded duration (seconds) of a sound, or null until its metadata is ready.
+function _sfxDuration(name) {
+  const slot = _sfxPools[name];
+  if (!slot) return null;
+  const d = slot.pool[0].duration;
+  return (typeof d === 'number' && isFinite(d) && d > 0) ? d : null;
 }
 
 
@@ -144,7 +155,9 @@ let smokeLayer = null;  // offscreen canvas for mortar puffs — caps stacking o
 let lastSmokeTick = performance.now();
 let poppedAirburstShells = new Set();
 let _prevMortarShellKeys = new Set();   // mortar-shell keys seen last state → detect new launches
-let _mortarIncomingPlayed = new Set();  // shells that have triggered the 25%-flight incoming whistle
+let _mortarIncomingPlayed = new Set();  // shells that have triggered the incoming whistle
+let _prevFlareShellKeys = new Set();    // flare-shell keys seen last state → detect new flares
+let _prevMyRank = null;                  // my officer rank last state (null until first synced) → detect reaching rank 10
 let lastPanelHtml = '';
 let elevMap = new Map();
 const pendingWaypoints = new Map(); // unit_id → [[x,y],...] queued after current path
@@ -310,7 +323,10 @@ function connect() {
         let _impactSfx = 0;
         for (const ex of newTw.explosions || []) {
           if (!prevPos.has(`${Math.round(ex.x)},${Math.round(ex.y)}`)) {
-            if (_impactSfx++ < 3) playSfx('mortar_impact');
+            // Grenades get their own pop; mortar/airstrike HE shares the impact
+            // boom (capped so a cluster of shells doesn't stack into one roar).
+            if (ex.source === 'grenade') playSfx('grenade');
+            else if (_impactSfx++ < 3) playSfx('mortar_impact');
             if (ex.airburst) {
               const kr = ex.kill_radius || 3.0;
               const cx = Math.round(ex.x), cy = Math.round(ex.y);
@@ -358,13 +374,15 @@ function connect() {
           if (!activeShellKeys.has(k)) _mortarIncomingPlayed.delete(k);
         }
 
-        // Hit/miss tells: new death_marks → kill spark; vanished projectiles → dirt puff
+        // Hit/miss tells: new death_marks → kill spark + death cry; vanished projectiles → dirt puff
         const prevDmKeys = new Set((_prevProjectiles._dmKeys) || []);
         const newDmKeys = new Set((newTw.death_marks || []).map(dm => `${dm.x.toFixed(1)},${dm.y.toFixed(1)}`));
+        let _deathSfx = 0;
         for (const key of newDmKeys) {
           if (!prevDmKeys.has(key)) {
             const dm = (newTw.death_marks || []).find(d => `${d.x.toFixed(1)},${d.y.toFixed(1)}` === key);
             if (dm) spawnKillSpark(dm.x, dm.y);
+            if (_deathSfx++ < 2) playSfx('death');  // cap so a mass-casualty blast doesn't stack
           }
         }
         // Detect rifle/mg projectiles that vanished (not a kill) → dirt puff at last position
@@ -398,6 +416,18 @@ function connect() {
         const nextPrev = [...(newTw.projectiles || [])];
         nextPrev._dmKeys = newDmKeys;
         _prevProjectiles = nextPrev;
+
+        // Flare launch: a flare-shell key not present last state is a fresh flare.
+        const flareKeys = new Set((newTw.flare_shells || []).map(fs => `${fs.sx},${fs.sy},${fs.target[0]},${fs.target[1]}`));
+        for (const k of flareKeys) { if (!_prevFlareShellKeys.has(k)) playSfx('flare'); }
+        _prevFlareShellKeys = flareKeys;
+
+        // Fanfare when my own officer first reaches the top rank (airstrike unlocked).
+        // First synced state only sets the baseline, so joining a game already at
+        // rank 10 doesn't fire it.
+        const _myRankNow = newTw.officer_rank?.[String(mySeat())] ?? 0;
+        if (_prevMyRank !== null && _prevMyRank < 10 && _myRankNow >= 10) playSfx('rank10');
+        _prevMyRank = _myRankNow;
       }
       reconcilePendingBuildState();
       // Track build phase transitions for background music
@@ -2664,11 +2694,19 @@ function draw() {
       const traveledDist = Math.hypot(ex - ms.sx, ey - ms.sy);
       const progress = totalDist > 0 ? Math.min(1, traveledDist / totalDist) : 0;
 
-      // Incoming whistle: fire once each shell is ~25% into its flight.
+      // Incoming whistle: start it late enough that its tail lands with the
+      // shell. Trigger when the remaining flight time equals the clip length,
+      // i.e. progress >= 1 - clip/flightTime. Shell speed is 5.0 tiles/s (same
+      // constant the dead-reckoning above uses). O(1) per shell — no extra work.
       const incKey = `${ms.sx},${ms.sy},${ms.target[0]},${ms.target[1]}`;
-      if (progress >= 0.25 && !_mortarIncomingPlayed.has(incKey)) {
-        _mortarIncomingPlayed.add(incKey);
-        playSfx('mortar_incoming');
+      if (!_mortarIncomingPlayed.has(incKey)) {
+        const flightTime = totalDist / 5.0;
+        const incDur = _sfxDuration('mortar_incoming') || 1.68;
+        const startAt = flightTime > 0 ? Math.max(0, 1 - incDur / flightTime) : 0;
+        if (progress >= startAt) {
+          _mortarIncomingPlayed.add(incKey);
+          playSfx('mortar_incoming');
+        }
       }
 
       if (ms.round_type === 'airburst') {

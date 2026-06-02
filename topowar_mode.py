@@ -277,6 +277,9 @@ class Explosion:
     # Sent to client so it can restore them for the highlight LOS check.
     collapsed_trenches: tuple = ()
     airburst: bool = False
+    # Blast origin, so the client can pick the right impact sound:
+    # 'shell' (mortar/airstrike HE) or 'grenade'.
+    source: str = 'shell'
 
 
 @dataclass
@@ -2015,6 +2018,12 @@ class TopowarGameState:
                 eligible.sort(key=lambda s: math.dist(s.tile, target))
                 soldiers_to_move = eligible[:count]
 
+            # The officer never moves as part of a formation, squad, or
+            # "move nearest" order — he must be moved on his own via a
+            # single-unit move. Drop any officer from the group so box-selecting
+            # around him (or a no-selection move) leaves him in place.
+            soldiers_to_move = [s for s in soldiers_to_move if not s.is_officer]
+
             if not soldiers_to_move:
                 raise ValueError("No soldiers available to move.")
 
@@ -2838,7 +2847,7 @@ class TopowarGameState:
                 if self._has_bunker_cover_between(landing, s.tile):
                     continue
             self._register_kill(s, owner)
-        self.explosions.append(Explosion(float(landing[0]), float(landing[1]), kill_radius=kill_radius, landing_in_trench=(landing_elev == ELEV_TRENCH), landing_elev=landing_elev))
+        self.explosions.append(Explosion(float(landing[0]), float(landing[1]), kill_radius=kill_radius, landing_in_trench=(landing_elev == ELEV_TRENCH), landing_elev=landing_elev, source='grenade'))
 
     def _update_grenade_shells(self, dt: float):
         remaining: list[GrenadeShell] = []
@@ -2894,9 +2903,11 @@ class TopowarGameState:
                 continue
 
             # Acquire the nearest visible enemy that is in range but far enough
-            # away that the blast won't catch the thrower. Grenades use the
-            # dedicated (shorter) throw range, not the rifle range.
-            rng = self.rules.grenade_range
+            # away that the blast won't catch the thrower. Grenadiers throw to the
+            # same range a rifleman of their elevation shoots (ground 10 / hill 12
+            # / mountain 14), so they can lob from max range — where incoming fire
+            # is least accurate — rather than having to close to suicidal distance.
+            rng = self._soldier_effective_range(s, s.tile)
             best: tuple[float, "Soldier"] | None = None
             for s2 in self.soldiers.values():
                 if s2.hp <= 0 or s2.owner == s.owner:
@@ -3332,7 +3343,7 @@ class TopowarGameState:
             "mortar_shells": [{"x": ms.x, "y": ms.y, "sx": ms.sx, "sy": ms.sy, "target": list(ms.target), "intended_target": list(ms.intended_target), "owner": ms.owner, "round_type": ms.round_type, "popped": ms.popped} for ms in self.mortar_shells],
             "grenade_shells": [{"x": gs.x, "y": gs.y, "sx": gs.sx, "sy": gs.sy, "target": list(gs.target), "owner": gs.owner} for gs in self.grenade_shells],
             "projectiles": [{"x": p.x, "y": p.y, "dx": p.dx, "dy": p.dy, "owner": p.owner, "source": p.source, "will_hit": p.will_hit} for p in self.projectiles],
-            "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration, "kill_radius": e.kill_radius, "landing_in_trench": e.landing_in_trench, "landing_elev": e.landing_elev, "collapsed_trenches": [list(t) for t in e.collapsed_trenches], "airburst": e.airburst} for e in self.explosions],
+            "explosions": [{"x": e.x, "y": e.y, "age": e.age, "duration": e.duration, "kill_radius": e.kill_radius, "landing_in_trench": e.landing_in_trench, "landing_elev": e.landing_elev, "collapsed_trenches": [list(t) for t in e.collapsed_trenches], "airburst": e.airburst, "source": e.source} for e in self.explosions],
             "death_marks": [{"x": dm.x, "y": dm.y, "age": dm.age, "duration": dm.duration} for dm in self.death_marks],
             "muzzle_flashes": [{"x": mf.x, "y": mf.y, "dx": mf.dx, "dy": mf.dy, "owner": mf.owner, "age": mf.age, "duration": mf.duration} for mf in self.muzzle_flashes],
             "smoke_sources": [{"origin_x": ss.origin_x, "origin_y": ss.origin_y, "age": ss.age, "duration": ss.duration} for ss in self.smoke_sources],
