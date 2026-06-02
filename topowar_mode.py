@@ -986,10 +986,23 @@ class TopowarGameState:
         if a_surf > b_surf:
             threshold = a_surf - 1
         elif a_surf < b_surf:
-            threshold = b_surf  # same-level tiles at the target tier don't block uphill shots
+            # Symmetric with the downhill case: a tile at the target's (higher)
+            # tier blocks the uphill shot too. So a soldier set back behind a
+            # hill/mountain crest is hidden from a lower enemy exactly as it is
+            # itself unable to shoot down past that crest — the crest conceals
+            # both ways. Only a soldier on the forward edge (no same-tier crest
+            # on the line) is exposed, and then both sides can fire.
+            threshold = b_surf - 1
         else:
             threshold = a_surf
-        return self._has_terrain_los(a, b, threshold)
+        # Trace the sight line in a fixed endpoint order so the test is identical
+        # whichever soldier is the shooter. Bresenham can otherwise visit slightly
+        # different tiles A→B vs B→A near diagonals, which would let one soldier
+        # see/shoot the other but not vice-versa. The threshold above is already
+        # order-independent, and both endpoints are excluded from blocking, so
+        # canonicalising the order makes line-of-sight strictly mutual.
+        lo, hi = (a, b) if a <= b else (b, a)
+        return self._has_terrain_los(lo, hi, threshold)
 
     def _has_mortar_los(self, mortar_tile: tuple[int, int], target: tuple[int, int]) -> bool:
         """True if no mountain tile lies between mortar and target on the Bresenham line.
