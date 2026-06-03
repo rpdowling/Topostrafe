@@ -740,6 +740,10 @@ function dispatchSquadBox(squadId) {
   if (!box) return;
   const ids = squadSoldierIds(squadId);
   if (!ids.length) return;
+  // Tell the server about the zone so friendly pathfinding routes around a
+  // Kill Box (defend boxes carry no avoidance — they are sent as a clear).
+  send({ type: 'tw_set_squad_box', squad_id: squadId, kind: box.kind,
+         box: box.kind === 'killbox' ? [box.x0, box.y0, box.x1, box.y1] : null });
   const soldiers = ids.map(uid => {
     const s = (tw().soldiers || []).find(s => s.unit_id === uid);
     return { uid, x: s.x, y: s.y, range: s.range || 10 };
@@ -1368,6 +1372,7 @@ board.addEventListener('mousedown', (evt) => {
     if (hit.hit === 'x') {
       cancelSquadTravel(hit.squadId);
       squadBoxes.delete(hit.squadId);
+      send({ type: 'tw_set_squad_box', squad_id: hit.squadId, box: null });
       setStatus('Box removed — squad halted.');
       render();
       return;
