@@ -3086,7 +3086,13 @@ class TopowarGameState:
         the map perimeter. A ray marks tiles until it meets terrain higher than
         the soldier's view tier (that blocking tile is itself visible; nothing
         beyond it is). Trench/ground share a tier, so a ground or trench soldier
-        is blocked only by hills/mountains; a hill soldier sees over hills."""
+        is blocked only by hills/mountains; a hill soldier sees over hills.
+
+        Military crest rule: a soldier on elevated terrain (hill/mountain) can
+        only see past the first adjacent tile in a given direction if that tile
+        is lower than the soldier's elevation. If the first step is the same or
+        higher elevation, the soldier is behind the crest and vision is blocked
+        in that direction (the adjacent tile is still visible, nothing beyond)."""
         W, H = self.map.width, self.map.height
         elevation_at = self.map.elevation_at
         visible: set[tuple[int, int]] = set()
@@ -3099,6 +3105,7 @@ class TopowarGameState:
             perim.append((W - 1, y))
         for (sx, sy), e_s in sources:
             visible.add((sx, sy))
+            elevated = e_s > ELEV_GROUND
             for px, py in perim:
                 dx = abs(px - sx)
                 dy = abs(py - sy)
@@ -3106,10 +3113,16 @@ class TopowarGameState:
                 stepy = 1 if py >= sy else -1
                 err = dx - dy
                 cx, cy = sx, sy
+                first_step = True
                 while True:
                     if cx != sx or cy != sy:
                         visible.add((cx, cy))
-                        if elevation_at((cx, cy)) > e_s:
+                        e_tile = elevation_at((cx, cy))
+                        if first_step:
+                            first_step = False
+                            if elevated and e_tile >= e_s:
+                                break
+                        elif e_tile > e_s:
                             break
                     if cx == px and cy == py:
                         break
