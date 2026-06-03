@@ -3082,20 +3082,30 @@ class TopowarGameState:
         return vis
 
     def _compute_visible_tiles(self, sources) -> set[tuple[int, int]]:
-        """Union of line-of-sight from each source, cast as Bresenham rays out to
-        the map perimeter. A ray marks tiles until it meets terrain higher than
-        the soldier's view tier (that blocking tile is itself visible; nothing
-        beyond it is). Trench/ground share a tier, so a ground or trench soldier
-        is blocked only by hills/mountains; a hill soldier sees over hills.
+        """Union of line-of-sight from each source. Visibility has two parts:
 
-        Military crest rule: a soldier on elevated terrain (hill/mountain) can
-        only see past the first adjacent tile in a given direction if that tile
-        is lower than the soldier's elevation. If the first step is the same or
-        higher elevation, the soldier is behind the crest and vision is blocked
-        in that direction (the adjacent tile is still visible, nothing beyond)."""
+        1. Plateau: a soldier on elevated terrain (hill/mountain) sees the whole
+           contiguous patch of same-elevation tiles it stands on — every tile of
+           that mountain/hill top, regardless of plateau shape (flood fill).
+
+        2. Rays: Bresenham rays from the soldier out to the map perimeter mark
+           tiles until blocked. Same-elevation tiles are transparent (you see
+           across your own plateau); a tile higher than your view tier is the
+           last thing seen in that direction. Ground/trench soldiers share a
+           tier, so they are blocked only by hills/mountains — and they still
+           see the first (edge) hill/mountain tile a ray reaches, so a soldier
+           perched on a crest is mutually visible with the low ground below.
+
+           Military crest rule: an elevated soldier sees *down* a slope only when
+           standing on the crest — i.e. the drop is the very first step of the
+           ray. If the ground falls away only after crossing one or more plateau
+           tiles, that far slope is dead ground (the soldier is behind the
+           crest) and the ray stops at the plateau edge."""
         W, H = self.map.width, self.map.height
         elevation_at = self.map.elevation_at
         visible: set[tuple[int, int]] = set()
+        flooded: set[tuple[int, int]] = set()  # plateaus already flood-filled
+        _NEIGHBOURS = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
         perim: list[tuple[int, int]] = []
         for x in range(W):
             perim.append((x, 0))
@@ -3106,6 +3116,21 @@ class TopowarGameState:
         for (sx, sy), e_s in sources:
             visible.add((sx, sy))
             elevated = e_s > ELEV_GROUND
+            # (1) Whole same-elevation plateau the soldier stands on. Flood once
+            # per connected mass; other soldiers on it reuse the result.
+            if elevated and (sx, sy) not in flooded:
+                stack = [(sx, sy)]
+                flooded.add((sx, sy))
+                while stack:
+                    tx, ty = stack.pop()
+                    visible.add((tx, ty))
+                    for ddx, ddy in _NEIGHBOURS:
+                        nx, ny = tx + ddx, ty + ddy
+                        if (0 <= nx < W and 0 <= ny < H and (nx, ny) not in flooded
+                                and elevation_at((nx, ny)) == e_s):
+                            flooded.add((nx, ny))
+                            stack.append((nx, ny))
+            # (2) Bresenham rays from the soldier's own position.
             for px, py in perim:
                 dx = abs(px - sx)
                 dy = abs(py - sy)
@@ -3113,17 +3138,31 @@ class TopowarGameState:
                 stepy = 1 if py >= sy else -1
                 err = dx - dy
                 cx, cy = sx, sy
-                first_step = True
+                steps = 0
+                descended = False  # ray has dropped below the crest already
                 while True:
                     if cx != sx or cy != sy:
-                        visible.add((cx, cy))
+                        steps += 1
                         e_tile = elevation_at((cx, cy))
-                        if first_step:
-                            first_step = False
-                            if elevated and e_tile >= e_s:
+                        if descended:
+                            # past the crest: ordinary LOS down the far side
+                            visible.add((cx, cy))
+                            if e_tile > e_s:
                                 break
                         elif e_tile > e_s:
+                            visible.add((cx, cy))  # higher terrain: edge visible
                             break
+                        elif elevated and e_tile < e_s:
+                            # plateau drops away. Only the crest (drop on the
+                            # very first step) can see down; otherwise the edge
+                            # hides the dead ground beyond it.
+                            if steps == 1:
+                                visible.add((cx, cy))
+                                descended = True
+                            else:
+                                break
+                        else:
+                            visible.add((cx, cy))  # same tier / lower ground
                     if cx == px and cy == py:
                         break
                     e2 = 2 * err
