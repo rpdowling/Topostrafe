@@ -3170,17 +3170,24 @@ class TopowarGameState:
                             if e_tile > e_s:  # only mountains block hill soldiers
                                 break
                         else:
-                            # Ground/trench: hills visible, descents past the
-                            # hill top are not; mountains are edge-visible stop.
+                            # Ground/trench: hills are transparent (see up and
+                            # across all hill tops in LOS); the ray stops once it
+                            # would descend below the highest point crossed so
+                            # far, so you can't see past a hill crest to the
+                            # lower ground behind it. Trenches sit below ground
+                            # but neither block sight nor hide — treat them as
+                            # ground level for the crest test. Mountains are
+                            # edge-visible hard stops.
                             if e_tile >= ELEV_MOUNTAIN:
                                 visible.add((cx, cy))
                                 break
-                            elif e_tile < max_seen:
+                            e_eff = e_tile if e_tile > ELEV_GROUND else ELEV_GROUND
+                            if e_eff < max_seen:
                                 break  # ray drops below hill crest; stop here
                             else:
                                 visible.add((cx, cy))
-                                if e_tile > max_seen:
-                                    max_seen = e_tile
+                                if e_eff > max_seen:
+                                    max_seen = e_eff
                     if cx == px and cy == py:
                         break
                     e2 = 2 * err
