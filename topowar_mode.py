@@ -3134,10 +3134,18 @@ class TopowarGameState:
         """
         if not self.map.hills and not self.map.mountains:
             return None  # no blockers anywhere → full visibility
-        sources = tuple(sorted(
+        soldier_sources = [
             (s.tile, max(self.map.elevation_at(s.tile), ELEV_GROUND))
             for s in self.soldiers.values() if s.hp > 0 and s.owner == owner
-        ))
+        ]
+        live_soldiers = [s for s in self.soldiers.values() if s.hp > 0 and s.owner == owner]
+        mg_sources = [
+            (mg.tile, max(self.map.elevation_at(mg.tile), ELEV_GROUND))
+            for mg in self.mgs.values()
+            if mg.hp > 0 and mg.built and mg.owner == owner
+            and any(0 < math.dist(s.tile, mg.tile) <= 1.5 for s in live_soldiers)
+        ]
+        sources = tuple(sorted(soldier_sources + mg_sources))
         if not sources:
             return set()  # no living soldiers → no eyes on the field
         cached = self._fog_cache.get(owner)
