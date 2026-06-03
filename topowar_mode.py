@@ -338,7 +338,13 @@ class PathfindingService:
     # so the path planner trades a wire crossing against a detour of equal time.
     WIRE_STEP_COST = 12.0
 
-    def find_path(self, start: tuple[int, int], goal: tuple[int, int], trench_only: bool = False, blocked: set[tuple[int, int]] | None = None, stop_adjacent: bool = False) -> list[tuple[int, int]]:
+    # Extra cost of stepping onto a friendly Kill Box tile. High enough that a
+    # soldier reroutes around its own side's kill zone whenever a reasonable
+    # detour exists, but still passable (soft cost, not a hard block) so a
+    # soldier is never stranded when the only route runs through the box.
+    KILLBOX_STEP_COST = 3.0
+
+    def find_path(self, start: tuple[int, int], goal: tuple[int, int], trench_only: bool = False, blocked: set[tuple[int, int]] | None = None, stop_adjacent: bool = False, avoid: frozenset[tuple[int, int]] | None = None) -> list[tuple[int, int]]:
         """Weighted shortest path (Dijkstra) over the 4-connected grid.
 
         - `trench_only`: only step onto trench tiles (the goal itself is exempt).
@@ -346,6 +352,9 @@ class PathfindingService:
           can always reach it, even if currently occupied).
         - `stop_adjacent`: stop one tile short of the goal (used when the goal
           is an enemy unit we should not walk on top of).
+        - `avoid`: tiles that are passable but carry a high step cost, so the
+          planner routes around them when it reasonably can (friendly kill
+          boxes). The goal tile is exempt.
 
         Each step costs 1.0, minus a tiny discount when the destination tile is
         a trench, so that among equal-length routes the one that travels through
@@ -357,6 +366,7 @@ class PathfindingService:
             return [start]
         blocked = (blocked or set()) - {goal}
         wire = (self._wire_provider() if self._wire_provider else set())
+        avoid = avoid or frozenset()
 
         # (cost, insertion_order, tile) — insertion_order keeps expansion
         # deterministic and goal-directed (mirrors the old BFS neighbour order)
@@ -384,6 +394,8 @@ class PathfindingService:
                 step = 1.0 - (self.TRENCH_DISCOUNT if nt in self.grid.trenches else 0.0)
                 if nt in wire and nt != goal:
                     step += self.WIRE_STEP_COST
+                if nt in avoid and nt != goal:
+                    step += self.KILLBOX_STEP_COST
                 nd = d + step
                 if nd < dist.get(nt, float("inf")):
                     dist[nt] = nd
@@ -446,6 +458,10 @@ class TopowarGameState:
         self.next_structure_id = 1
         self.squads: dict[int, Squad] = {}
         self.next_squad_id: int = 1
+        # Active Kill Box zones, squad_id -> normalized (x0, y0, x1, y1) tile
+        # rect. A side's own soldiers route around these (they fire into them),
+        # so pathfinding treats friendly kill-box tiles as high-cost.
+        self.squad_boxes: dict[int, tuple[int, int, int, int]] = {}
         # Build-phase dig bank: tiles each side may dig (immediate). dug_tiles
         # records each dug tile's pre-dig elevation so an erase can restore the
         # terrain and refund the bank.
@@ -845,6 +861,8 @@ class TopowarGameState:
             self.squads = {}
         if not hasattr(self, "next_squad_id"):
             self.next_squad_id = 1
+        if not hasattr(self, "squad_boxes"):
+            self.squad_boxes = {}
         for s in self.soldiers.values():
             if not hasattr(s, "squad_id"):
                 s.squad_id = None
@@ -1500,7 +1518,7 @@ class TopowarGameState:
                 valid = True
                 for sid, spot in zip(chosen_ids, spots):
                     soldier = self.soldiers[sid]
-                    path = self.path.find_path(soldier.tile, spot, trench_only=False, blocked=occ - {soldier.tile})
+                    path = self._plan_path(soldier, spot, trench_only=False, blocked=occ - {soldier.tile})
                     if not path:
                         valid = False
                         break
@@ -1533,7 +1551,7 @@ class TopowarGameState:
                     s.current_task = {"type": "operate_mg", "mg_id": mg.structure_id}
                     if crew_spots and s.tile not in crew_spots:
                         goal = min(crew_spots, key=lambda t: math.dist(s.tile, t))
-                        s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=occ - {s.tile})
+                        s.path = self._plan_path(s, goal, trench_only=False, blocked=occ - {s.tile})
             return "MG operators updated."
         if t == "tw_assign_build_mortar":
             tile = tuple(map(int, action.get("tile", [])))
@@ -1603,7 +1621,7 @@ class TopowarGameState:
                     if not soldier or soldier.owner != owner:
                         valid = False
                         break
-                    path = self.path.find_path(soldier.tile, spot, trench_only=False, blocked=occ - {soldier.tile})
+                    path = self._plan_path(soldier, spot, trench_only=False, blocked=occ - {soldier.tile})
                     if not path:
                         valid = False
                         break
@@ -1713,7 +1731,7 @@ class TopowarGameState:
                     s.current_task = {"type": "operate_mortar", "mortar_id": mortar.structure_id}
                     if crew_spots and s.tile not in crew_spots:
                         goal = min(crew_spots, key=lambda tp: math.dist(s.tile, tp))
-                        s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=occ - {s.tile})
+                        s.path = self._plan_path(s, goal, trench_only=False, blocked=occ - {s.tile})
             return "Mortar crew updated."
         if t == "tw_assign_build_sandbag":
             sid = int(action.get("unit_id", -1))
@@ -1899,7 +1917,7 @@ class TopowarGameState:
             occ = set(self._occupied_tiles().keys()) | self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
             s.current_task = {"type": "move", "goal": list(target)}
             s.combat_halt = False
-            s.path = self.path.find_path(s.tile, target, trench_only=False, blocked=occ - {s.tile})
+            s.path = self._plan_path(s, target, trench_only=False, blocked=occ - {s.tile})
             return "Unit moving."
         if t == "tw_cancel_task":
             s = self.soldiers.get(int(action.get("unit_id", -1)))
@@ -2000,7 +2018,7 @@ class TopowarGameState:
             best_path: list | None = None
             best_spot: tuple | None = None
             for spot in build_positions:
-                path = self.path.find_path(s.tile, spot, trench_only=False, blocked=occ - {s.tile})
+                path = self._plan_path(s, spot, trench_only=False, blocked=occ - {s.tile})
                 if path and (best_path is None or len(path) < len(best_path)):
                     best_path = path
                     best_spot = spot
@@ -2087,8 +2105,8 @@ class TopowarGameState:
             for s, pos in assignments:
                 s.current_task = {"type": "move", "goal": list(pos)}
                 s.combat_halt = False
-                s.path = self.path.find_path(
-                    s.tile, pos, trench_only=False, blocked=blocked_base - {s.tile}
+                s.path = self._plan_path(
+                    s, pos, trench_only=False, blocked=blocked_base - {s.tile}
                 )
 
             # Squad management (only when NOT moving an existing squad).
@@ -2139,7 +2157,25 @@ class TopowarGameState:
                 if sol:
                     sol.squad_id = None
             self.squads.pop(sqid, None)
+            self.squad_boxes.pop(sqid, None)
+            self._tick_cache.pop("killbox", None)
             return "Squad disbanded."
+
+        if t == "tw_set_squad_box":
+            sqid = int(action.get("squad_id", -1))
+            squad = self.squads.get(sqid)
+            if not squad or squad.owner != owner:
+                raise ValueError("Invalid squad.")
+            box = action.get("box")
+            kind = action.get("kind", "killbox")
+            if box and kind == "killbox" and len(box) == 4:
+                x0, y0, x1, y1 = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
+                self.squad_boxes[sqid] = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+            else:
+                # Defend box, cleared box, or malformed payload: drop any zone.
+                self.squad_boxes.pop(sqid, None)
+            self._tick_cache.pop("killbox", None)  # force recompute next path
+            return "Kill box set."
 
         raise ValueError("Unknown Topowar action.")
 
@@ -2312,6 +2348,38 @@ class TopowarGameState:
             return False
         return not any(b.hp > 0 and b.tile == tile for b in self.bunkers.values())
 
+    def _killbox_tiles(self, owner: int) -> frozenset[tuple[int, int]]:
+        """Tiles inside `owner`'s active Kill Box zones — soft obstacles their
+        own soldiers route around. Cached per tick. Boxes whose squad has been
+        disbanded or wiped out are dropped here so stale zones never linger."""
+        cache = self._tick_cache.setdefault("killbox", {})
+        if owner in cache:
+            return cache[owner]
+        tiles: set[tuple[int, int]] = set()
+        for sqid, (x0, y0, x1, y1) in list(self.squad_boxes.items()):
+            squad = self.squads.get(sqid)
+            alive = squad and any(
+                self.soldiers.get(uid) and self.soldiers[uid].hp > 0
+                for uid in squad.soldier_ids
+            )
+            if not alive:
+                self.squad_boxes.pop(sqid, None)
+                continue
+            if squad.owner != owner:
+                continue
+            for x in range(x0, x1 + 1):
+                for y in range(y0, y1 + 1):
+                    tiles.add((x, y))
+        result = frozenset(tiles)
+        cache[owner] = result
+        return result
+
+    def _plan_path(self, soldier: "Soldier", goal: tuple[int, int], **kwargs) -> list[tuple[int, int]]:
+        """find_path from a soldier's tile, routing around its own kill boxes."""
+        kwargs["avoid"] = self._killbox_tiles(soldier.owner)
+        start = soldier.tile
+        return self.path.find_path(start, goal, **kwargs)
+
     def _update_tasks(self, dt: float):
         occ = self._occupied_tiles()
         # Static structure tiles never move, so a soldier whose current path runs
@@ -2337,7 +2405,7 @@ class TopowarGameState:
                     continue
                 path_hits_structure = any(t in structure_blockers for t in s.path)
                 if not s.path or s.path[-1] != goal or path_hits_structure or (s.blocked and s.blocked_for >= 0.3):
-                    s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
+                    s.path = self._plan_path(s, goal, trench_only=False, blocked=blocked_keys - {s.tile})
             elif task["type"] == "build_mg":
                 mg = self.mgs.get(task["mg_id"])
                 if not mg or mg.hp <= 0 or mg.built:
@@ -2346,14 +2414,14 @@ class TopowarGameState:
                 build_tile = tuple(task.get("build_tile", s.tile))
                 if s.tile != build_tile:
                     if not s.path:
-                        s.path = self.path.find_path(s.tile, build_tile, trench_only=False, blocked=blocked_keys - {s.tile})
+                        s.path = self._plan_path(s, build_tile, trench_only=False, blocked=blocked_keys - {s.tile})
                         if not s.path:
                             # Primary build position unreachable — try alternatives
                             for spot in sorted(self._build_positions_for_mg(mg.tile),
                                                key=lambda g: math.dist(s.tile, g)):
                                 if list(spot) == task.get("build_tile"):
                                     continue
-                                p = self.path.find_path(s.tile, spot, trench_only=False, blocked=blocked_keys - {s.tile})
+                                p = self._plan_path(s, spot, trench_only=False, blocked=blocked_keys - {s.tile})
                                 if p:
                                     task["build_tile"] = list(spot)
                                     s.path = p
@@ -2371,7 +2439,7 @@ class TopowarGameState:
                 crew_spots = self._crew_positions_for_mg(mg)
                 if crew_spots and s.tile not in crew_spots:
                     goal = min(crew_spots, key=lambda t: math.dist(s.tile, t))
-                    s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
+                    s.path = self._plan_path(s, goal, trench_only=False, blocked=blocked_keys - {s.tile})
             elif task["type"] == "build_mortar":
                 mortar = self.mortars.get(task["mortar_id"])
                 if not mortar or mortar.hp <= 0 or mortar.built:
@@ -2379,7 +2447,7 @@ class TopowarGameState:
                     continue
                 build_tile = tuple(task.get("build_tile", s.tile))
                 if s.tile != build_tile:
-                    s.path = self.path.find_path(s.tile, build_tile, trench_only=False, blocked=blocked_keys - {s.tile})
+                    s.path = self._plan_path(s, build_tile, trench_only=False, blocked=blocked_keys - {s.tile})
             elif task["type"] == "operate_mortar":
                 mortar = self.mortars.get(task["mortar_id"])
                 if not mortar or mortar.hp <= 0 or not mortar.built:
@@ -2388,7 +2456,7 @@ class TopowarGameState:
                 crew_spots = self._crew_positions_for_mortar(mortar)
                 if crew_spots and s.tile not in crew_spots:
                     goal = min(crew_spots, key=lambda t: math.dist(s.tile, t))
-                    s.path = self.path.find_path(s.tile, goal, trench_only=False, blocked=blocked_keys - {s.tile})
+                    s.path = self._plan_path(s, goal, trench_only=False, blocked=blocked_keys - {s.tile})
             elif task["type"] == "build_sandbag":
                 sb = self.sandbags.get(task["sandbag_id"])
                 if not sb or sb.hp <= 0 or sb.built:
@@ -3092,8 +3160,10 @@ class TopowarGameState:
             the whole plateau but no dead ground beyond its edges.
 
         Hill soldiers (e_s == ELEV_HILL):
-          - Flood-fill reveals the entire connected hill patch they stand on.
-          - Rays: hills are transparent, only mountains block.
+          - Pure line of sight (no global reveal): rays treat hills/ground as
+            transparent and stop at mountains, so a hill is hidden when a
+            mountain sits between it and the soldier — even part of the same
+            connected hill ring that wraps around the mountain.
 
         Ground / trench soldiers (e_s == ELEV_GROUND):
           - Rays: hills are transparent (see TO the top of all visible hills),
@@ -3104,9 +3174,7 @@ class TopowarGameState:
         W, H = self.map.width, self.map.height
         elevation_at = self.map.elevation_at
         visible: set[tuple[int, int]] = set()
-        flooded: set[tuple[int, int]] = set()  # connected hill patches already done
         mountains_revealed = False             # global mountain reveal done once
-        _NEIGHBOURS = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
         perim: list[tuple[int, int]] = []
         for x in range(W):
             perim.append((x, 0))
@@ -3118,22 +3186,15 @@ class TopowarGameState:
             visible.add((sx, sy))
             on_mountain = e_s >= ELEV_MOUNTAIN
             on_hill = (not on_mountain) and e_s > ELEV_GROUND
-            # --- Plateau / global reveal ---
+            # --- Global mountain reveal ---
+            # Standing on a mountain reveals all mountain tiles on the board:
+            # high ground is globally visible. Hills are NOT globally revealed —
+            # they obey line of sight (their rays stop at mountains), so a hill
+            # behind a mountain stays fogged even when it is part of the same
+            # connected hill ring the soldier stands on.
             if on_mountain and not mountains_revealed:
                 visible.update(self.map.mountains)
                 mountains_revealed = True
-            elif on_hill and (sx, sy) not in flooded:
-                stack = [(sx, sy)]
-                flooded.add((sx, sy))
-                while stack:
-                    tx, ty = stack.pop()
-                    visible.add((tx, ty))
-                    for ddx, ddy in _NEIGHBOURS:
-                        nx, ny = tx + ddx, ty + ddy
-                        if (0 <= nx < W and 0 <= ny < H and (nx, ny) not in flooded
-                                and elevation_at((nx, ny)) == e_s):
-                            flooded.add((nx, ny))
-                            stack.append((nx, ny))
             # --- Bresenham rays ---
             for px, py in perim:
                 dx = abs(px - sx)
