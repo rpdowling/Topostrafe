@@ -59,6 +59,16 @@ class RulesConfig:
     starting_troops: int = 20
     # Soldiers move discretely: one tile per (1 / soldier_move_speed) seconds.
     soldier_move_speed: float = 1.25
+    # When a squad or formation is ordered to move, its soldiers depart in a
+    # staggered wave instead of all at once: the soldier nearest its destination
+    # steps off first and each one farther back waits this many extra seconds per
+    # rank. This keeps a column from piling up nose-to-tail (every soldier blocked
+    # by the one ahead, constantly replanning) and makes group travel flow. Set
+    # to 0 to disable and have the whole group start simultaneously. ~0.6s is a
+    # touch under one ground step, enough that a trailing soldier's tile has been
+    # vacated before it gets there — so it glides forward instead of stalling for
+    # long enough (0.3s) to give up and replan a detour around its own comrade.
+    formation_stagger_seconds: float = 0.6
     projectile_speed: float = 8.0
     grenade_range: float = 7.0
     grenade_windup_seconds: float = 3.0
@@ -122,6 +132,10 @@ class Soldier(Unit):
     # Seconds remaining until the soldier completes the current step in
     # `path`. While > 0 the soldier is still on its current tile.
     move_cooldown: float = 0.0
+    # One-time departure delay used to stagger squad/formation moves so soldiers
+    # set off in a wave (nearest first) rather than all at once. Counts down to 0
+    # on its own; while > 0 the soldier holds its tile before its first step.
+    move_delay: float = 0.0
     name: str = ""
     combat_halt: bool = False
     is_grenadier: bool = False
@@ -344,7 +358,16 @@ class PathfindingService:
     # soldier is never stranded when the only route runs through the box.
     KILLBOX_STEP_COST = 3.0
 
-    def find_path(self, start: tuple[int, int], goal: tuple[int, int], trench_only: bool = False, blocked: set[tuple[int, int]] | None = None, stop_adjacent: bool = False, avoid: frozenset[tuple[int, int]] | None = None) -> list[tuple[int, int]]:
+    # Extra cost of stepping onto a tile the enemy currently has line of sight
+    # to. A mild preference for concealment: soldiers favour dead ground and
+    # routes screened by terrain, but still cross open ground when hugging cover
+    # would mean a much longer march. Tune up for more cautious, hug-the-terrain
+    # movement; tune toward 0 to disable the preference. At 0.5 a soldier accepts
+    # a fully-concealed detour up to ~1.5x the length of a fully-exposed straight
+    # line.
+    EXPOSED_STEP_COST = 0.5
+
+    def find_path(self, start: tuple[int, int], goal: tuple[int, int], trench_only: bool = False, blocked: set[tuple[int, int]] | None = None, stop_adjacent: bool = False, avoid: frozenset[tuple[int, int]] | None = None, expose: frozenset[tuple[int, int]] | None = None) -> list[tuple[int, int]]:
         """Weighted shortest path (Dijkstra) over the 4-connected grid.
 
         - `trench_only`: only step onto trench tiles (the goal itself is exempt).
@@ -355,6 +378,8 @@ class PathfindingService:
         - `avoid`: tiles that are passable but carry a high step cost, so the
           planner routes around them when it reasonably can (friendly kill
           boxes). The goal tile is exempt.
+        - `expose`: tiles the enemy can currently see; each carries a small extra
+          step cost so the planner prefers concealed routes. The goal is exempt.
 
         Each step costs 1.0, minus a tiny discount when the destination tile is
         a trench, so that among equal-length routes the one that travels through
@@ -367,6 +392,7 @@ class PathfindingService:
         blocked = (blocked or set()) - {goal}
         wire = (self._wire_provider() if self._wire_provider else set())
         avoid = avoid or frozenset()
+        expose = expose or frozenset()
 
         # (cost, insertion_order, tile) — insertion_order keeps expansion
         # deterministic and goal-directed (mirrors the old BFS neighbour order)
@@ -396,6 +422,8 @@ class PathfindingService:
                     step += self.WIRE_STEP_COST
                 if nt in avoid and nt != goal:
                     step += self.KILLBOX_STEP_COST
+                if nt in expose and nt != goal:
+                    step += self.EXPOSED_STEP_COST
                 nd = d + step
                 if nd < dist.get(nt, float("inf")):
                     dist[nt] = nd
@@ -878,6 +906,11 @@ class TopowarGameState:
             self._fog_cache = {}
         if not hasattr(self.rules, "fog_of_war"):
             self.rules.fog_of_war = True
+        if not hasattr(self.rules, "formation_stagger_seconds"):
+            self.rules.formation_stagger_seconds = 0.6
+        for s in self.soldiers.values():
+            if not hasattr(s, "move_delay"):
+                s.move_delay = 0.0
 
     def _crew_positions_for_mg(self, mg: "MachineGun") -> list[tuple[int, int]]:
         """Tiles where crew can stand to operate this MG.
@@ -1183,12 +1216,24 @@ class TopowarGameState:
         if elev == ELEV_MOUNTAIN:
             self.map.mountains.discard(tile)
             self.map.hills.add(tile)
+            self._invalidate_fog_cache()
         elif elev == ELEV_HILL:
             self.map.hills.discard(tile)
+            self._invalidate_fog_cache()
         elif elev == ELEV_GROUND:
             self.map.trenches.add(tile)
             return True
         return False
+
+    def _invalidate_fog_cache(self):
+        """Drop the per-side line-of-sight cache so the next serialize recomputes
+        it. Must be called whenever terrain that blocks sight (a hill or mountain)
+        is created or destroyed: the cache is keyed on the *sources* (soldier/MG
+        positions and view tiers), so a mortar that flattens a ridge without
+        moving anyone would otherwise leave both sides looking at stale fog —
+        an enemy that should now be exposed (or newly hidden) stays wrong until
+        someone happens to move."""
+        self._fog_cache.clear()
 
     def _trench_component(self, start: tuple[int, int]) -> set[tuple[int, int]]:
         """4-connected flood fill over trench tiles starting from start."""
@@ -1917,6 +1962,7 @@ class TopowarGameState:
             occ = set(self._occupied_tiles().keys()) | self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
             s.current_task = {"type": "move", "goal": list(target)}
             s.combat_halt = False
+            s.move_delay = 0.0  # a single-unit move never waits on a formation stagger
             s.path = self._plan_path(s, target, trench_only=False, blocked=occ - {s.tile})
             return "Unit moving."
         if t == "tw_cancel_task":
@@ -2105,9 +2151,23 @@ class TopowarGameState:
             for s, pos in assignments:
                 s.current_task = {"type": "move", "goal": list(pos)}
                 s.combat_halt = False
+                s.move_delay = 0.0
                 s.path = self._plan_path(
                     s, pos, trench_only=False, blocked=blocked_base - {s.tile}
                 )
+
+            # Stagger the departure so the group flows instead of jamming: order
+            # soldiers by how far they have to travel and let the nearest set off
+            # first, each one farther back waiting an extra step's worth of time.
+            # By the time a trailing soldier moves, the one ahead has cleared the
+            # tile it needs, so it rarely blocks-and-replans. (A soldier already
+            # standing on its target gets an empty path and no delay.)
+            stagger = max(0.0, self.rules.formation_stagger_seconds)
+            if stagger > 0.0:
+                movers = [s for s, _ in assignments if s.path and s.tile != tuple(s.current_task["goal"])]
+                movers.sort(key=lambda s: len(s.path))
+                for rank, s in enumerate(movers):
+                    s.move_delay = rank * stagger
 
             # Squad management (only when NOT moving an existing squad).
             # Officers are excluded from squads — they move with formations but
@@ -2182,6 +2242,14 @@ class TopowarGameState:
     def _move_soldier(self, s: Soldier, dt: float):
         # Combat-halted soldiers hold position.
         if s.combat_halt or s.grenade_windup > 0:
+            s.move_cooldown = 0.0
+            return
+        # Staggered formation departure: hold this tile until the delay elapses
+        # (checked before the blocked test below so a soldier waiting its turn is
+        # not mistaken for one jammed behind a comrade and made to replan).
+        if s.move_delay > 0.0:
+            s.move_delay -= dt
+            s.blocked = False
             s.move_cooldown = 0.0
             return
         # Drop any path step that points to the tile we're already on.
@@ -2375,10 +2443,23 @@ class TopowarGameState:
         return result
 
     def _plan_path(self, soldier: "Soldier", goal: tuple[int, int], **kwargs) -> list[tuple[int, int]]:
-        """find_path from a soldier's tile, routing around its own kill boxes."""
+        """find_path from a soldier's tile, routing around its own kill boxes and
+        favouring tiles the enemy cannot currently see."""
         kwargs["avoid"] = self._killbox_tiles(soldier.owner)
+        kwargs.setdefault("expose", self._enemy_visible_tiles(soldier.owner))
         start = soldier.tile
         return self.path.find_path(start, goal, **kwargs)
+
+    def _enemy_visible_tiles(self, owner: int) -> frozenset[tuple[int, int]]:
+        """Tiles the opposing side currently has line of sight to — the squares a
+        soldier of `owner` would be exposed on. Pathfinding treats these as a
+        mild soft cost so soldiers prefer concealed routes. Empty when the enemy
+        can see everywhere (a map with no sight-blocking terrain), since then no
+        route is any more concealed than another."""
+        enemy_vis = self._visible_tiles_for(1 - owner)
+        if enemy_vis is None:
+            return frozenset()
+        return frozenset(enemy_vis)
 
     def _update_tasks(self, dt: float):
         occ = self._occupied_tiles()
@@ -3213,6 +3294,7 @@ class TopowarGameState:
                 cx, cy = sx, sy
                 steps = 0
                 descended = False   # mountain crest rule: ray has passed the edge
+                descend_floor = e_s # lowest ground seen since dropping off the crest
                 max_seen = e_s      # ground-soldier hill-crest rule: peak so far
                 while True:
                     if cx != sx or cy != sy:
@@ -3220,9 +3302,23 @@ class TopowarGameState:
                         e_tile = elevation_at((cx, cy))
                         if on_mountain:
                             if descended:
+                                # Past the crest, looking down the far side with
+                                # ordinary line of sight: keep seeing while the
+                                # ground falls away or runs level, but once it
+                                # rises back up it forms a counter-crest that hides
+                                # the dead ground behind it — reveal that rising lip
+                                # (or far peak), then stop. Without this the ray
+                                # would x-ray across every hill and valley to the
+                                # map edge, flashing almost the whole board visible
+                                # the instant a soldier steps onto a mountain rim.
+                                # Trenches sit below ground but neither block nor
+                                # hide, so treat them as ground for the crest test.
                                 visible.add((cx, cy))
-                                if e_tile > e_s:
+                                e_eff = e_tile if e_tile > ELEV_GROUND else ELEV_GROUND
+                                if e_eff > descend_floor:
                                     break
+                                if e_eff < descend_floor:
+                                    descend_floor = e_eff
                             elif e_tile > e_s:
                                 visible.add((cx, cy))
                                 break
@@ -3230,6 +3326,7 @@ class TopowarGameState:
                                 if steps == 1:
                                     visible.add((cx, cy))
                                     descended = True
+                                    descend_floor = e_tile if e_tile > ELEV_GROUND else ELEV_GROUND
                                 else:
                                     break
                             else:
