@@ -14,6 +14,29 @@ ELEV_GROUND = 4
 ELEV_HILL = 5
 ELEV_MOUNTAIN = 6
 
+# Movement speed multiplier by elevation tier (higher = faster footing). Open
+# ground is quickest; climbing a hill and then a mountain is progressively
+# slower. This is the single source of truth for both real movement timing and
+# path-planning step costs, so a planned route trades distance against the time
+# actually lost crossing slow terrain.
+TERRAIN_SPEED = {
+    ELEV_TRENCH: 1.00,
+    ELEV_GROUND: 1.10,
+    ELEV_HILL: 0.90,
+    ELEV_MOUNTAIN: 0.75,
+}
+
+# Extra path-planning cost of stepping onto slow high ground, derived from
+# TERRAIN_SPEED and normalised so an open-ground step adds nothing: a tile costs
+# more the longer it takes to cross relative to ground (hill ≈ +0.22, mountain
+# ≈ +0.47). Only hills and mountains appear here — open ground is the baseline
+# and trench tiles keep their own small cover discount instead, so neither is
+# penalised by the planner.
+TERRAIN_STEP_PENALTY = {
+    elev: TERRAIN_SPEED[ELEV_GROUND] / TERRAIN_SPEED[elev] - 1.0
+    for elev in (ELEV_HILL, ELEV_MOUNTAIN)
+}
+
 # Officer promotion ranks. An officer's rank = the number of enemy kills the
 # side has scored since the current officer took command; it resets to 0 when
 # that officer dies. Each threshold unlocks a capability.
@@ -60,15 +83,14 @@ class RulesConfig:
     # Soldiers move discretely: one tile per (1 / soldier_move_speed) seconds.
     soldier_move_speed: float = 1.25
     # When a squad or formation is ordered to move, its soldiers depart in a
-    # staggered wave instead of all at once: the soldier nearest its destination
-    # steps off first and each one farther back waits this many extra seconds per
-    # rank. This keeps a column from piling up nose-to-tail (every soldier blocked
-    # by the one ahead, constantly replanning) and makes group travel flow. Set
-    # to 0 to disable and have the whole group start simultaneously. ~0.6s is a
-    # touch under one ground step, enough that a trailing soldier's tile has been
-    # vacated before it gets there — so it glides forward instead of stalling for
-    # long enough (0.3s) to give up and replan a detour around its own comrade.
-    formation_stagger_seconds: float = 0.6
+    # small staggered wave (shortest trip first) rather than all stepping off on
+    # the same tick. That keeps a tight column from piling up nose-to-tail — every
+    # soldier blocked by the one ahead, stalling and replanning a detour. The
+    # balanced slot assignment (see _assign_soldiers_to_positions) already fans the
+    # group out and does most of the de-jamming, so only a light stagger is needed;
+    # it is kept short so the rear ranks are not held back for long. Seconds of
+    # delay added per rank; set to 0 to start the whole group at once.
+    formation_stagger_seconds: float = 0.3
     projectile_speed: float = 8.0
     grenade_range: float = 7.0
     grenade_windup_seconds: float = 3.0
@@ -418,6 +440,11 @@ class PathfindingService:
                 if not _elevation_adjacent(cur_elev, self.grid.elevation_at(nt)):
                     continue
                 step = 1.0 - (self.TRENCH_DISCOUNT if nt in self.grid.trenches else 0.0)
+                # Slow, high terrain costs extra in proportion to the time lost
+                # crossing it, so routes favour fast open ground and only climb a
+                # hill or mountain when going around would take longer.
+                if nt != goal:
+                    step += TERRAIN_STEP_PENALTY.get(self.grid.elevation_at(nt), 0.0)
                 if nt in wire and nt != goal:
                     step += self.WIRE_STEP_COST
                 if nt in avoid and nt != goal:
@@ -907,7 +934,7 @@ class TopowarGameState:
         if not hasattr(self.rules, "fog_of_war"):
             self.rules.fog_of_war = True
         if not hasattr(self.rules, "formation_stagger_seconds"):
-            self.rules.formation_stagger_seconds = 0.6
+            self.rules.formation_stagger_seconds = 0.3
         for s in self.soldiers.values():
             if not hasattr(s, "move_delay"):
                 s.move_delay = 0.0
@@ -1002,14 +1029,7 @@ class TopowarGameState:
         return (arc_center + rel) % 360.0
 
     def _terrain_speed_multiplier(self, tile: tuple[int, int]) -> float:
-        elev = self.map.elevation_at(tile)
-        if elev == ELEV_MOUNTAIN:
-            return 0.75
-        if elev == ELEV_HILL:
-            return 0.90
-        if elev == ELEV_GROUND:
-            return 1.10
-        return 1.0
+        return TERRAIN_SPEED.get(self.map.elevation_at(tile), 1.0)
 
     def _has_terrain_los(self, a: tuple[int, int], b: tuple[int, int], viewer_elevation: int) -> bool:
         """Bresenham LOS blocked by any intermediate tile whose elevation exceeds viewer_elevation."""
@@ -1444,19 +1464,28 @@ class TopowarGameState:
         soldiers: list,
         positions: list[tuple[int, int]],
     ) -> list[tuple]:
-        """Greedy assignment: each position gets the nearest unassigned soldier."""
-        unassigned = list(soldiers)
-        assignments = []
-        for pos in positions:
-            if not unassigned:
-                break
-            dists = [(math.dist(s.tile, pos), idx) for idx, s in enumerate(unassigned)]
-            min_dist = min(d for d, _ in dists)
-            tied = [idx for d, idx in dists if d == min_dist]
-            chosen_idx = self.random.choice(tied)
-            assignments.append((unassigned[chosen_idx], pos))
-            unassigned.pop(chosen_idx)
-        return assignments
+        """Balance travel so the group arrives together rather than trickling in.
+
+        The soldier already nearest the destination is sent to the slot farthest
+        from the squad, and the soldier farthest away takes the nearest slot (and
+        so on inward). Pairing the closest soldier with the most distant position
+        evens out how far each one has to walk, so a strung-out squad converges on
+        its formation at roughly the same moment instead of the front rank
+        arriving long before the rear."""
+        n = min(len(soldiers), len(positions))
+        if n == 0:
+            return []
+        soldiers = list(soldiers)
+        positions = list(positions)
+        target = (sum(p[0] for p in positions) / len(positions),
+                  sum(p[1] for p in positions) / len(positions))
+        squad = (sum(s.tile[0] for s in soldiers) / len(soldiers),
+                 sum(s.tile[1] for s in soldiers) / len(soldiers))
+        # Nearest-to-destination soldier first; farthest-from-squad slot first —
+        # so index i pairs the i-th nearest soldier with the i-th farthest slot.
+        soldiers_sorted = sorted(soldiers, key=lambda s: math.dist(s.tile, target))
+        positions_sorted = sorted(positions, key=lambda p: math.dist(p, squad), reverse=True)
+        return [(soldiers_sorted[i], positions_sorted[i]) for i in range(n)]
 
     def command(self, owner: int, action: dict[str, Any]) -> str:
         self._ensure_runtime_compat()
