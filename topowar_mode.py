@@ -47,14 +47,34 @@ RANK_SMOKE = 8
 RANK_AIRSTRIKE = 10
 
 # Capture Zone mode: a square objective revealed when the build phase ends. A
-# side wins by keeping at least one soldier inside it, with no enemy soldier
-# present, for CAPTURE_GOAL_SECONDS of accumulated time.
+# side wins by keeping a soldier inside it, with no enemy soldier present, long
+# enough for progress to fill. One soldier takes CAPTURE_GOAL_SECONDS; more
+# attackers take it faster, down to CAPTURE_FAST_SECONDS at CAPTURE_FAST_SOLDIERS.
 CAPTURE_ZONE_SIZE = 6           # zone is CAPTURE_ZONE_SIZE x CAPTURE_ZONE_SIZE tiles
-CAPTURE_GOAL_SECONDS = 60.0     # uncontested hold needed to win
+CAPTURE_GOAL_SECONDS = 60.0     # uncontested hold to win with a single soldier
+CAPTURE_FAST_SECONDS = 30.0     # uncontested hold to win at CAPTURE_FAST_SOLDIERS+
+CAPTURE_FAST_SOLDIERS = 4       # soldier count at which capture speed maxes out
 # While the zone is empty (neither side inside) accrued progress bleeds back
 # toward zero at this fraction of the build rate, so a hold can't be banked and
 # abandoned — but a brief gap (a soldier dies, another steps in) isn't fatal.
 CAPTURE_EMPTY_DECAY_RATE = 0.5
+
+
+def _capture_rate(occupant_count: int) -> float:
+    """Capture build/drain multiplier for the number of attackers in the zone.
+
+    One soldier -> 1.0 (CAPTURE_GOAL_SECONDS to take). Each extra body adds
+    speed linearly up to CAPTURE_FAST_SOLDIERS, where the rate reaches
+    CAPTURE_GOAL_SECONDS / CAPTURE_FAST_SECONDS (so the hold needed drops to
+    CAPTURE_FAST_SECONDS). More than CAPTURE_FAST_SOLDIERS gives no further gain.
+    """
+    n = max(1, min(int(occupant_count), CAPTURE_FAST_SOLDIERS))
+    if CAPTURE_FAST_SOLDIERS <= 1 or CAPTURE_FAST_SECONDS <= 0:
+        return 1.0
+    frac = (n - 1) / (CAPTURE_FAST_SOLDIERS - 1)
+    max_rate = CAPTURE_GOAL_SECONDS / CAPTURE_FAST_SECONDS
+    return 1.0 + frac * (max_rate - 1.0)
+
 
 # Ordered tier list used for elevation-adjacency checks during movement.
 _ELEV_TIER_ORDER = [ELEV_TRENCH, ELEV_GROUND, ELEV_HILL, ELEV_MOUNTAIN]
@@ -571,6 +591,9 @@ class TopowarGameState:
         self.capture_progress: float = 0.0
         self.capture_owner: int | None = None
         self.capture_contested: bool = False
+        # Soldiers the occupying side has inside the zone this tick (0 if
+        # contested/empty); scales capture speed and the client pulse strength.
+        self.capture_occupant_count: int = 0
         self._setup()
 
     def _setup(self):
@@ -1008,6 +1031,8 @@ class TopowarGameState:
             self.capture_owner = None
         if not hasattr(self, "capture_contested"):
             self.capture_contested = False
+        if not hasattr(self, "capture_occupant_count"):
+            self.capture_occupant_count = 0
         for s in self.soldiers.values():
             if not hasattr(s, "move_delay"):
                 s.move_delay = 0.0
@@ -3567,6 +3592,10 @@ class TopowarGameState:
             enemy currently owns the bar;
           * contested (both sides inside) -> frozen;
           * empty -> gentle bleed back toward zero.
+
+        The build/drain rate scales with how many attackers the lone occupying
+        side has inside the zone (see _capture_rate): one soldier takes the full
+        CAPTURE_GOAL_SECONDS, four take it in CAPTURE_FAST_SECONDS.
         """
         rect = self.capture_zone_rect
         if rect is None or self.time_elapsed < self.rules.build_phase_seconds:
@@ -3591,16 +3620,20 @@ class TopowarGameState:
             occupier = 1
         else:
             occupier = None
+        # Soldiers the lone occupying side has inside the zone (0 if contested or
+        # empty). Drives both the capture speed and the client's pulse strength.
+        self.capture_occupant_count = 0 if occupier is None else (n0 if occupier == 0 else n1)
         if occupier is not None:
+            rate = _capture_rate(self.capture_occupant_count)
             if self.capture_owner is None or self.capture_owner == occupier:
                 self.capture_owner = occupier
-                self.capture_progress = min(CAPTURE_GOAL_SECONDS, self.capture_progress + dt)
+                self.capture_progress = min(CAPTURE_GOAL_SECONDS, self.capture_progress + dt * rate)
                 if self.capture_progress >= CAPTURE_GOAL_SECONDS:
                     self.winner = occupier
                     self.win_reason = "Zone captured."
             else:
                 # Enemy currently holds the bar — drain it before this side can build.
-                self.capture_progress = max(0.0, self.capture_progress - dt)
+                self.capture_progress = max(0.0, self.capture_progress - dt * rate)
                 if self.capture_progress <= 0.0:
                     self.capture_owner = None
         elif not self.capture_contested:
@@ -3870,6 +3903,7 @@ class TopowarGameState:
                     "progress": self.capture_progress / CAPTURE_GOAL_SECONDS if CAPTURE_GOAL_SECONDS else 0.0,
                     "owner": self.capture_owner,
                     "contested": self.capture_contested,
+                    "occupant_count": self.capture_occupant_count,
                     "goal_seconds": CAPTURE_GOAL_SECONDS,
                 }
             else:
