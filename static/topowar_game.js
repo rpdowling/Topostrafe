@@ -1626,6 +1626,70 @@ function drawRangeCircle(cx, cy, radius, color) {
   ctx.restore();
 }
 
+// Capture Zone objective: a square outline that fills in from 0->100% in the
+// occupying side's colour as they hold it. Hidden until the server marks it
+// active (build phase over). The trace is drawn with a single long dash so the
+// stroked perimeter is revealed clockwise from the top-left corner.
+function drawCaptureZone(data) {
+  const cz = data && data.capture_zone;
+  if (!cz || !cz.active) return;
+  const px0 = OX + cz.x0 * CELL;
+  const px1 = OX + (cz.x1 + 1) * CELL;
+  // flipY swaps top/bottom for seat 1, so derive the pixel band from both rows.
+  const fyA = flipY(cz.y0), fyB = flipY(cz.y1);
+  const py0 = OY + Math.min(fyA, fyB) * CELL;
+  const py1 = OY + (Math.max(fyA, fyB) + 1) * CELL;
+  const w = px1 - px0, h = py1 - py0;
+  const progress = Math.max(0, Math.min(1, cz.progress || 0));
+  const ownerColor = cz.owner === 0 ? '#e03030' : cz.owner === 1 ? '#3060d0' : null;
+
+  ctx.save();
+  // Area tint: neutral when unheld, tinting toward the owner as progress grows.
+  if (ownerColor && progress > 0) {
+    ctx.fillStyle = cz.owner === 0 ? 'rgba(224,48,48,0.14)' : 'rgba(48,96,208,0.14)';
+    ctx.globalAlpha = 0.35 + 0.65 * progress;
+    ctx.fillRect(px0, py0, w, h);
+    ctx.globalAlpha = 1;
+  } else {
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    ctx.fillRect(px0, py0, w, h);
+  }
+
+  // Base outline, always visible so the objective reads even at 0%. Turns amber
+  // while contested (both sides inside) to flag the standoff.
+  const ix = px0 + 1.5, iy = py0 + 1.5, iw = w - 3, ih = h - 3;
+  ctx.setLineDash([]);
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = cz.contested ? 'rgba(240,200,60,0.85)' : 'rgba(235,235,235,0.4)';
+  ctx.strokeRect(ix, iy, iw, ih);
+
+  // Traced progress in the occupier's colour, revealed clockwise from top-left.
+  if (ownerColor && progress > 0) {
+    const perim = 2 * (iw + ih);
+    ctx.lineWidth = 3.5;
+    ctx.lineCap = 'butt';
+    ctx.strokeStyle = ownerColor;
+    ctx.setLineDash([perim * progress, perim]);
+    ctx.lineDashOffset = 0;
+    ctx.strokeRect(ix, iy, iw, ih);
+    ctx.setLineDash([]);
+  }
+
+  // Centre readout: percent held, or CONTESTED during a standoff.
+  const label = cz.contested ? 'CONTESTED' : `${Math.round(progress * 100)}%`;
+  ctx.font = 'bold 13px system-ui';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+  ctx.strokeText(label, (px0 + px1) / 2, (py0 + py1) / 2);
+  ctx.fillStyle = cz.contested ? '#f0c83c' : (ownerColor || 'rgba(235,235,235,0.85)');
+  ctx.fillText(label, (px0 + px1) / 2, (py0 + py1) / 2);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.restore();
+}
+
 function rebuildElevMap(mapData) {
   elevMap = new Map();
   for (const t of mapData.mountains || []) elevMap.set(`${t[0]},${t[1]}`, 3);
@@ -3348,6 +3412,9 @@ function draw() {
 
   // Draw build-phase fog/hatching late so enemy-side units/structures are obscured.
   drawBuildPhaseOverlay(data);
+
+  // Capture Zone objective (revealed once the build phase ends).
+  drawCaptureZone(data);
 
   // Game-over overlay
   if (state && state.winner !== null && state.winner !== undefined) {

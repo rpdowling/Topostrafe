@@ -14,6 +14,29 @@ ELEV_GROUND = 4
 ELEV_HILL = 5
 ELEV_MOUNTAIN = 6
 
+# Movement speed multiplier by elevation tier (higher = faster footing). Open
+# ground is quickest; climbing a hill and then a mountain is progressively
+# slower. This is the single source of truth for both real movement timing and
+# path-planning step costs, so a planned route trades distance against the time
+# actually lost crossing slow terrain.
+TERRAIN_SPEED = {
+    ELEV_TRENCH: 1.00,
+    ELEV_GROUND: 1.10,
+    ELEV_HILL: 0.90,
+    ELEV_MOUNTAIN: 0.75,
+}
+
+# Extra path-planning cost of stepping onto slow high ground, derived from
+# TERRAIN_SPEED and normalised so an open-ground step adds nothing: a tile costs
+# more the longer it takes to cross relative to ground (hill ≈ +0.22, mountain
+# ≈ +0.47). Only hills and mountains appear here — open ground is the baseline
+# and trench tiles keep their own small cover discount instead, so neither is
+# penalised by the planner.
+TERRAIN_STEP_PENALTY = {
+    elev: TERRAIN_SPEED[ELEV_GROUND] / TERRAIN_SPEED[elev] - 1.0
+    for elev in (ELEV_HILL, ELEV_MOUNTAIN)
+}
+
 # Officer promotion ranks. An officer's rank = the number of enemy kills the
 # side has scored since the current officer took command; it resets to 0 when
 # that officer dies. Each threshold unlocks a capability.
@@ -22,6 +45,16 @@ RANK_GRENADES = 4
 RANK_AIRBURST = 6
 RANK_SMOKE = 8
 RANK_AIRSTRIKE = 10
+
+# Capture Zone mode: a square objective revealed when the build phase ends. A
+# side wins by keeping at least one soldier inside it, with no enemy soldier
+# present, for CAPTURE_GOAL_SECONDS of accumulated time.
+CAPTURE_ZONE_SIZE = 6           # zone is CAPTURE_ZONE_SIZE x CAPTURE_ZONE_SIZE tiles
+CAPTURE_GOAL_SECONDS = 60.0     # uncontested hold needed to win
+# While the zone is empty (neither side inside) accrued progress bleeds back
+# toward zero at this fraction of the build rate, so a hold can't be banked and
+# abandoned — but a brief gap (a soldier dies, another steps in) isn't fatal.
+CAPTURE_EMPTY_DECAY_RATE = 0.5
 
 # Ordered tier list used for elevation-adjacency checks during movement.
 _ELEV_TIER_ORDER = [ELEV_TRENCH, ELEV_GROUND, ELEV_HILL, ELEV_MOUNTAIN]
@@ -60,15 +93,14 @@ class RulesConfig:
     # Soldiers move discretely: one tile per (1 / soldier_move_speed) seconds.
     soldier_move_speed: float = 1.25
     # When a squad or formation is ordered to move, its soldiers depart in a
-    # staggered wave instead of all at once: the soldier nearest its destination
-    # steps off first and each one farther back waits this many extra seconds per
-    # rank. This keeps a column from piling up nose-to-tail (every soldier blocked
-    # by the one ahead, constantly replanning) and makes group travel flow. Set
-    # to 0 to disable and have the whole group start simultaneously. ~0.6s is a
-    # touch under one ground step, enough that a trailing soldier's tile has been
-    # vacated before it gets there — so it glides forward instead of stalling for
-    # long enough (0.3s) to give up and replan a detour around its own comrade.
-    formation_stagger_seconds: float = 0.6
+    # small staggered wave (shortest trip first) rather than all stepping off on
+    # the same tick. That keeps a tight column from piling up nose-to-tail — every
+    # soldier blocked by the one ahead, stalling and replanning a detour. The
+    # balanced slot assignment (see _assign_soldiers_to_positions) already fans the
+    # group out and does most of the de-jamming, so only a light stagger is needed;
+    # it is kept short so the rear ranks are not held back for long. Seconds of
+    # delay added per rank; set to 0 to start the whole group at once.
+    formation_stagger_seconds: float = 0.3
     projectile_speed: float = 8.0
     grenade_range: float = 7.0
     grenade_windup_seconds: float = 3.0
@@ -80,6 +112,11 @@ class RulesConfig:
     # fogged: enemy units/structures there are hidden and trenches render as open
     # ground. Set False to fully restore the old always-visible behaviour.
     fog_of_war: bool = True
+    # Capture Zone mode. When True a square objective is revealed at a random
+    # spot on the map's centre line once the build phase ends; holding it
+    # uncontested for one minute wins the match (in addition to the normal
+    # elimination/timeout conditions).
+    capture_zone: bool = False
 
 
 @dataclass
@@ -418,6 +455,11 @@ class PathfindingService:
                 if not _elevation_adjacent(cur_elev, self.grid.elevation_at(nt)):
                     continue
                 step = 1.0 - (self.TRENCH_DISCOUNT if nt in self.grid.trenches else 0.0)
+                # Slow, high terrain costs extra in proportion to the time lost
+                # crossing it, so routes favour fast open ground and only climb a
+                # hill or mountain when going around would take longer.
+                if nt != goal:
+                    step += TERRAIN_STEP_PENALTY.get(self.grid.elevation_at(nt), 0.0)
                 if nt in wire and nt != goal:
                     step += self.WIRE_STEP_COST
                 if nt in avoid and nt != goal:
@@ -520,6 +562,15 @@ class TopowarGameState:
         self.next_recruit_time: dict[int, float] = {0: 180.0, 1: 180.0}
         # Per-side line-of-sight cache: owner -> (sources_signature, visible_tiles, time).
         self._fog_cache: dict[int, tuple] = {}
+        # Capture Zone mode state. capture_zone_rect is the inclusive tile rect
+        # (x0, y0, x1, y1) of the objective, chosen at setup but kept hidden
+        # until the build phase ends. capture_progress counts accumulated
+        # uncontested-hold seconds for capture_owner; capture_contested flags a
+        # tick where both sides have a soldier inside.
+        self.capture_zone_rect: tuple[int, int, int, int] | None = None
+        self.capture_progress: float = 0.0
+        self.capture_owner: int | None = None
+        self.capture_contested: bool = False
         self._setup()
 
     def _setup(self):
@@ -545,6 +596,45 @@ class TopowarGameState:
             bx = x0 + i
             self._spawn_soldier(0, (rx, y_red), is_grenadier=False, is_officer=(i == officer_idx))
             self._spawn_soldier(1, (bx, y_blue), is_grenadier=False, is_officer=(i == officer_idx))
+        # Done last so terrain/spawn RNG is identical whether or not the mode is
+        # on (the objective only draws extra randomness when enabled).
+        if self.rules.capture_zone:
+            self._place_capture_zone()
+
+    def _place_capture_zone(self):
+        """Pick the Capture Zone's tile rect on the map's centre line.
+
+        The zone is a CAPTURE_ZONE_SIZE square centred vertically on the midline
+        (the no-man's-land between the two starting trenches) at a random
+        horizontal offset. A few candidate offsets are sampled and the one with
+        the fewest mountain tiles is kept, so the objective lands on ground that
+        is reasonable to fight over rather than buried in an impassable-feeling
+        massif.
+        """
+        W, H = self.map.width, self.map.height
+        size = max(1, min(CAPTURE_ZONE_SIZE, W, H))
+        y0 = max(0, min(H - size, H // 2 - size // 2))
+        max_x0 = W - size
+        if max_x0 <= 0:
+            x0 = 0
+        else:
+            margin = 2 if max_x0 >= 4 else 0
+            lo, hi = margin, max_x0 - margin
+            best_x0, best_mountains = None, None
+            for _ in range(6):
+                cx0 = self.random.randint(lo, hi)
+                mtn = sum(
+                    1
+                    for yy in range(y0, y0 + size)
+                    for xx in range(cx0, cx0 + size)
+                    if (xx, yy) in self.map.mountains
+                )
+                if best_mountains is None or mtn < best_mountains:
+                    best_x0, best_mountains = cx0, mtn
+                    if mtn == 0:
+                        break
+            x0 = best_x0
+        self.capture_zone_rect = (x0, y0, x0 + size - 1, y0 + size - 1)
 
     def _generate_terrain(self):
         """Procedurally generate symmetric hills and mountains in no-man's land.
@@ -907,7 +997,17 @@ class TopowarGameState:
         if not hasattr(self.rules, "fog_of_war"):
             self.rules.fog_of_war = True
         if not hasattr(self.rules, "formation_stagger_seconds"):
-            self.rules.formation_stagger_seconds = 0.6
+            self.rules.formation_stagger_seconds = 0.3
+        if not hasattr(self.rules, "capture_zone"):
+            self.rules.capture_zone = False
+        if not hasattr(self, "capture_zone_rect"):
+            self.capture_zone_rect = None
+        if not hasattr(self, "capture_progress"):
+            self.capture_progress = 0.0
+        if not hasattr(self, "capture_owner"):
+            self.capture_owner = None
+        if not hasattr(self, "capture_contested"):
+            self.capture_contested = False
         for s in self.soldiers.values():
             if not hasattr(s, "move_delay"):
                 s.move_delay = 0.0
@@ -1002,14 +1102,7 @@ class TopowarGameState:
         return (arc_center + rel) % 360.0
 
     def _terrain_speed_multiplier(self, tile: tuple[int, int]) -> float:
-        elev = self.map.elevation_at(tile)
-        if elev == ELEV_MOUNTAIN:
-            return 0.75
-        if elev == ELEV_HILL:
-            return 0.90
-        if elev == ELEV_GROUND:
-            return 1.10
-        return 1.0
+        return TERRAIN_SPEED.get(self.map.elevation_at(tile), 1.0)
 
     def _has_terrain_los(self, a: tuple[int, int], b: tuple[int, int], viewer_elevation: int) -> bool:
         """Bresenham LOS blocked by any intermediate tile whose elevation exceeds viewer_elevation."""
@@ -1444,19 +1537,28 @@ class TopowarGameState:
         soldiers: list,
         positions: list[tuple[int, int]],
     ) -> list[tuple]:
-        """Greedy assignment: each position gets the nearest unassigned soldier."""
-        unassigned = list(soldiers)
-        assignments = []
-        for pos in positions:
-            if not unassigned:
-                break
-            dists = [(math.dist(s.tile, pos), idx) for idx, s in enumerate(unassigned)]
-            min_dist = min(d for d, _ in dists)
-            tied = [idx for d, idx in dists if d == min_dist]
-            chosen_idx = self.random.choice(tied)
-            assignments.append((unassigned[chosen_idx], pos))
-            unassigned.pop(chosen_idx)
-        return assignments
+        """Balance travel so the group arrives together rather than trickling in.
+
+        The soldier already nearest the destination is sent to the slot farthest
+        from the squad, and the soldier farthest away takes the nearest slot (and
+        so on inward). Pairing the closest soldier with the most distant position
+        evens out how far each one has to walk, so a strung-out squad converges on
+        its formation at roughly the same moment instead of the front rank
+        arriving long before the rear."""
+        n = min(len(soldiers), len(positions))
+        if n == 0:
+            return []
+        soldiers = list(soldiers)
+        positions = list(positions)
+        target = (sum(p[0] for p in positions) / len(positions),
+                  sum(p[1] for p in positions) / len(positions))
+        squad = (sum(s.tile[0] for s in soldiers) / len(soldiers),
+                 sum(s.tile[1] for s in soldiers) / len(soldiers))
+        # Nearest-to-destination soldier first; farthest-from-squad slot first —
+        # so index i pairs the i-th nearest soldier with the i-th farthest slot.
+        soldiers_sorted = sorted(soldiers, key=lambda s: math.dist(s.tile, target))
+        positions_sorted = sorted(positions, key=lambda p: math.dist(p, squad), reverse=True)
+        return [(soldiers_sorted[i], positions_sorted[i]) for i in range(n)]
 
     def command(self, owner: int, action: dict[str, Any]) -> str:
         self._ensure_runtime_compat()
@@ -3455,6 +3557,58 @@ class TopowarGameState:
                 remaining.append(p)
         self.projectiles = remaining
 
+    def _update_capture_zone(self, dt: float):
+        """Advance Capture Zone progress for one tick and award the win at 100%.
+
+        Occupancy this tick decides what happens to the single shared progress
+        bar:
+          * uncontested (one side inside, no enemy) -> that side builds toward
+            CAPTURE_GOAL_SECONDS, or drains the enemy's progress first if the
+            enemy currently owns the bar;
+          * contested (both sides inside) -> frozen;
+          * empty -> gentle bleed back toward zero.
+        """
+        rect = self.capture_zone_rect
+        if rect is None or self.time_elapsed < self.rules.build_phase_seconds:
+            return
+        x0, y0, x1, y1 = rect
+        n0 = n1 = 0
+        for s in self.soldiers.values():
+            if s.hp <= 0:
+                continue
+            tx, ty = s.tile
+            if x0 <= tx <= x1 and y0 <= ty <= y1:
+                if s.owner == 0:
+                    n0 += 1
+                else:
+                    n1 += 1
+        self.capture_contested = n0 > 0 and n1 > 0
+        if self.capture_contested:
+            occupier = None
+        elif n0 > 0:
+            occupier = 0
+        elif n1 > 0:
+            occupier = 1
+        else:
+            occupier = None
+        if occupier is not None:
+            if self.capture_owner is None or self.capture_owner == occupier:
+                self.capture_owner = occupier
+                self.capture_progress = min(CAPTURE_GOAL_SECONDS, self.capture_progress + dt)
+                if self.capture_progress >= CAPTURE_GOAL_SECONDS:
+                    self.winner = occupier
+                    self.win_reason = "Zone captured."
+            else:
+                # Enemy currently holds the bar — drain it before this side can build.
+                self.capture_progress = max(0.0, self.capture_progress - dt)
+                if self.capture_progress <= 0.0:
+                    self.capture_owner = None
+        elif not self.capture_contested:
+            # Empty: bleed back toward zero (contested ticks just freeze).
+            self.capture_progress = max(0.0, self.capture_progress - dt * CAPTURE_EMPTY_DECAY_RATE)
+            if self.capture_progress <= 0.0:
+                self.capture_owner = None
+
     def tick(self, dt: float):
         self._ensure_runtime_compat()
         if self.winner is not None:
@@ -3479,29 +3633,32 @@ class TopowarGameState:
         self._update_smoke_sources(dt)
         self._update_projectiles(dt)
         self._update_effects(dt)
-        alive0 = sum(1 for s in self.soldiers.values() if s.owner == 0 and s.hp > 0)
-        alive1 = sum(1 for s in self.soldiers.values() if s.owner == 1 and s.hp > 0)
+        if self.rules.capture_zone:
+            self._update_capture_zone(dt)
         # Officer death no longer ends the game — it suspends command (see
-        # _has_command). The match is won only by total elimination or by
-        # kill count when the clock runs out.
-        if alive0 == 0 or alive1 == 0:
-            self.winner = 0 if alive0 > alive1 else 1 if alive1 > alive0 else None
-            self.win_reason = "Elimination." if self.winner is not None else "Mutual elimination."
-        elif self.time_elapsed >= self.rules.match_time_seconds:
-            # Timeout: higher officer rank wins; tie on rank breaks to kills.
-            r0, r1 = self.officer_rank.get(0, 0), self.officer_rank.get(1, 0)
-            if r0 != r1:
-                self.winner = 0 if r0 > r1 else 1
-                self.win_reason = "Time. Higher rank."
-            elif self.kill_counts[0] > self.kill_counts[1]:
-                self.winner = 0
-                self.win_reason = "Time. Equal rank, more kills."
-            elif self.kill_counts[1] > self.kill_counts[0]:
-                self.winner = 1
-                self.win_reason = "Time. Equal rank, more kills."
-            else:
-                self.winner = -1
-                self.win_reason = "Time. Tie."
+        # _has_command). The match is won only by total elimination, by holding
+        # the capture zone (above), or by kill count when the clock runs out.
+        if self.winner is None:
+            alive0 = sum(1 for s in self.soldiers.values() if s.owner == 0 and s.hp > 0)
+            alive1 = sum(1 for s in self.soldiers.values() if s.owner == 1 and s.hp > 0)
+            if alive0 == 0 or alive1 == 0:
+                self.winner = 0 if alive0 > alive1 else 1 if alive1 > alive0 else None
+                self.win_reason = "Elimination." if self.winner is not None else "Mutual elimination."
+            elif self.time_elapsed >= self.rules.match_time_seconds:
+                # Timeout: higher officer rank wins; tie on rank breaks to kills.
+                r0, r1 = self.officer_rank.get(0, 0), self.officer_rank.get(1, 0)
+                if r0 != r1:
+                    self.winner = 0 if r0 > r1 else 1
+                    self.win_reason = "Time. Higher rank."
+                elif self.kill_counts[0] > self.kill_counts[1]:
+                    self.winner = 0
+                    self.win_reason = "Time. Equal rank, more kills."
+                elif self.kill_counts[1] > self.kill_counts[0]:
+                    self.winner = 1
+                    self.win_reason = "Time. Equal rank, more kills."
+                else:
+                    self.winner = -1
+                    self.win_reason = "Time. Tie."
 
     def advance_to_time(self, now_monotonic: float):
         if self.last_tick_monotonic <= 0:
@@ -3700,6 +3857,23 @@ class TopowarGameState:
                 for tx in range(Wd):
                     if (tx, ty) not in visible_set and (tx, ty) not in illuminated:
                         fog_tiles.append(base + tx)
+        # Capture Zone objective. Hidden (active=False) until the build phase
+        # ends; once active it is always shown to both sides (an objective is
+        # never fogged). progress is a 0..1 fraction of the hold needed to win.
+        capture_zone = None
+        if getattr(self.rules, "capture_zone", False):
+            if self.time_elapsed >= self.rules.build_phase_seconds and self.capture_zone_rect is not None:
+                cx0, cy0, cx1, cy1 = self.capture_zone_rect
+                capture_zone = {
+                    "active": True,
+                    "x0": cx0, "y0": cy0, "x1": cx1, "y1": cy1,
+                    "progress": self.capture_progress / CAPTURE_GOAL_SECONDS if CAPTURE_GOAL_SECONDS else 0.0,
+                    "owner": self.capture_owner,
+                    "contested": self.capture_contested,
+                    "goal_seconds": CAPTURE_GOAL_SECONDS,
+                }
+            else:
+                capture_zone = {"active": False}
         return {
             "rules": self.rules.__dict__.copy(),
             "build_phase_remaining": max(0.0, self.rules.build_phase_seconds - self.time_elapsed),
@@ -3712,6 +3886,7 @@ class TopowarGameState:
                 "mountains": [list(t) for t in sorted(visible_mountains)],
             },
             "fog_tiles": fog_tiles,
+            "capture_zone": capture_zone,
             "soldiers": soldiers,
             "machine_guns": mgs,
             "mortars": mortars_out,
