@@ -1664,29 +1664,28 @@ function drawCaptureZone(data) {
   ctx.strokeRect(ix, iy, iw, ih);
 
   // Traced progress in the occupier's colour, revealed clockwise from top-left.
+  // The outline alone conveys progress — no text inside the zone.
   if (ownerColor && progress > 0) {
     const perim = 2 * (iw + ih);
-    ctx.lineWidth = 3.5;
     ctx.lineCap = 'butt';
-    ctx.strokeStyle = ownerColor;
-    ctx.setLineDash([perim * progress, perim]);
     ctx.lineDashOffset = 0;
+    ctx.setLineDash([perim * progress, perim]);  // reveal only the first `progress` of the loop
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = ownerColor;
     ctx.strokeRect(ix, iy, iw, ih);
+
+    // Each extra attacker pulses the traced bar white — stronger per soldier
+    // (occupant_count 2/3/4+), kept gentle so it reads without distracting.
+    const oc = cz.occupant_count || 0;
+    if (oc >= 2) {
+      const peak = 0.11 * (Math.min(oc, 4) - 1);            // 0.11, 0.22, 0.33
+      const wave = 0.5 + 0.5 * Math.sin(performance.now() / 300);  // ~1.9 s breathing
+      ctx.strokeStyle = `rgba(255,255,255,${(peak * wave).toFixed(3)})`;
+      ctx.strokeRect(ix, iy, iw, ih);                       // same dash overlays the trace
+    }
     ctx.setLineDash([]);
   }
 
-  // Centre readout: percent held, or CONTESTED during a standoff.
-  const label = cz.contested ? 'CONTESTED' : `${Math.round(progress * 100)}%`;
-  ctx.font = 'bold 13px system-ui';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = 'rgba(0,0,0,0.65)';
-  ctx.strokeText(label, (px0 + px1) / 2, (py0 + py1) / 2);
-  ctx.fillStyle = cz.contested ? '#f0c83c' : (ownerColor || 'rgba(235,235,235,0.85)');
-  ctx.fillText(label, (px0 + px1) / 2, (py0 + py1) / 2);
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
   ctx.restore();
 }
 
