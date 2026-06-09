@@ -855,6 +855,7 @@ class GameStore:
                 "tw_cancel_build_mortar",
                 "tw_toggle_mortar_hold_fire",
                 "tw_set_capture_zone",
+                "tw_assign_soldier_dig",
             }:
                 out = {"type": t}
                 for key in (
