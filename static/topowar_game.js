@@ -1779,12 +1779,15 @@ function drawTerritory(data) {
     ctx.strokeRect(ix, iy, iw, ih);
     const prog = Math.max(0, Math.min(1, z.progress || 0));
     if (prog > 0) {
+      // Trace progress in whoever is capturing it — your own colour when you're
+      // taking it, the enemy's when they're raiding it.
+      const [cr, cg, cb] = (z.capturer === 0 || z.capturer === 1) ? COL[z.capturer] : [r, g, b];
       const perim = 2 * (iw + ih);
       ctx.setLineDash([perim * prog, perim]);
       ctx.lineDashOffset = 0;
       ctx.lineCap = 'butt';
       ctx.lineWidth = 3.5;
-      ctx.strokeStyle = `rgb(${r},${g},${b})`;
+      ctx.strokeStyle = `rgb(${cr},${cg},${cb})`;
       ctx.strokeRect(ix, iy, iw, ih);
     }
     ctx.setLineDash([]);
