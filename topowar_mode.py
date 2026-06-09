@@ -76,6 +76,27 @@ def _capture_rate(occupant_count: int) -> float:
     return 1.0 + frac * (max_rate - 1.0)
 
 
+# Territory mode: a conquest variant. Each side starts owning a quarter of the
+# board and grows by proposing one rectangular capture zone at a time and
+# holding it. Owned land grants full vision and a small speed boost, and shrinks
+# the recruit interval. First side to hold >= TERRITORY_WIN_FRACTION wins.
+# (These were dropped by the #184/#185 merge; restored — territory methods use them.)
+TERRITORY_START_FRACTION = 0.25      # each side's home quarter at match start
+TERRITORY_WIN_FRACTION = 0.75        # board fraction owned to win (strict, no rounding up)
+TERRITORY_RECRUIT_BASE = 180.0       # recruit interval at starting territory (3:00)
+TERRITORY_RECRUIT_STEP_FRACTION = 0.05   # every +5% of board beyond start...
+TERRITORY_RECRUIT_STEP_SECONDS = 15.0    # ...cuts the interval by 15 s...
+TERRITORY_RECRUIT_MIN = 15.0             # ...down to a 15 s floor.
+# Capture time scales with zone area: a zone covering TERRITORY_CAPTURE_REF_FRACTION
+# of the board takes TERRITORY_CAPTURE_REF_SECONDS (5% -> 15 s, 10% -> 30 s, ...).
+TERRITORY_CAPTURE_REF_FRACTION = 0.05
+TERRITORY_CAPTURE_REF_SECONDS = 15.0
+TERRITORY_SPEED_BONUS = 1.15         # movement multiplier on your own territory
+# Vision in territory mode is capped to weapon range + this margin (in tiles).
+# The margin band is the "fringe": visible but rendered slightly dimmer.
+TERRITORY_SIGHT_MARGIN = 2
+
+
 # Ordered tier list used for elevation-adjacency checks during movement.
 _ELEV_TIER_ORDER = [ELEV_TRENCH, ELEV_GROUND, ELEV_HILL, ELEV_MOUNTAIN]
 
@@ -597,6 +618,14 @@ class TopowarGameState:
         # Soldiers the occupying side has inside the zone this tick (0 if
         # contested/empty); scales capture speed and the client pulse strength.
         self.capture_occupant_count: int = 0
+        # Territory mode state (restored: dropped by the #184/#185 merge).
+        # territory[owner] is the set of tiles a side owns; proposed_zone[owner]
+        # is its pending capture rect (or None); zone_progress[owner] is the
+        # accumulated capture seconds; zone_contested[owner] flags an enemy in it.
+        self.territory: dict[int, set[tuple[int, int]]] = {0: set(), 1: set()}
+        self.proposed_zone: dict[int, tuple[int, int, int, int] | None] = {0: None, 1: None}
+        self.zone_progress: dict[int, float] = {0: 0.0, 1: 0.0}
+        self.zone_contested: dict[int, bool] = {0: False, 1: False}
         self._setup()
 
     def _setup(self):
@@ -1068,6 +1097,16 @@ class TopowarGameState:
             self.capture_contested = False
         if not hasattr(self, "capture_occupant_count"):
             self.capture_occupant_count = 0
+        if not hasattr(self.rules, "territory_mode"):
+            self.rules.territory_mode = False
+        if not hasattr(self, "territory"):
+            self.territory = {0: set(), 1: set()}
+        if not hasattr(self, "proposed_zone"):
+            self.proposed_zone = {0: None, 1: None}
+        if not hasattr(self, "zone_progress"):
+            self.zone_progress = {0: 0.0, 1: 0.0}
+        if not hasattr(self, "zone_contested"):
+            self.zone_contested = {0: False, 1: False}
         for s in self.soldiers.values():
             if not hasattr(s, "move_delay"):
                 s.move_delay = 0.0
