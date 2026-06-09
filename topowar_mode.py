@@ -47,34 +47,34 @@ RANK_SMOKE = 8
 RANK_AIRSTRIKE = 10
 
 # Capture Zone mode: a square objective revealed when the build phase ends. A
-# side wins by keeping at least one soldier inside it, with no enemy soldier
-# present, for CAPTURE_GOAL_SECONDS of accumulated time.
+# side wins by keeping a soldier inside it, with no enemy soldier present, long
+# enough for progress to fill. One soldier takes CAPTURE_GOAL_SECONDS; more
+# attackers take it faster, down to CAPTURE_FAST_SECONDS at CAPTURE_FAST_SOLDIERS.
 CAPTURE_ZONE_SIZE = 6           # zone is CAPTURE_ZONE_SIZE x CAPTURE_ZONE_SIZE tiles
-CAPTURE_GOAL_SECONDS = 60.0     # uncontested hold needed to win
+CAPTURE_GOAL_SECONDS = 60.0     # uncontested hold to win with a single soldier
+CAPTURE_FAST_SECONDS = 30.0     # uncontested hold to win at CAPTURE_FAST_SOLDIERS+
+CAPTURE_FAST_SOLDIERS = 4       # soldier count at which capture speed maxes out
 # While the zone is empty (neither side inside) accrued progress bleeds back
 # toward zero at this fraction of the build rate, so a hold can't be banked and
 # abandoned — but a brief gap (a soldier dies, another steps in) isn't fatal.
 CAPTURE_EMPTY_DECAY_RATE = 0.5
 
 
-# Territory mode: a conquest variant. Each side starts owning a quarter of the
-# board and grows by proposing one rectangular capture zone at a time and
-# holding it. Owned land grants full vision and a small speed boost, and shrinks
-# the recruit interval. First side to hold >= TERRITORY_WIN_FRACTION wins.
-TERRITORY_START_FRACTION = 0.25      # each side's home quarter at match start
-TERRITORY_WIN_FRACTION = 0.75        # board fraction owned to win (strict, no rounding up)
-TERRITORY_RECRUIT_BASE = 180.0       # recruit interval at starting territory (3:00)
-TERRITORY_RECRUIT_STEP_FRACTION = 0.05   # every +5% of board beyond start...
-TERRITORY_RECRUIT_STEP_SECONDS = 15.0    # ...cuts the interval by 15 s...
-TERRITORY_RECRUIT_MIN = 15.0             # ...down to a 15 s floor.
-# Capture time scales with zone area: a zone covering TERRITORY_CAPTURE_REF_FRACTION
-# of the board takes TERRITORY_CAPTURE_REF_SECONDS (5% -> 15 s, 10% -> 30 s, ...).
-TERRITORY_CAPTURE_REF_FRACTION = 0.05
-TERRITORY_CAPTURE_REF_SECONDS = 15.0
-TERRITORY_SPEED_BONUS = 1.15         # movement multiplier on your own territory
-# Vision in territory mode is capped to weapon range + this margin (in tiles).
-# The margin band is the "fringe": visible but rendered slightly dimmer.
-TERRITORY_SIGHT_MARGIN = 2
+def _capture_rate(occupant_count: int) -> float:
+    """Capture build/drain multiplier for the number of attackers in the zone.
+
+    One soldier -> 1.0 (CAPTURE_GOAL_SECONDS to take). Each extra body adds
+    speed linearly up to CAPTURE_FAST_SOLDIERS, where the rate reaches
+    CAPTURE_GOAL_SECONDS / CAPTURE_FAST_SECONDS (so the hold needed drops to
+    CAPTURE_FAST_SECONDS). More than CAPTURE_FAST_SOLDIERS gives no further gain.
+    """
+    n = max(1, min(int(occupant_count), CAPTURE_FAST_SOLDIERS))
+    if CAPTURE_FAST_SOLDIERS <= 1 or CAPTURE_FAST_SECONDS <= 0:
+        return 1.0
+    frac = (n - 1) / (CAPTURE_FAST_SOLDIERS - 1)
+    max_rate = CAPTURE_GOAL_SECONDS / CAPTURE_FAST_SECONDS
+    return 1.0 + frac * (max_rate - 1.0)
+
 
 # Ordered tier list used for elevation-adjacency checks during movement.
 _ELEV_TIER_ORDER = [ELEV_TRENCH, ELEV_GROUND, ELEV_HILL, ELEV_MOUNTAIN]
@@ -594,14 +594,9 @@ class TopowarGameState:
         self.capture_progress: float = 0.0
         self.capture_owner: int | None = None
         self.capture_contested: bool = False
-        # Territory mode state. territory[owner] is the set of tiles a side owns;
-        # proposed_zone[owner] is its current pending capture rect (or None);
-        # zone_progress[owner] is accumulated capture seconds toward that zone;
-        # zone_contested[owner] flags an enemy standing in it this tick.
-        self.territory: dict[int, set[tuple[int, int]]] = {0: set(), 1: set()}
-        self.proposed_zone: dict[int, tuple[int, int, int, int] | None] = {0: None, 1: None}
-        self.zone_progress: dict[int, float] = {0: 0.0, 1: 0.0}
-        self.zone_contested: dict[int, bool] = {0: False, 1: False}
+        # Soldiers the occupying side has inside the zone this tick (0 if
+        # contested/empty); scales capture speed and the client pulse strength.
+        self.capture_occupant_count: int = 0
         self._setup()
 
     def _setup(self):
@@ -1071,16 +1066,8 @@ class TopowarGameState:
             self.capture_owner = None
         if not hasattr(self, "capture_contested"):
             self.capture_contested = False
-        if not hasattr(self.rules, "territory_mode"):
-            self.rules.territory_mode = False
-        if not hasattr(self, "territory"):
-            self.territory = {0: set(), 1: set()}
-        if not hasattr(self, "proposed_zone"):
-            self.proposed_zone = {0: None, 1: None}
-        if not hasattr(self, "zone_progress"):
-            self.zone_progress = {0: 0.0, 1: 0.0}
-        if not hasattr(self, "zone_contested"):
-            self.zone_contested = {0: False, 1: False}
+        if not hasattr(self, "capture_occupant_count"):
+            self.capture_occupant_count = 0
         for s in self.soldiers.values():
             if not hasattr(s, "move_delay"):
                 s.move_delay = 0.0
@@ -3665,6 +3652,10 @@ class TopowarGameState:
             enemy currently owns the bar;
           * contested (both sides inside) -> frozen;
           * empty -> gentle bleed back toward zero.
+
+        The build/drain rate scales with how many attackers the lone occupying
+        side has inside the zone (see _capture_rate): one soldier takes the full
+        CAPTURE_GOAL_SECONDS, four take it in CAPTURE_FAST_SECONDS.
         """
         rect = self.capture_zone_rect
         if rect is None or self.time_elapsed < self.rules.build_phase_seconds:
@@ -3689,16 +3680,20 @@ class TopowarGameState:
             occupier = 1
         else:
             occupier = None
+        # Soldiers the lone occupying side has inside the zone (0 if contested or
+        # empty). Drives both the capture speed and the client's pulse strength.
+        self.capture_occupant_count = 0 if occupier is None else (n0 if occupier == 0 else n1)
         if occupier is not None:
+            rate = _capture_rate(self.capture_occupant_count)
             if self.capture_owner is None or self.capture_owner == occupier:
                 self.capture_owner = occupier
-                self.capture_progress = min(CAPTURE_GOAL_SECONDS, self.capture_progress + dt)
+                self.capture_progress = min(CAPTURE_GOAL_SECONDS, self.capture_progress + dt * rate)
                 if self.capture_progress >= CAPTURE_GOAL_SECONDS:
                     self.winner = occupier
                     self.win_reason = "Zone captured."
             else:
                 # Enemy currently holds the bar — drain it before this side can build.
-                self.capture_progress = max(0.0, self.capture_progress - dt)
+                self.capture_progress = max(0.0, self.capture_progress - dt * rate)
                 if self.capture_progress <= 0.0:
                     self.capture_owner = None
         elif not self.capture_contested:
@@ -4091,6 +4086,7 @@ class TopowarGameState:
                     "progress": self.capture_progress / CAPTURE_GOAL_SECONDS if CAPTURE_GOAL_SECONDS else 0.0,
                     "owner": self.capture_owner,
                     "contested": self.capture_contested,
+                    "occupant_count": self.capture_occupant_count,
                     "goal_seconds": CAPTURE_GOAL_SECONDS,
                 }
             else:
