@@ -626,6 +626,9 @@ class TopowarGameState:
         self.proposed_zone: dict[int, tuple[int, int, int, int] | None] = {0: None, 1: None}
         self.zone_progress: dict[int, float] = {0: 0.0, 1: 0.0}
         self.zone_contested: dict[int, bool] = {0: False, 1: False}
+        # Unit ids that resolved a head-on swap this tick (so the move loop skips
+        # the partner, which already moved). Reset at the top of each move pass.
+        self._swapped_this_tick: set[int] = set()
         self._setup()
 
     def _setup(self):
@@ -2464,6 +2467,9 @@ class TopowarGameState:
         raise ValueError("Unknown Topowar action.")
 
     def _move_soldier(self, s: Soldier, dt: float):
+        # Already stepped this tick via a head-on swap (see _try_swap).
+        if s.unit_id in self._swapped_this_tick:
+            return
         # Combat-halted soldiers hold position.
         if s.combat_halt or s.grenade_windup > 0:
             s.move_cooldown = 0.0
@@ -2514,6 +2520,11 @@ class TopowarGameState:
         # Wire is traversable too — it is handled below as a slow crossing, not a block.
         structure_tiles = self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
         if target in structure_tiles or (target in occ and occ[target] != s.unit_id):
+            # Head-on swap: if a friendly soldier sitting in our next tile wants to
+            # step onto ours, exchange places rather than both stalling and
+            # oscillating between two tiles trying to route around each other.
+            if target not in structure_tiles and s.move_cooldown <= 0.0 and self._try_swap(s, target, occ):
+                return
             s.blocked = True
             s.blocked_for += dt
             s.move_cooldown = 0.0
@@ -2545,6 +2556,49 @@ class TopowarGameState:
             s.path.pop(0)
             s.move_cooldown = 0.0
             s.crossing_wire = False
+
+    def _try_swap(self, s: "Soldier", target: tuple[int, int], occ: dict) -> bool:
+        """Resolve a head-on pass: if the friendly soldier occupying `target`
+        wants to step onto s's tile, exchange the two in place and return True.
+
+        This breaks the mutual-block oscillation where two soldiers trying to
+        move past each other each route around and step back forever. Restricted
+        to same-side, freely-movable soldiers on ordinary tiles (no bunkers/wire,
+        whose entry/exit and crossing rules a teleport-swap would violate).
+        """
+        if s.unit_id in self._swapped_this_tick:
+            return False
+        other = self.soldiers.get(occ.get(target))
+        if other is None or other.hp <= 0 or other.owner != s.owner:
+            return False
+        if other.unit_id in self._swapped_this_tick:
+            return False
+        if (other.combat_halt or other.grenade_windup > 0 or other.move_delay > 0.0
+                or other.crossing_wire or s.crossing_wire):
+            return False
+        bunkers, wire = self._bunker_tile_set(), self._wire_tile_set()
+        s_tile = s.tile
+        if s_tile in bunkers or target in bunkers or s_tile in wire or target in wire:
+            return False
+        # The partner's next intended step (skipping any steps onto its own tile).
+        onext = next((t for t in other.path if t != other.tile), None)
+        if onext != s_tile:
+            return False
+        # Exchange places; advance each path past the tile it just stepped onto.
+        step_secs = 1.0 / max(0.001, self.rules.soldier_move_speed)
+        s.x, s.y = float(target[0]), float(target[1])
+        other.x, other.y = float(s_tile[0]), float(s_tile[1])
+        if target in s.path:
+            s.path = s.path[s.path.index(target) + 1:]
+        if s_tile in other.path:
+            other.path = other.path[other.path.index(s_tile) + 1:]
+        s.blocked = other.blocked = False
+        s.blocked_for = other.blocked_for = 0.0
+        s.move_cooldown = other.move_cooldown = step_secs
+        s.crossing_wire = other.crossing_wire = False
+        self._swapped_this_tick.add(s.unit_id)
+        self._swapped_this_tick.add(other.unit_id)
+        return True
 
     def _rifle_combat(self, dt: float):
         if self.time_elapsed < self.rules.build_phase_seconds:
@@ -3853,6 +3907,7 @@ class TopowarGameState:
         self._try_spawn_recruits()
         self._update_tasks(dt)
         self._enforce_structure_ground_integrity()
+        self._swapped_this_tick = set()
         for s in self.soldiers.values():
             if s.hp > 0:
                 self._move_soldier(s, dt)

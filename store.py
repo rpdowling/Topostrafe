@@ -849,6 +849,12 @@ class GameStore:
                 "tw_build_phase_place_bunker",
                 "tw_formation_move",
                 "tw_disband_squad",
+                "tw_set_squad_box",
+                "tw_cancel_build_mg",
+                "tw_resume_build_mg",
+                "tw_cancel_build_mortar",
+                "tw_toggle_mortar_hold_fire",
+                "tw_set_capture_zone",
             }:
                 out = {"type": t}
                 for key in (
@@ -869,6 +875,9 @@ class GameStore:
                     "count",
                     "formation",
                     "squad_id",
+                    "kind",
+                    "box",
+                    "rect",
                 ):
                     if key in action:
                         out[key] = action[key]
