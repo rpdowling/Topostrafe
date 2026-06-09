@@ -157,6 +157,7 @@ class GameStore:
             build_phase_seconds=max(0, min(900, int(float(raw.get("build_phase_minutes", 3)) * 60))),
             generate_terrain=bool(raw.get("generate_terrain", True)),
             capture_zone=bool(raw.get("capture_zone", False)),
+            territory_mode=bool(raw.get("territory_mode", False)),
         )
 
     def _prune_expired_open_games_locked(self):
