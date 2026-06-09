@@ -183,6 +183,7 @@ const soldierDisplayPos = new Map(); // unit_id → {x, y}
 
 // Box / marquee selection state.
 let selectBox = null; // {x0, y0, x1, y1} in canvas coords, null when inactive
+let zoneDrag = null;  // territory mode: {x0,y0,x1,y1} in TILE coords while dragging a capture zone
 
 // Impact particle effects — dirt puffs (miss) and kill sparks (hit)
 let impactParticles = []; // {x, y, vx, vy, alpha, r, color, age, maxAge}
@@ -319,6 +320,9 @@ function connect() {
       const newTw = state?.topowar;
       if (newTw?.map) rebuildElevMap(newTw.map);
       if (newTw) { rebuildFogLayer(newTw); updateEnemyGhosts(newTw); }
+      // The Zone command only exists in Territory mode — show its button there.
+      const zoneBtn = el('mode-zone');
+      if (zoneBtn) zoneBtn.style.display = newTw?.rules?.territory_mode ? '' : 'none';
       // Prune tactical boxes for squads that no longer exist or have no living members.
       for (const squadId of [...squadBoxes.keys()]) {
         if (!getSquad(squadId) || squadSoldierIds(squadId).length === 0) squadBoxes.delete(squadId);
@@ -853,6 +857,7 @@ function updateModeLabel() {
   const labels = {
     select: 'Select', move: 'Move',
     dig: 'Dig/Plan', build: 'Build MG', mortar: 'Build Mortar', sandbag: 'Build Sandbag', wire: 'Wire', bunker: 'Bunker', erase: 'Undo Dig', flare: 'Flare',
+    zone: 'Set Capture Zone',
   };
   const e = el('mode-line');
   if (e) e.textContent = labels[mode] || 'Select / Move';
@@ -960,7 +965,7 @@ document.addEventListener('keydown', (evt) => {
     return;
   }
 
-  const shortcutMap = { '1':'select','2':'move','V':'move','D':'dig','B':'build','M':'mortar','G':'sandbag','W':'wire','U':'bunker','E':'erase','F':'flare','A':'airstrike' };
+  const shortcutMap = { '1':'select','2':'move','V':'move','D':'dig','B':'build','M':'mortar','G':'sandbag','W':'wire','U':'bunker','E':'erase','F':'flare','A':'airstrike','Z':'zone' };
   if (shortcutMap[key]) {
     evt.preventDefault();
     setMode(shortcutMap[key]);
@@ -1384,6 +1389,11 @@ board.addEventListener('mousedown', (evt) => {
     }
   }
 
+  if (mode === 'zone') {
+    const tile = tileFromEvent(evt);
+    if (tile) zoneDrag = { x0: tile[0], y0: tile[1], x1: tile[0], y1: tile[1] };
+    return;
+  }
   if (mode === 'dig' || mode === 'erase') { planDragging = true; return; }
   if (mode === 'select' || mode === 'move') {
     // Start a potential box-select drag only if clicking empty ground.
@@ -1401,6 +1411,12 @@ board.addEventListener('mousedown', (evt) => {
 });
 
 board.addEventListener('mouseup', (evt) => {
+  if (mode === 'zone' && zoneDrag) {
+    send({ type: 'tw_set_capture_zone', rect: [zoneDrag.x0, zoneDrag.y0, zoneDrag.x1, zoneDrag.y1] });
+    zoneDrag = null;
+    render();
+    return;
+  }
   if ((mode === 'dig' || mode === 'erase') && planDragging) {
     // Only a genuine multi-tile drag commits a plan here. A single tile (often
     // just pointer jitter during a click) is left for the click handler so it can
@@ -1462,6 +1478,11 @@ board.addEventListener('mousemove', (evt) => {
     }
     return;
   }
+  if (mode === 'zone' && zoneDrag) {
+    const tile = tileFromEvent(evt);
+    if (tile) { zoneDrag.x1 = tile[0]; zoneDrag.y1 = tile[1]; render(); }
+    return;
+  }
   if ((mode === 'dig' || mode === 'erase') && planDragging) {
     const tile = tileFromEvent(evt);
     if (tile) { addToPlan(tile); render(); }
@@ -1496,14 +1517,24 @@ function flipY(gy) {
 // incoming state (not per frame), so the 60 fps loop just blits one image.
 function rebuildFogLayer(data) {
   const fog = data?.fog_tiles || [];
-  if (!fog.length) { fogLayer = null; return; }
+  const fringe = data?.fringe_tiles || [];   // territory mode: seen-but-distant band
+  if (!fog.length && !fringe.length) { fogLayer = null; return; }
   const W = data.map.width, H = data.map.height;
   const lay = document.createElement('canvas');
   lay.width = OX * 2 + W * CELL;
   lay.height = OY * 2 + H * CELL;
   const lctx = lay.getContext('2d');
-  lctx.fillStyle = 'rgba(10,12,16,0.40)';
   const flip = mySeat() === 1;
+  // Fringe first (a tiny bit greyed — just past clear shooting sight).
+  lctx.fillStyle = 'rgba(10,12,16,0.12)';
+  for (const idx of fringe) {
+    const x = idx % W;
+    const y = idx / W | 0;
+    const dy = flip ? (H - 1 - y) : y;
+    lctx.fillRect(OX + x * CELL, OY + dy * CELL, CELL - 1, CELL - 1);
+  }
+  // Fully fogged tiles (no sight).
+  lctx.fillStyle = 'rgba(10,12,16,0.40)';
   for (const idx of fog) {
     const x = idx % W;
     const y = idx / W | 0;
@@ -1687,6 +1718,90 @@ function drawCaptureZone(data) {
   ctx.fillText(label, (px0 + px1) / 2, (py0 + py1) / 2);
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
+  ctx.restore();
+}
+
+// Territory mode: faint fill + outline of each side's owned land, plus both
+// sides' pending capture zones with progress traced in the owner's colour, and
+// a live preview of the rectangle I'm dragging in Zone mode.
+function drawTerritory(data) {
+  const terr = data && data.territory;
+  if (!terr) return;
+  const W = data.map.width, H = data.map.height;
+  const flip = mySeat() === 1;
+  const seat = mySeat();
+  const cornerX = (cx) => OX + cx * CELL;                       // tile grid-line x -> pixel
+  const cornerY = (cy) => OY + (flip ? (H - cy) : cy) * CELL;   // tile grid-line y -> pixel
+  const tileTop = (y) => OY + (flip ? (H - 1 - y) : y) * CELL;  // tile top-left pixel row
+  const COL = { 0: [224, 48, 48], 1: [48, 96, 208] };
+
+  ctx.save();
+  ctx.setLineDash([]);
+  for (const side of [0, 1]) {
+    const idxs = terr[String(side)] || [];
+    if (!idxs.length) continue;
+    const set = new Set(idxs);
+    const [r, g, b] = COL[side];
+    const mine = side === seat;
+    ctx.fillStyle = `rgba(${r},${g},${b},0.06)`;
+    for (const idx of idxs) {
+      ctx.fillRect(cornerX(idx % W), tileTop((idx / W) | 0), CELL, CELL);
+    }
+    ctx.beginPath();
+    for (const idx of idxs) {
+      const x = idx % W, y = (idx / W) | 0;
+      if (x === 0     || !set.has(idx - 1)) { ctx.moveTo(cornerX(x),     cornerY(y)); ctx.lineTo(cornerX(x),     cornerY(y + 1)); }
+      if (x === W - 1 || !set.has(idx + 1)) { ctx.moveTo(cornerX(x + 1), cornerY(y)); ctx.lineTo(cornerX(x + 1), cornerY(y + 1)); }
+      if (y === 0     || !set.has(idx - W)) { ctx.moveTo(cornerX(x),     cornerY(y)); ctx.lineTo(cornerX(x + 1), cornerY(y)); }
+      if (y === H - 1 || !set.has(idx + W)) { ctx.moveTo(cornerX(x),     cornerY(y + 1)); ctx.lineTo(cornerX(x + 1), cornerY(y + 1)); }
+    }
+    ctx.strokeStyle = `rgba(${r},${g},${b},${mine ? 0.55 : 0.40})`;
+    ctx.lineWidth = mine ? 2 : 1.4;
+    ctx.stroke();
+  }
+
+  const zoneRectPx = (x0, y0, x1, y1) => {
+    const px0 = OX + Math.min(x0, x1) * CELL, px1 = OX + (Math.max(x0, x1) + 1) * CELL;
+    const fyA = flip ? (H - 1 - y0) : y0, fyB = flip ? (H - 1 - y1) : y1;
+    const py0 = OY + Math.min(fyA, fyB) * CELL, py1 = OY + (Math.max(fyA, fyB) + 1) * CELL;
+    return [px0, py0, px1 - px0, py1 - py0];
+  };
+
+  const zones = terr.zones || {};
+  for (const side of [0, 1]) {
+    const z = zones[String(side)];
+    if (!z) continue;
+    const [r, g, b] = COL[side];
+    const [zx, zy, w, h] = zoneRectPx(z.x0, z.y0, z.x1, z.y1);
+    const ix = zx + 1.5, iy = zy + 1.5, iw = w - 3, ih = h - 3;
+    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = z.contested ? 'rgba(240,200,60,0.9)' : `rgba(${r},${g},${b},0.5)`;
+    ctx.strokeRect(ix, iy, iw, ih);
+    const prog = Math.max(0, Math.min(1, z.progress || 0));
+    if (prog > 0) {
+      const perim = 2 * (iw + ih);
+      ctx.setLineDash([perim * prog, perim]);
+      ctx.lineDashOffset = 0;
+      ctx.lineCap = 'butt';
+      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = `rgb(${r},${g},${b})`;
+      ctx.strokeRect(ix, iy, iw, ih);
+    }
+    ctx.setLineDash([]);
+  }
+
+  if (mode === 'zone' && zoneDrag) {
+    const [r, g, b] = COL[seat === 1 ? 1 : 0];
+    const [zx, zy, w, h] = zoneRectPx(zoneDrag.x0, zoneDrag.y0, zoneDrag.x1, zoneDrag.y1);
+    ctx.setLineDash([6, 4]);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = `rgba(${r},${g},${b},0.95)`;
+    ctx.strokeRect(zx + 1, zy + 1, w - 2, h - 2);
+    ctx.fillStyle = `rgba(${r},${g},${b},0.10)`;
+    ctx.fillRect(zx, zy, w, h);
+    ctx.setLineDash([]);
+  }
   ctx.restore();
 }
 
@@ -3415,6 +3530,7 @@ function draw() {
 
   // Capture Zone objective (revealed once the build phase ends).
   drawCaptureZone(data);
+  drawTerritory(data);
 
   // Game-over overlay
   if (state && state.winner !== null && state.winner !== undefined) {
@@ -3882,7 +3998,7 @@ function render() {
 
 [
   ['mode-select','select'], ['mode-move','move'],
-  ['mode-dig','dig'], ['mode-build','build'], ['mode-mortar','mortar'], ['mode-sandbag','sandbag'], ['mode-wire','wire'], ['mode-bunker','bunker'], ['mode-erase','erase'], ['mode-flare','flare'], ['mode-airstrike','airstrike'],
+  ['mode-dig','dig'], ['mode-build','build'], ['mode-mortar','mortar'], ['mode-sandbag','sandbag'], ['mode-wire','wire'], ['mode-bunker','bunker'], ['mode-erase','erase'], ['mode-flare','flare'], ['mode-airstrike','airstrike'], ['mode-zone','zone'],
 ].forEach(([id, m]) => {
   const btn = el(id);
   if (btn) btn.addEventListener('click', (evt) => { evt.stopPropagation(); setMode(m); render(); });

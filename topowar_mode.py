@@ -56,6 +56,26 @@ CAPTURE_GOAL_SECONDS = 60.0     # uncontested hold needed to win
 # abandoned — but a brief gap (a soldier dies, another steps in) isn't fatal.
 CAPTURE_EMPTY_DECAY_RATE = 0.5
 
+
+# Territory mode: a conquest variant. Each side starts owning a quarter of the
+# board and grows by proposing one rectangular capture zone at a time and
+# holding it. Owned land grants full vision and a small speed boost, and shrinks
+# the recruit interval. First side to hold >= TERRITORY_WIN_FRACTION wins.
+TERRITORY_START_FRACTION = 0.25      # each side's home quarter at match start
+TERRITORY_WIN_FRACTION = 0.75        # board fraction owned to win (strict, no rounding up)
+TERRITORY_RECRUIT_BASE = 180.0       # recruit interval at starting territory (3:00)
+TERRITORY_RECRUIT_STEP_FRACTION = 0.05   # every +5% of board beyond start...
+TERRITORY_RECRUIT_STEP_SECONDS = 15.0    # ...cuts the interval by 15 s...
+TERRITORY_RECRUIT_MIN = 15.0             # ...down to a 15 s floor.
+# Capture time scales with zone area: a zone covering TERRITORY_CAPTURE_REF_FRACTION
+# of the board takes TERRITORY_CAPTURE_REF_SECONDS (5% -> 15 s, 10% -> 30 s, ...).
+TERRITORY_CAPTURE_REF_FRACTION = 0.05
+TERRITORY_CAPTURE_REF_SECONDS = 15.0
+TERRITORY_SPEED_BONUS = 1.15         # movement multiplier on your own territory
+# Vision in territory mode is capped to weapon range + this margin (in tiles).
+# The margin band is the "fringe": visible but rendered slightly dimmer.
+TERRITORY_SIGHT_MARGIN = 2
+
 # Ordered tier list used for elevation-adjacency checks during movement.
 _ELEV_TIER_ORDER = [ELEV_TRENCH, ELEV_GROUND, ELEV_HILL, ELEV_MOUNTAIN]
 
@@ -117,6 +137,9 @@ class RulesConfig:
     # uncontested for one minute wins the match (in addition to the normal
     # elimination/timeout conditions).
     capture_zone: bool = False
+    # Territory (conquest) mode. Replaces the single capture zone with growable
+    # territory, range-capped vision, and a 75%-of-board win condition.
+    territory_mode: bool = False
 
 
 @dataclass
@@ -571,6 +594,14 @@ class TopowarGameState:
         self.capture_progress: float = 0.0
         self.capture_owner: int | None = None
         self.capture_contested: bool = False
+        # Territory mode state. territory[owner] is the set of tiles a side owns;
+        # proposed_zone[owner] is its current pending capture rect (or None);
+        # zone_progress[owner] is accumulated capture seconds toward that zone;
+        # zone_contested[owner] flags an enemy standing in it this tick.
+        self.territory: dict[int, set[tuple[int, int]]] = {0: set(), 1: set()}
+        self.proposed_zone: dict[int, tuple[int, int, int, int] | None] = {0: None, 1: None}
+        self.zone_progress: dict[int, float] = {0: 0.0, 1: 0.0}
+        self.zone_contested: dict[int, bool] = {0: False, 1: False}
         self._setup()
 
     def _setup(self):
@@ -598,8 +629,23 @@ class TopowarGameState:
             self._spawn_soldier(1, (bx, y_blue), is_grenadier=False, is_officer=(i == officer_idx))
         # Done last so terrain/spawn RNG is identical whether or not the mode is
         # on (the objective only draws extra randomness when enabled).
-        if self.rules.capture_zone:
+        if self.rules.capture_zone and not self.rules.territory_mode:
             self._place_capture_zone()
+        if self.rules.territory_mode:
+            self._init_territory()
+
+    def _init_territory(self):
+        """Give each side its home quarter: Red the bottom rows, Blue the top.
+
+        Each strip is TERRITORY_START_FRACTION of the board's height (so ~25% of
+        the tiles), mirroring the existing top/bottom orientation of the two
+        starting trenches.
+        """
+        W, H = self.map.width, self.map.height
+        q = max(1, round(H * TERRITORY_START_FRACTION))
+        q = min(q, H // 2)  # never overlap the two home strips on a tiny board
+        self.territory[1] = {(x, y) for x in range(W) for y in range(q)}            # Blue: top
+        self.territory[0] = {(x, y) for x in range(W) for y in range(H - q, H)}     # Red: bottom
 
     def _place_capture_zone(self):
         """Pick the Capture Zone's tile rect on the map's centre line.
@@ -818,9 +864,26 @@ class TopowarGameState:
     def _try_spawn_recruits(self):
         for owner in (0, 1):
             if self.time_elapsed >= self.next_recruit_time[owner]:
-                self.next_recruit_time[owner] += 180.0
+                self.next_recruit_time[owner] += self._recruit_interval(owner)
                 self._spawn_recruit(owner)
                 self._resupply_mortar_ammo(owner)
+
+    def _recruit_interval(self, owner: int) -> float:
+        """Seconds until this side's next recruit.
+
+        Default TERRITORY_RECRUIT_BASE (3:00). In territory mode every full
+        TERRITORY_RECRUIT_STEP_FRACTION of the board held *beyond* the starting
+        quarter cuts the interval by TERRITORY_RECRUIT_STEP_SECONDS, down to
+        TERRITORY_RECRUIT_MIN.
+        """
+        if not getattr(self.rules, "territory_mode", False):
+            return 180.0
+        total = max(1, self.map.width * self.map.height)
+        frac = len(self.territory.get(owner, ())) / total
+        extra = max(0.0, frac - TERRITORY_START_FRACTION)
+        steps = int(extra / TERRITORY_RECRUIT_STEP_FRACTION + 1e-9)
+        return max(TERRITORY_RECRUIT_MIN,
+                   TERRITORY_RECRUIT_BASE - steps * TERRITORY_RECRUIT_STEP_SECONDS)
 
     def _occupied_tiles(self) -> dict[tuple[int, int], int]:
         return {s.tile: sid for sid, s in self.soldiers.items() if s.hp > 0}
@@ -1008,6 +1071,16 @@ class TopowarGameState:
             self.capture_owner = None
         if not hasattr(self, "capture_contested"):
             self.capture_contested = False
+        if not hasattr(self.rules, "territory_mode"):
+            self.rules.territory_mode = False
+        if not hasattr(self, "territory"):
+            self.territory = {0: set(), 1: set()}
+        if not hasattr(self, "proposed_zone"):
+            self.proposed_zone = {0: None, 1: None}
+        if not hasattr(self, "zone_progress"):
+            self.zone_progress = {0: 0.0, 1: 0.0}
+        if not hasattr(self, "zone_contested"):
+            self.zone_contested = {0: False, 1: False}
         for s in self.soldiers.values():
             if not hasattr(s, "move_delay"):
                 s.move_delay = 0.0
@@ -1856,6 +1929,29 @@ class TopowarGameState:
                 raise ValueError("Mortar not found.")
             mortar.hold_fire = not mortar.hold_fire
             return f"Mortar hold fire {'on' if mortar.hold_fire else 'off'}."
+        if t == "tw_set_capture_zone":
+            if not getattr(self.rules, "territory_mode", False):
+                raise ValueError("Territory mode is not enabled.")
+            rect_raw = action.get("rect", [])
+            if not rect_raw:  # empty -> clear the pending zone
+                self.proposed_zone[owner] = None
+                self.zone_progress[owner] = 0.0
+                self.zone_contested[owner] = False
+                return "Capture zone cleared."
+            if len(rect_raw) != 4:
+                raise ValueError("Invalid zone.")
+            ax, ay, bx, by = (int(v) for v in rect_raw)
+            x0, x1 = sorted((ax, bx))
+            y0, y1 = sorted((ay, by))
+            x0 = max(0, x0); y0 = max(0, y0)
+            x1 = min(self.map.width - 1, x1); y1 = min(self.map.height - 1, y1)
+            if x1 < x0 or y1 < y0:
+                raise ValueError("Zone is off the board.")
+            self.proposed_zone[owner] = (x0, y0, x1, y1)
+            self.zone_progress[owner] = 0.0
+            self.zone_contested[owner] = False
+            secs = self._capture_seconds_for_rect((x0, y0, x1, y1))
+            return f"Capture zone set ({(x1 - x0 + 1)}x{(y1 - y0 + 1)}, ~{secs:.0f}s to take)."
         if t == "tw_toggle_operate_mortar":
             mid = int(action.get("mortar_id", -1))
             mortar = self.mortars.get(mid)
@@ -2413,6 +2509,8 @@ class TopowarGameState:
                 s.move_cooldown = self.rules.wire_cross_seconds
             else:
                 terrain_mult = self._terrain_speed_multiplier(target)
+                if getattr(self.rules, "territory_mode", False) and target in self.territory.get(s.owner, ()):
+                    terrain_mult *= TERRITORY_SPEED_BONUS  # small home-ground boost
                 s.move_cooldown = 1.0 / max(0.001, self.rules.soldier_move_speed * terrain_mult)
         s.crossing_wire = crossing
         s.move_cooldown -= dt
@@ -3609,6 +3707,109 @@ class TopowarGameState:
             if self.capture_progress <= 0.0:
                 self.capture_owner = None
 
+    # --- Territory mode -------------------------------------------------------
+    def _capture_seconds_for_rect(self, rect: tuple[int, int, int, int]) -> float:
+        """Seconds to capture a zone, scaled by its share of the board.
+
+        TERRITORY_CAPTURE_REF_FRACTION of the board -> TERRITORY_CAPTURE_REF_SECONDS
+        (5% -> 15 s, 10% -> 30 s, linear in area). Smaller zones capture faster.
+        """
+        x0, y0, x1, y1 = rect
+        area = (x1 - x0 + 1) * (y1 - y0 + 1)
+        total = max(1, self.map.width * self.map.height)
+        per_fraction = TERRITORY_CAPTURE_REF_SECONDS / TERRITORY_CAPTURE_REF_FRACTION
+        return max(0.5, (area / total) * per_fraction)
+
+    def _claim_zone(self, owner: int, rect: tuple[int, int, int, int]):
+        """Convert a fully-captured zone's tiles into `owner`'s territory."""
+        enemy = 1 - owner
+        x0, y0, x1, y1 = rect
+        for yy in range(y0, y1 + 1):
+            for xx in range(x0, x1 + 1):
+                t = (xx, yy)
+                self.territory[owner].add(t)
+                self.territory[enemy].discard(t)
+        self.proposed_zone[owner] = None
+        self.zone_progress[owner] = 0.0
+        self.zone_contested[owner] = False
+        self._invalidate_fog_cache()  # ownership changes alter full-vision tiles
+
+    def _update_territory(self, dt: float):
+        """Advance each side's pending zone capture and award the conquest win.
+
+        A side's zone fills only while it has a soldier inside and no enemy is
+        present (contested or empty -> frozen). Completing it claims the rect as
+        territory. First side to hold >= TERRITORY_WIN_FRACTION of the board (a
+        strict fraction, never rounded up) wins.
+        """
+        if self.time_elapsed < self.rules.build_phase_seconds:
+            return
+        for owner in (0, 1):
+            rect = self.proposed_zone[owner]
+            if rect is None:
+                self.zone_contested[owner] = False
+                continue
+            x0, y0, x1, y1 = rect
+            own_n = enemy_n = 0
+            for s in self.soldiers.values():
+                if s.hp <= 0:
+                    continue
+                tx, ty = s.tile
+                if x0 <= tx <= x1 and y0 <= ty <= y1:
+                    if s.owner == owner:
+                        own_n += 1
+                    else:
+                        enemy_n += 1
+            self.zone_contested[owner] = enemy_n > 0
+            if own_n > 0 and enemy_n == 0:
+                self.zone_progress[owner] += dt
+                if self.zone_progress[owner] >= self._capture_seconds_for_rect(rect):
+                    self._claim_zone(owner, rect)
+            # contested or empty -> progress simply holds
+        total = self.map.width * self.map.height
+        if self.winner is None:
+            for owner in (0, 1):
+                # Strict >= TERRITORY_WIN_FRACTION with no rounding up: compare as
+                # integers (tiles/total >= 3/4  <=>  4*tiles >= 3*total).
+                num, den = TERRITORY_WIN_FRACTION.as_integer_ratio()
+                if len(self.territory[owner]) * den >= num * total:
+                    self.winner = owner
+                    self.win_reason = "Territory control."
+                    break
+
+    def _territory_vision_tiles(self, viewer: int) -> tuple[set, set]:
+        """(clear, fringe) tiles for a side in territory mode.
+
+        Vision is capped to each soldier's weapon range (clear) plus a
+        TERRITORY_SIGHT_MARGIN band (fringe, rendered dimmer), intersected with
+        terrain line-of-sight. Your own territory is always fully clear.
+        """
+        los = self._visible_tiles_for(viewer)  # None => no terrain blockers
+        clear: set[tuple[int, int]] = set(self.territory.get(viewer, ()))
+        fringe: set[tuple[int, int]] = set()
+        W, H = self.map.width, self.map.height
+        for s in self.soldiers.values():
+            if s.hp <= 0 or s.owner != viewer:
+                continue
+            sx, sy = s.tile
+            shoot = self._soldier_effective_range(s, s.tile)
+            sight = shoot + TERRITORY_SIGHT_MARGIN
+            r = int(math.ceil(sight))
+            for yy in range(max(0, sy - r), min(H, sy + r + 1)):
+                for xx in range(max(0, sx - r), min(W, sx + r + 1)):
+                    t = (xx, yy)
+                    d = math.hypot(xx - sx, yy - sy)
+                    if d > sight:
+                        continue
+                    if los is not None and t not in los:
+                        continue
+                    if d <= shoot:
+                        clear.add(t)
+                    elif t not in clear:
+                        fringe.add(t)
+        fringe -= clear
+        return clear, fringe
+
     def tick(self, dt: float):
         self._ensure_runtime_compat()
         if self.winner is not None:
@@ -3633,11 +3834,13 @@ class TopowarGameState:
         self._update_smoke_sources(dt)
         self._update_projectiles(dt)
         self._update_effects(dt)
-        if self.rules.capture_zone:
+        if self.rules.territory_mode:
+            self._update_territory(dt)
+        elif self.rules.capture_zone:
             self._update_capture_zone(dt)
         # Officer death no longer ends the game — it suspends command (see
         # _has_command). The match is won only by total elimination, by holding
-        # the capture zone (above), or by kill count when the clock runs out.
+        # the capture zone / territory (above), or by kill count when the clock runs out.
         if self.winner is None:
             alive0 = sum(1 for s in self.soldiers.values() if s.owner == 0 and s.hp > 0)
             alive1 = sum(1 for s in self.soldiers.values() if s.owner == 1 and s.hp > 0)
@@ -3684,8 +3887,19 @@ class TopowarGameState:
         # Line-of-sight fog (combat phase only; build phase keeps its own
         # side-based hiding). visible_set is None when fog is off or the map has
         # no blockers, in which case _fogged() never hides anything.
+        # Territory mode defines its own range-capped vision (clear + a dimmer
+        # fringe band), with full vision over owned land. It applies in the combat
+        # phase regardless of the fog_of_war flag; otherwise fall back to the
+        # normal line-of-sight fog.
+        territory_active = getattr(self.rules, "territory_mode", False) and viewer is not None and not in_build_phase
         fog_active = (getattr(self.rules, "fog_of_war", True) and viewer is not None and not in_build_phase)
-        visible_set = self._visible_tiles_for(viewer) if fog_active else None
+        fringe_set = None
+        if territory_active:
+            clear_set, fringe_set = self._territory_vision_tiles(viewer)
+            visible_set = clear_set | fringe_set
+            fog_active = True  # drive the fog_tiles overlay below
+        else:
+            visible_set = self._visible_tiles_for(viewer) if fog_active else None
 
         def _fogged(tile):
             return visible_set is not None and tile not in visible_set and tile not in illuminated
@@ -3857,11 +4071,18 @@ class TopowarGameState:
                 for tx in range(Wd):
                     if (tx, ty) not in visible_set and (tx, ty) not in illuminated:
                         fog_tiles.append(base + tx)
+        # Fringe band (territory mode): seen but rendered slightly dimmer than clear.
+        fringe_tiles: list[int] = []
+        if fringe_set:
+            Wd = self.map.width
+            for (tx, ty) in fringe_set:
+                if (tx, ty) not in illuminated:
+                    fringe_tiles.append(ty * Wd + tx)
         # Capture Zone objective. Hidden (active=False) until the build phase
         # ends; once active it is always shown to both sides (an objective is
         # never fogged). progress is a 0..1 fraction of the hold needed to win.
         capture_zone = None
-        if getattr(self.rules, "capture_zone", False):
+        if getattr(self.rules, "capture_zone", False) and not getattr(self.rules, "territory_mode", False):
             if self.time_elapsed >= self.rules.build_phase_seconds and self.capture_zone_rect is not None:
                 cx0, cy0, cx1, cy1 = self.capture_zone_rect
                 capture_zone = {
@@ -3874,6 +4095,31 @@ class TopowarGameState:
                 }
             else:
                 capture_zone = {"active": False}
+        # Territory mode payload: both sides' owned tiles and pending zones (both
+        # always shown — they are objectives), plus the viewer's capture progress.
+        territory = None
+        if getattr(self.rules, "territory_mode", False):
+            Wd = self.map.width
+            total = max(1, self.map.width * self.map.height)
+
+            def _zone(o):
+                r = self.proposed_zone.get(o)
+                if r is None:
+                    return None
+                z = {"x0": r[0], "y0": r[1], "x1": r[2], "y1": r[3],
+                     "contested": self.zone_contested.get(o, False)}
+                need = self._capture_seconds_for_rect(r)
+                z["progress"] = min(1.0, self.zone_progress.get(o, 0.0) / need) if need else 0.0
+                return z
+
+            territory = {
+                "0": sorted(ty * Wd + tx for (tx, ty) in self.territory.get(0, ())),
+                "1": sorted(ty * Wd + tx for (tx, ty) in self.territory.get(1, ())),
+                "counts": {"0": len(self.territory.get(0, ())), "1": len(self.territory.get(1, ()))},
+                "total": total,
+                "win_fraction": TERRITORY_WIN_FRACTION,
+                "zones": {"0": _zone(0), "1": _zone(1)},
+            }
         return {
             "rules": self.rules.__dict__.copy(),
             "build_phase_remaining": max(0.0, self.rules.build_phase_seconds - self.time_elapsed),
@@ -3886,7 +4132,9 @@ class TopowarGameState:
                 "mountains": [list(t) for t in sorted(visible_mountains)],
             },
             "fog_tiles": fog_tiles,
+            "fringe_tiles": fringe_tiles,
             "capture_zone": capture_zone,
+            "territory": territory,
             "soldiers": soldiers,
             "machine_guns": mgs,
             "mortars": mortars_out,

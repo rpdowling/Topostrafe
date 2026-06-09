@@ -106,6 +106,7 @@ function buildForm() {
   if (el('tw_mg_build_seconds')) el('tw_mg_build_seconds').value = String(topowarDefaults.mg_build_seconds ?? 30);
   if (el('tw_generate_terrain')) el('tw_generate_terrain').checked = topowarDefaults.generate_terrain !== false;
   if (el('tw_capture_zone')) el('tw_capture_zone').checked = topowarDefaults.capture_zone === true;
+  if (el('tw_territory_mode')) el('tw_territory_mode').checked = topowarDefaults.territory_mode === true;
 }
 
 
@@ -321,6 +322,7 @@ function collectTopowarPayload() {
       mg_build_seconds: Number(el('tw_mg_build_seconds')?.value || 30),
       generate_terrain: el('tw_generate_terrain')?.checked !== false,
       capture_zone: el('tw_capture_zone')?.checked === true,
+      territory_mode: el('tw_territory_mode')?.checked === true,
     },
   };
 }
