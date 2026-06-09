@@ -159,8 +159,8 @@ class RulesConfig:
     # elimination/timeout conditions).
     capture_zone: bool = False
     # Territory (conquest) mode. Replaces the single capture zone with growable
-    # territory, range-capped vision, and a 75%-of-board win condition.
-    territory_mode: bool = False
+    # territory, range-capped vision, and a 75%-of-board win condition. Default on.
+    territory_mode: bool = True
 
 
 @dataclass
@@ -603,7 +603,11 @@ class TopowarGameState:
         self.muzzle_flashes: list[MuzzleFlash] = []
         self.last_tick_monotonic = 0.0
         self._name_pool: list[str] = []
-        self.next_recruit_time: dict[int, float] = {0: 180.0, 1: 180.0}
+        self.next_recruit_time: dict[int, float] = {0: 180.0, 1: 180.0}  # legacy, kept for compat
+        # Time of each side's last recruit (0 = none yet). The next recruit is
+        # due at recruit_anchor + _recruit_interval, recomputed live so capturing
+        # territory shortens the countdown immediately.
+        self.recruit_anchor: dict[int, float] = {0: 0.0, 1: 0.0}
         # Per-side line-of-sight cache: owner -> (sources_signature, visible_tiles, time).
         self._fog_cache: dict[int, tuple] = {}
         # Capture Zone mode state. capture_zone_rect is the inclusive tile rect
@@ -626,6 +630,9 @@ class TopowarGameState:
         self.proposed_zone: dict[int, tuple[int, int, int, int] | None] = {0: None, 1: None}
         self.zone_progress: dict[int, float] = {0: 0.0, 1: 0.0}
         self.zone_contested: dict[int, bool] = {0: False, 1: False}
+        # Which side is currently capturing each proposed zone (None = nobody).
+        # A zone can be taken by its proposer (1x) or raided by the enemy (2x).
+        self.zone_capturer: dict[int, int | None] = {0: None, 1: None}
         # Unit ids that resolved a head-on swap this tick (so the move loop skips
         # the partner, which already moved). Reset at the top of each move pass.
         self._swapped_this_tick: set[int] = set()
@@ -890,8 +897,9 @@ class TopowarGameState:
 
     def _try_spawn_recruits(self):
         for owner in (0, 1):
-            if self.time_elapsed >= self.next_recruit_time[owner]:
-                self.next_recruit_time[owner] += self._recruit_interval(owner)
+            due = self.recruit_anchor[owner] + self._recruit_interval(owner)
+            if self.time_elapsed >= due:
+                self.recruit_anchor[owner] = due
                 self._spawn_recruit(owner)
                 self._resupply_mortar_ammo(owner)
 
@@ -1110,6 +1118,14 @@ class TopowarGameState:
             self.zone_progress = {0: 0.0, 1: 0.0}
         if not hasattr(self, "zone_contested"):
             self.zone_contested = {0: False, 1: False}
+        if not hasattr(self, "zone_capturer"):
+            self.zone_capturer = {0: None, 1: None}
+        if not hasattr(self, "recruit_anchor"):
+            old = getattr(self, "next_recruit_time", None)
+            if isinstance(old, dict):
+                self.recruit_anchor = {o: max(0.0, old.get(o, 180.0) - self._recruit_interval(o)) for o in (0, 1)}
+            else:
+                self.recruit_anchor = {0: 0.0, 1: 0.0}
         for s in self.soldiers.values():
             if not hasattr(s, "move_delay"):
                 s.move_delay = 0.0
@@ -1961,12 +1977,11 @@ class TopowarGameState:
         if t == "tw_set_capture_zone":
             if not getattr(self.rules, "territory_mode", False):
                 raise ValueError("Territory mode is not enabled.")
+            # One zone at a time: once set, you're committed until it is captured
+            # (by you) or lost (raided by the enemy).
+            if self.proposed_zone[owner] is not None:
+                raise ValueError("You already have a capture zone — take it or lose it before setting another.")
             rect_raw = action.get("rect", [])
-            if not rect_raw:  # empty -> clear the pending zone
-                self.proposed_zone[owner] = None
-                self.zone_progress[owner] = 0.0
-                self.zone_contested[owner] = False
-                return "Capture zone cleared."
             if len(rect_raw) != 4:
                 raise ValueError("Invalid zone.")
             ax, ay, bx, by = (int(v) for v in rect_raw)
@@ -1979,6 +1994,7 @@ class TopowarGameState:
             self.proposed_zone[owner] = (x0, y0, x1, y1)
             self.zone_progress[owner] = 0.0
             self.zone_contested[owner] = False
+            self.zone_capturer[owner] = None
             secs = self._capture_seconds_for_rect((x0, y0, x1, y1))
             return f"Capture zone set ({(x1 - x0 + 1)}x{(y1 - y0 + 1)}, ~{secs:.0f}s to take)."
         if t == "tw_toggle_operate_mortar":
@@ -3808,27 +3824,31 @@ class TopowarGameState:
         per_fraction = TERRITORY_CAPTURE_REF_SECONDS / TERRITORY_CAPTURE_REF_FRACTION
         return max(0.5, (area / total) * per_fraction)
 
-    def _claim_zone(self, owner: int, rect: tuple[int, int, int, int]):
-        """Convert a fully-captured zone's tiles into `owner`'s territory."""
-        enemy = 1 - owner
+    def _claim_zone(self, claimer: int, zone_owner: int, rect: tuple[int, int, int, int]):
+        """Award a captured zone: its tiles become `claimer`'s territory (taken
+        from the other side), and the proposer's pending-zone slot is freed."""
+        loser = 1 - claimer
         x0, y0, x1, y1 = rect
         for yy in range(y0, y1 + 1):
             for xx in range(x0, x1 + 1):
                 t = (xx, yy)
-                self.territory[owner].add(t)
-                self.territory[enemy].discard(t)
-        self.proposed_zone[owner] = None
-        self.zone_progress[owner] = 0.0
-        self.zone_contested[owner] = False
+                self.territory[claimer].add(t)
+                self.territory[loser].discard(t)
+        self.proposed_zone[zone_owner] = None
+        self.zone_progress[zone_owner] = 0.0
+        self.zone_contested[zone_owner] = False
+        self.zone_capturer[zone_owner] = None
         self._invalidate_fog_cache()  # ownership changes alter full-vision tiles
 
     def _update_territory(self, dt: float):
-        """Advance each side's pending zone capture and award the conquest win.
+        """Advance each pending zone's capture and award the conquest win.
 
-        A side's zone fills only while it has a soldier inside and no enemy is
-        present (contested or empty -> frozen). Completing it claims the rect as
-        territory. First side to hold >= TERRITORY_WIN_FRACTION of the board (a
-        strict fraction, never rounded up) wins.
+        A proposed zone is a contested objective: whichever side holds it with no
+        enemy present fills it — the proposer at 1x, the enemy raiding it at 2x.
+        Switching holders resets progress; a contested or empty zone freezes.
+        Completing it gives the holder the rect (taken from the other side) and
+        frees the proposer's slot. First side to own >= TERRITORY_WIN_FRACTION of
+        the board (a strict fraction, never rounded up) wins.
         """
         if self.time_elapsed < self.rules.build_phase_seconds:
             return
@@ -3836,24 +3856,36 @@ class TopowarGameState:
             rect = self.proposed_zone[owner]
             if rect is None:
                 self.zone_contested[owner] = False
+                self.zone_capturer[owner] = None
+                self.zone_progress[owner] = 0.0
                 continue
             x0, y0, x1, y1 = rect
-            own_n = enemy_n = 0
+            n = {0: 0, 1: 0}
             for s in self.soldiers.values():
                 if s.hp <= 0:
                     continue
                 tx, ty = s.tile
                 if x0 <= tx <= x1 and y0 <= ty <= y1:
-                    if s.owner == owner:
-                        own_n += 1
-                    else:
-                        enemy_n += 1
-            self.zone_contested[owner] = enemy_n > 0
-            if own_n > 0 and enemy_n == 0:
-                self.zone_progress[owner] += dt
+                    n[s.owner] += 1
+            enemy = 1 - owner
+            if n[owner] > 0 and n[enemy] > 0:
+                holder, contested = None, True
+            elif n[owner] > 0:
+                holder, contested = owner, False
+            elif n[enemy] > 0:
+                holder, contested = enemy, False
+            else:
+                holder, contested = None, False
+            self.zone_contested[owner] = contested
+            if holder is not None:
+                if self.zone_capturer[owner] != holder:
+                    self.zone_capturer[owner] = holder
+                    self.zone_progress[owner] = 0.0
+                rate = 1.0 if holder == owner else 2.0  # enemy raids your zone at 2x
+                self.zone_progress[owner] += dt * rate
                 if self.zone_progress[owner] >= self._capture_seconds_for_rect(rect):
-                    self._claim_zone(owner, rect)
-            # contested or empty -> progress simply holds
+                    self._claim_zone(holder, owner, rect)
+            # contested or empty -> progress and capturer hold
         total = self.map.width * self.map.height
         if self.winner is None:
             for owner in (0, 1):
@@ -4197,6 +4229,8 @@ class TopowarGameState:
                 if r is None:
                     return None
                 z = {"x0": r[0], "y0": r[1], "x1": r[2], "y1": r[3],
+                     "owner": o,
+                     "capturer": self.zone_capturer.get(o),
                      "contested": self.zone_contested.get(o, False)}
                 need = self._capture_seconds_for_rect(r)
                 z["progress"] = min(1.0, self.zone_progress.get(o, 0.0) / need) if need else 0.0
@@ -4248,8 +4282,8 @@ class TopowarGameState:
             "time_elapsed": self.time_elapsed,
             "time_remaining": max(0.0, self.rules.match_time_seconds - self.time_elapsed),
             "recruit_timers": {
-                "0": max(0.0, self.next_recruit_time[0] - self.time_elapsed),
-                "1": max(0.0, self.next_recruit_time[1] - self.time_elapsed),
+                "0": max(0.0, self.recruit_anchor[0] + self._recruit_interval(0) - self.time_elapsed),
+                "1": max(0.0, self.recruit_anchor[1] + self._recruit_interval(1) - self.time_elapsed),
             },
             "winner": self.winner,
             "win_reason": self.win_reason,
