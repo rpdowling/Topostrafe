@@ -2805,6 +2805,19 @@ class TopowarGameState:
             return False
         return not any(b.hp > 0 and b.tile == tile for b in self.bunkers.values())
 
+    def _is_diggable(self, tile: tuple[int, int]) -> bool:
+        """True if a soldier can dig this tile into a trench: in-bounds, open flat
+        ground (not already a trench / hill / mountain), and clear of structures."""
+        if not self.map.in_bounds(tile):
+            return False
+        if self.map.elevation_at(tile) != ELEV_GROUND:
+            return False
+        return not (
+            tile in self._mg_tile_set() or tile in self._mortar_tile_set()
+            or tile in self._sandbag_tile_set() or tile in self._wire_tile_set()
+            or tile in self._bunker_tile_set()
+        )
+
     def _killbox_tiles(self, owner: int) -> frozenset[tuple[int, int]]:
         """Tiles inside `owner`'s active Kill Box zones — soft obstacles their
         own soldiers route around. Cached per tick. Boxes whose squad has been
@@ -2958,6 +2971,24 @@ class TopowarGameState:
                         s.current_task = {"type": "build_wire", "wire_id": s.wire_queue.pop(0), "progress": 0.0}
                     else:
                         s.current_task = None
+            elif task["type"] == "dig":
+                tile = (int(task["tile"][0]), int(task["tile"][1]))
+                if not self._is_diggable(tile):
+                    s.current_task = None  # already a trench / blocked / invalid
+                    continue
+                if s.tile != tile:
+                    # Walk onto the tile, then dig it in.
+                    if not s.path or s.path[-1] != tile or (s.blocked and s.blocked_for >= 0.3):
+                        s.path = self._plan_path(s, tile, trench_only=False, blocked=blocked_keys - {s.tile})
+                    if not s.path:
+                        s.current_task = None  # unreachable
+                else:
+                    task["progress"] = task.get("progress", 0.0) + dt
+                    if task["progress"] >= SOLDIER_DIG_SECONDS:
+                        self.map.trenches.add(tile)
+                        self._invalidate_fog_cache()  # new trench changes LOS/cover
+                        s.current_task = None
+                        s.path = []
 
         # Auto-cancel unbuilt MGs whose assigned builder has been killed or
         # had their task changed. Any unbuilt MG with no living soldier actively

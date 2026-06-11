@@ -587,6 +587,26 @@ function spawnMovePing(tile) {
   if (tile) moveOrderPings.push({ x: tile[0], y: tile[1], age: 0 });
 }
 
+// Combat-phase dig: send the nearest selected soldier to dig the clicked square.
+function orderSoldierDig(tile) {
+  const sel = [...selectedUnits];
+  if (!sel.length) {
+    setStatus('Select a soldier first, then click open ground for it to dig in.', true);
+    return;
+  }
+  let best = null, bestD = Infinity;
+  for (const uid of sel) {
+    const s = (tw()?.soldiers || []).find(u => u.unit_id === uid);
+    if (!s) continue;
+    const d = (s.x - tile[0]) ** 2 + (s.y - tile[1]) ** 2;
+    if (d < bestD) { bestD = d; best = uid; }
+  }
+  if (best != null) {
+    send({ type: 'tw_assign_soldier_dig', unit_id: best, tile });
+    spawnMovePing(tile);
+  }
+}
+
 function selectSquad(squadId) {
   selectedSquad = (selectedSquad === squadId) ? null : squadId;
   render();
@@ -1085,7 +1105,8 @@ board.addEventListener('click', (evt) => {
   } else if (mode === 'dig') {
     if (planConsumedClick) { planConsumedClick = false; }
     else if ((tw()?.build_phase_remaining || 0) <= 0) {
-      setStatus('Digging is only allowed during the build phase.', true);
+      // Combat phase: order a selected soldier to dig the clicked square (one each).
+      if (tile) orderSoldierDig(tile);
     } else {
       // Clicking a tile you already dug erases it (refund); otherwise dig it.
       const dug = new Set((tw()?.dug_tiles || []).map(t => t[0] + ',' + t[1]));
@@ -1394,7 +1415,12 @@ board.addEventListener('mousedown', (evt) => {
     if (tile) zoneDrag = { x0: tile[0], y0: tile[1], x1: tile[0], y1: tile[1] };
     return;
   }
-  if (mode === 'dig' || mode === 'erase') { planDragging = true; return; }
+  if (mode === 'dig' || mode === 'erase') {
+    // Paint-dragging is build-phase only; in the combat phase Dig is a single
+    // click that orders one selected soldier to dig in (handled on click).
+    if ((tw()?.build_phase_remaining || 0) > 0) planDragging = true;
+    return;
+  }
   if (mode === 'select' || mode === 'move') {
     // Start a potential box-select drag only if clicking empty ground.
     const tile = tileFromEvent(evt);
@@ -2730,7 +2756,7 @@ function draw() {
         lbl = '■';  // halted to engage open enemy
         lblColor = 'rgba(255,80,80,0.95)';
       } else if (s.task) {
-        const taskLabels = { build_mg: 'BLD', operate_mg: 'CREW', move: '→' };
+        const taskLabels = { build_mg: 'BLD', operate_mg: 'CREW', move: '→', dig: '⛏' };
         lbl = taskLabels[s.task.type] || null;
       }
       if (lbl) {
@@ -3883,7 +3909,9 @@ function render() {
     const bank = twD?.dig_bank ?? 0;
     const inBuildPhase = (twD?.build_phase_remaining || 0) > 0;
     if (!inBuildPhase) {
-      setStatus('Dig is only available during the build phase.', true);
+      setStatus(selectedUnits.size
+        ? 'Dig — click open ground to send the selected soldier to dig a single trench (one at a time).'
+        : 'Dig — select a soldier, then click open ground for it to dig a single trench.');
     } else if (plan.length) {
       setStatus(`Dig — ${plan.length} tile${plan.length !== 1 ? 's' : ''} painted. Release to dig (${bank} left in bank).`);
     } else {
