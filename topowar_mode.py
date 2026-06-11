@@ -92,9 +92,20 @@ TERRITORY_RECRUIT_MIN = 15.0             # ...down to a 15 s floor.
 TERRITORY_CAPTURE_REF_FRACTION = 0.05
 TERRITORY_CAPTURE_REF_SECONDS = 15.0
 TERRITORY_SPEED_BONUS = 1.15         # movement multiplier on your own territory
-# Vision in territory mode is capped to weapon range + this margin (in tiles).
-# The margin band is the "fringe": visible but rendered slightly dimmer.
+# Vision is capped to weapon range + this margin (in tiles), in all modes when
+# fog of war is on. The margin band is the "fringe": seen but rendered dimmer.
 TERRITORY_SIGHT_MARGIN = 2
+
+# Soldiers turn to face their target (direction of travel, or last shot) at this
+# rate — a 180 degree turn takes 2 seconds. Bearing is visual only (no combat
+# effect yet); it's the readable foundation for flanking.
+SOLDIER_TURN_RATE = 90.0   # degrees per second
+# Move-speed multiplier for a soldier in sight of a living friendly officer.
+OFFICER_AURA_SPEED = 1.15
+
+# Seconds for one soldier to dig a single open-ground tile into a trench in the
+# combat phase. (Dropped by the #189/#190 merge; restored — the dig task uses it.)
+SOLDIER_DIG_SECONDS = 8.0
 
 # A soldier that holds still (no move, no shot) this long gets a steadied first
 # shot at the top of the hit-chance range; firing or moving resets the timer.
@@ -227,6 +238,12 @@ class Soldier(Unit):
     # FIRST_SHOT_AIM_SECONDS its next shot is a steadied, top-of-range hit
     # (then resets). Moving or firing resets it to 0.
     aim_time: float = 0.0
+    # Bearing the soldier is looking, degrees (0=east, 90=south, clockwise — same
+    # convention as MGs). `facing` rotates toward `facing_target` at
+    # SOLDIER_TURN_RATE; facing_target is set to the direction of travel while
+    # moving and the direction of the last shot when firing. Default toward enemy.
+    facing: float = 270.0
+    facing_target: float = 270.0
     # Seconds remaining until the soldier completes the current step in
     # `path`. While > 0 the soldier is still on its current tile.
     move_cooldown: float = 0.0
@@ -928,7 +945,11 @@ class TopowarGameState:
         sid = self.next_unit_id
         self.next_unit_id += 1
         name = self._name_pool.pop(0) if self._name_pool else f"Pvt.{sid}"
-        self.soldiers[sid] = Soldier(sid, owner, float(tile[0]), float(tile[1]), hp=SOLDIER_MAX_HP, name=name, is_grenadier=is_grenadier, is_officer=is_officer)
+        # Face the enemy at spawn: Red (bottom) looks north, Blue (top) south.
+        face = 270.0 if owner == 0 else 90.0
+        self.soldiers[sid] = Soldier(sid, owner, float(tile[0]), float(tile[1]), hp=SOLDIER_MAX_HP,
+                                     facing=face, facing_target=face, name=name,
+                                     is_grenadier=is_grenadier, is_officer=is_officer)
 
     def _spawn_recruit(self, owner: int):
         """Spawn a new soldier on the back row. Weighted toward the middle 10 columns."""
@@ -1198,6 +1219,9 @@ class TopowarGameState:
         for s in self.soldiers.values():
             if not hasattr(s, "aim_time"):
                 s.aim_time = 0.0
+            if not hasattr(s, "facing"):
+                s.facing = 270.0 if s.owner == 0 else 90.0
+                s.facing_target = s.facing
         if not hasattr(self, "recruit_anchor"):
             old = getattr(self, "next_recruit_time", None)
             if isinstance(old, dict):
@@ -1429,6 +1453,36 @@ class TopowarGameState:
     def _soldier_max_range(self, s: "Soldier") -> float:
         """Maximum rifle range — used for UI display. Same as effective range (elevation-fixed)."""
         return self._soldier_effective_range(s, s.tile)
+
+    def _sight_radius(self, s: "Soldier") -> float:
+        """How far a soldier can see — weapon range plus the fringe margin."""
+        return self._soldier_effective_range(s, s.tile) + TERRITORY_SIGHT_MARGIN
+
+    @staticmethod
+    def _bearing_deg(from_tile: tuple[int, int], to_tile: tuple[int, int]) -> float:
+        """Bearing from one tile to another, degrees (0=east, 90=south, clockwise)."""
+        return math.degrees(math.atan2(to_tile[1] - from_tile[1], to_tile[0] - from_tile[0])) % 360.0
+
+    def _near_friendly_officer(self, s: "Soldier") -> bool:
+        """True if a living friendly officer can see `s` (within its sight + LOS)."""
+        for o in self.soldiers.values():
+            if (o.unit_id != s.unit_id and o.hp > 0 and o.is_officer and o.owner == s.owner
+                    and math.dist(s.tile, o.tile) <= self._sight_radius(o)
+                    and self._has_combat_los(o.tile, s.tile)):
+                return True
+        return False
+
+    def _update_facing(self, dt: float):
+        """Rotate each soldier's bearing toward its facing_target at the turn rate."""
+        max_step = SOLDIER_TURN_RATE * dt
+        for s in self.soldiers.values():
+            if s.hp <= 0:
+                continue
+            diff = ((s.facing_target - s.facing + 180.0) % 360.0) - 180.0
+            if abs(diff) <= max_step:
+                s.facing = s.facing_target % 360.0
+            else:
+                s.facing = (s.facing + (max_step if diff > 0 else -max_step)) % 360.0
 
     def _is_concealed_by_elevation(self, shooter_tile: tuple[int, int], target_tile: tuple[int, int]) -> bool:
         """Dead-ground concealment for a trench target.
@@ -2080,6 +2134,24 @@ class TopowarGameState:
             self.zone_contested[owner] = False
             secs = self._capture_seconds_for_rect(clipped)
             return f"Capture zone set ({(cx1 - cx0 + 1)}x{(cy1 - cy0 + 1)}, ~{secs:.0f}s to take)."
+        if t == "tw_assign_soldier_dig":
+            # (Handler was dropped by the #189/#190 merge; restored.)
+            if self.time_elapsed < self.rules.build_phase_seconds:
+                raise ValueError("Soldiers can only be ordered to dig after the build phase.")
+            uid = int(action.get("unit_id", -1))
+            s = self.soldiers.get(uid)
+            if not s or s.owner != owner or s.hp <= 0:
+                raise ValueError("Soldier not found.")
+            tile_raw = action.get("tile", [])
+            if len(tile_raw) != 2:
+                raise ValueError("Invalid tile.")
+            tile = (int(tile_raw[0]), int(tile_raw[1]))
+            if not self._is_diggable(tile):
+                raise ValueError("That tile can't be dug — needs open ground.")
+            # One square per soldier, no queue: this replaces the soldier's task.
+            s.current_task = {"type": "dig", "tile": [tile[0], tile[1]], "progress": 0.0}
+            s.path = []
+            return "Soldier digging in."
         if t == "tw_toggle_operate_mortar":
             mid = int(action.get("mortar_id", -1))
             mortar = self.mortars.get(mid)
@@ -2647,15 +2719,20 @@ class TopowarGameState:
                 terrain_mult = self._terrain_speed_multiplier(target)
                 if getattr(self.rules, "territory_mode", False) and target in self.territory.get(s.owner, ()):
                     terrain_mult *= TERRITORY_SPEED_BONUS  # small home-ground boost
+                if self._near_friendly_officer(s):
+                    terrain_mult *= OFFICER_AURA_SPEED  # cohesion: faster near your officer
                 s.move_cooldown = 1.0 / max(0.001, self.rules.soldier_move_speed * terrain_mult)
         s.crossing_wire = crossing
         s.move_cooldown -= dt
         if s.move_cooldown <= 0.0:
+            prev = s.tile
             s.x, s.y = float(target[0]), float(target[1])
             s.path.pop(0)
             s.move_cooldown = 0.0
             s.crossing_wire = False
             s.aim_time = 0.0  # moving breaks the steadied aim
+            if target != prev:
+                s.facing_target = self._bearing_deg(prev, target)  # face the way we travel
 
     def _try_swap(self, s: "Soldier", target: tuple[int, int], occ: dict) -> bool:
         """Resolve a head-on pass: if the friendly soldier occupying `target`
@@ -2793,6 +2870,7 @@ class TopowarGameState:
 
             s.rifle_cooldown = 2.0
             s.aim_time = 0.0  # firing breaks the steadied aim
+            s.facing_target = self._bearing_deg(s.tile, target_tile)  # face the shot
             will_hit = self.random.random() <= chance
             self.projectiles.append(Projectile(s.owner, s.x, s.y, target_tile[0] - s.x, target_tile[1] - s.y, effective_range, "rifle", s_elev, will_hit=will_hit))
             self.muzzle_flashes.append(MuzzleFlash(s.x, s.y, target_tile[0] - s.x, target_tile[1] - s.y, s.owner))
@@ -4047,12 +4125,14 @@ class TopowarGameState:
                     self.win_reason = "Territory control."
                     break
 
-    def _territory_vision_tiles(self, viewer: int) -> tuple[set, set]:
-        """(clear, fringe) tiles for a side in territory mode.
+    def _capped_vision_tiles(self, viewer: int) -> tuple[set, set]:
+        """(clear, fringe) tiles a side can see — used in all modes when fog is on.
 
         Vision is capped to each soldier's weapon range (clear) plus a
         TERRITORY_SIGHT_MARGIN band (fringe, rendered dimmer), intersected with
-        terrain line-of-sight. Your own territory is always fully clear.
+        terrain line-of-sight. In territory mode your owned land is also fully
+        clear; outside territory mode that set is empty, so this is just the
+        range-capped sight.
         """
         los = self._visible_tiles_for(viewer)  # None => no terrain blockers
         clear: set[tuple[int, int]] = set(self.territory.get(viewer, ()))
@@ -4095,6 +4175,7 @@ class TopowarGameState:
                 self._move_soldier(s, dt)
         self._update_mortar_construction(dt)
         self._rifle_combat(dt)
+        self._update_facing(dt)
         self._update_mgs(dt)
         self._update_mortars(dt)
         self._update_mortar_shells(dt)
@@ -4162,15 +4243,16 @@ class TopowarGameState:
         # fringe band), with full vision over owned land. It applies in the combat
         # phase regardless of the fog_of_war flag; otherwise fall back to the
         # normal line-of-sight fog.
-        territory_active = getattr(self.rules, "territory_mode", False) and viewer is not None and not in_build_phase
+        # Range-capped line of sight applies in ALL modes (combat phase, fog on):
+        # each soldier sees to its weapon range (clear) plus a 2-tile fringe,
+        # through terrain LOS; territory mode also lights owned land.
         fog_active = (getattr(self.rules, "fog_of_war", True) and viewer is not None and not in_build_phase)
         fringe_set = None
-        if territory_active:
-            clear_set, fringe_set = self._territory_vision_tiles(viewer)
+        if fog_active:
+            clear_set, fringe_set = self._capped_vision_tiles(viewer)
             visible_set = clear_set | fringe_set
-            fog_active = True  # drive the fog_tiles overlay below
         else:
-            visible_set = self._visible_tiles_for(viewer) if fog_active else None
+            visible_set = None
 
         def _fogged(tile):
             return visible_set is not None and tile not in visible_set and tile not in illuminated
@@ -4202,6 +4284,7 @@ class TopowarGameState:
                 "hp_max": SOLDIER_MAX_HP,
                 # The steadied-aim "+" only shows to the soldier's own side.
                 "aimed": (s.aim_time >= FIRST_SHOT_AIM_SECONDS) if (viewer is None or s.owner == viewer) else False,
+                "facing": s.facing,
                 "mode": s.mode,
                 "blocked": s.blocked,
                 "task": task,

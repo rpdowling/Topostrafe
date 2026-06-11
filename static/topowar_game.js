@@ -2637,6 +2637,22 @@ function draw() {
       ctx.fill();
     }
 
+    // Bearing beak: a small triangle protruding the way the soldier is looking
+    // (drawn under the body so the circle covers its base). Flip-aware in y.
+    if (typeof s.facing === 'number') {
+      const a = s.facing * Math.PI / 180;
+      const dx = Math.cos(a), dy = (mySeat() === 1 ? -1 : 1) * Math.sin(a);
+      const px = -dy, py = dx;                       // unit perpendicular
+      const R = s.is_officer ? 8 : 6.5, tip = R + 4, halfW = 3.2;
+      ctx.fillStyle = soldierBodyColor(s);
+      ctx.beginPath();
+      ctx.moveTo(scx + dx * tip, scy + dy * tip);
+      ctx.lineTo(scx + dx * (R - 1) + px * halfW, scy + dy * (R - 1) + py * halfW);
+      ctx.lineTo(scx + dx * (R - 1) - px * halfW, scy + dy * (R - 1) - py * halfW);
+      ctx.closePath();
+      ctx.fill();
+    }
+
     // Body (officers are star-shaped; grenadiers and riflemen are circles)
     if (s.is_officer) {
       ctx.fillStyle = soldierBodyColor(s);
