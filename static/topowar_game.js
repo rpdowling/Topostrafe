@@ -169,6 +169,7 @@ let planDragging = false;
 let planConsumedClick = false;
 let formationCount = 1;
 let formationShape = 'horizontal';
+let formationSpacing = 0;   // empty tiles left between soldiers in a line
 let selectedSquad = null;
 let buildFlyoutOpen = false;
 // Squad tactical boxes: squadId → {kind:'killbox'|'defend', x0,y0,x1,y1 (tile coords), ax,ay (approach corner tile)}
@@ -587,19 +588,19 @@ function spawnMovePing(tile) {
   if (tile) moveOrderPings.push({ x: tile[0], y: tile[1], age: 0 });
 }
 
-// Combat-phase dig: send the nearest selected soldier to dig the clicked square.
+// Combat-phase dig: send the nearest soldier to dig the clicked square.
 function orderSoldierDig(tile) {
-  const sel = [...selectedUnits];
-  if (!sel.length) {
-    setStatus('Select a soldier first, then click open ground for it to dig in.', true);
-    return;
-  }
+  const soldiers = (tw()?.soldiers || []).filter(s => s.owner === mySeat() && s.hp > 0);
+  if (!soldiers.length) { setStatus('No soldiers available to dig.', true); return; }
+  // Prefer a selected soldier; if the selection holds none (nothing selected, or
+  // only a mortar/MG is selected), fall back to every living soldier so Dig
+  // "just works" without having to pick one first.
+  let pool = soldiers.filter(s => selectedUnits.has(s.unit_id));
+  if (!pool.length) pool = soldiers;
   let best = null, bestD = Infinity;
-  for (const uid of sel) {
-    const s = (tw()?.soldiers || []).find(u => u.unit_id === uid);
-    if (!s) continue;
+  for (const s of pool) {
     const d = (s.x - tile[0]) ** 2 + (s.y - tile[1]) ** 2;
-    if (d < bestD) { bestD = d; best = uid; }
+    if (d < bestD) { bestD = d; best = s.unit_id; }
   }
   if (best != null) {
     send({ type: 'tw_assign_soldier_dig', unit_id: best, tile });
@@ -619,16 +620,17 @@ function disbandSquad(squadId) {
   render();
 }
 
-function getFormationPositions(targetTile, shape, count, mapData) {
+function getFormationPositions(targetTile, shape, count, mapData, spacing = 0) {
   const [tx, ty] = targetTile;
   const W = mapData.width, H = mapData.height;
+  const step = Math.max(1, (spacing | 0) + 1);
   let raw = [];
   if (shape === 'horizontal') {
     const half = Math.floor((count - 1) / 2);
-    for (let i = 0; i < count; i++) raw.push([tx - half + i, ty]);
+    for (let i = 0; i < count; i++) raw.push([tx + (i - half) * step, ty]);
   } else if (shape === 'vertical') {
     const half = Math.floor((count - 1) / 2);
-    for (let i = 0; i < count; i++) raw.push([tx, ty - half + i]);
+    for (let i = 0; i < count; i++) raw.push([tx, ty + (i - half) * step]);
   } else {
     raw = [[tx, ty]];
   }
@@ -667,39 +669,58 @@ function squadSoldierIds(squadId) {
   return (sq.soldier_ids || []).filter(uid => (tw()?.soldiers || []).find(s => s.unit_id === uid));
 }
 
-// Defensive value of a tile: trenches rank highest (best cover), then high ground.
-function defenseScore(x, y) {
-  const tier = elevMap.get(`${x},${y}`);  // 0=trench, 2=hill, 3=mountain, undefined=ground
-  if (tier === 0) return 1000 + 2;          // trench: best cover (with its low base elev)
-  if (tier === 3) return 6;                 // mountain
-  if (tier === 2) return 5;                 // hill
-  return 4;                                 // ground
-}
-
-// Defend: spread the squad across the best-scoring ground inside the box, max-separated.
+// Defend: evenly distribute the squad across the whole box. We lay out a
+// balanced grid (roughly the box's own aspect ratio) and spread the soldiers
+// across it symmetrically — just hold the ground, no terrain weighting.
 function computeDefendPositions(box, n) {
   const W = tw().map.width, H = tw().map.height;
   const x0 = Math.max(0, Math.min(box.x0, box.x1)), x1 = Math.min(W - 1, Math.max(box.x0, box.x1));
   const y0 = Math.max(0, Math.min(box.y0, box.y1)), y1 = Math.min(H - 1, Math.max(box.y0, box.y1));
-  const tiles = [];
-  for (let y = y0; y <= y1; y++)
-    for (let x = x0; x <= x1; x++)
-      tiles.push({ x, y, score: defenseScore(x, y) });
-  tiles.sort((a, b) => b.score - a.score);
-  // Greedy max-spread: prefer high score, but keep picks apart.
-  const chosen = [];
-  const area = (x1 - x0 + 1) * (y1 - y0 + 1);
-  let minSpacing = Math.max(1, Math.floor(Math.sqrt(area / Math.max(1, n))));
-  while (chosen.length < n && minSpacing >= 0) {
-    for (const t of tiles) {
-      if (chosen.length >= n) break;
-      if (chosen.some(c => Math.max(Math.abs(c.x - t.x), Math.abs(c.y - t.y)) < minSpacing)) continue;
-      if (chosen.some(c => c.x === t.x && c.y === t.y)) continue;
-      chosen.push(t);
+  const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+  if (n <= 0 || bw <= 0 || bh <= 0) return [];
+
+  // Grid shaped roughly like the box, large enough to hold everyone.
+  let rows = Math.max(1, Math.min(bh, Math.round(Math.sqrt(n * bh / bw))));
+  let cols = Math.max(1, Math.ceil(n / rows));
+  if (cols > bw) { cols = bw; rows = Math.max(1, Math.min(bh, Math.ceil(n / cols))); }
+
+  const used = new Set();
+  const out = [];
+  // Place at (px,py), spiralling out to the nearest free tile inside the box
+  // if that cell is already taken (keeps soldiers off each other).
+  const placeNudged = (px, py) => {
+    const maxR = Math.max(bw, bh);
+    for (let radius = 0; radius <= maxR; radius++) {
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
+          const x = px + dx, y = py + dy;
+          if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+          const k = `${x},${y}`;
+          if (used.has(k)) continue;
+          used.add(k); out.push([x, y]); return;
+        }
+      }
     }
-    minSpacing--;
+    out.push([px, py]);  // box full (more soldiers than tiles) — allow stacking
+  };
+
+  // Evenly spaced position i of `count` along an axis of length `span` from `lo`.
+  const axisPos = (i, count, lo, span) =>
+    count <= 1 ? lo + Math.floor((span - 1) / 2)
+               : Math.round(lo + i * (span - 1) / (count - 1));
+
+  let placed = 0;
+  for (let r = 0; r < rows && placed < n; r++) {
+    // Spread n across the rows as evenly as possible (e.g. 4 over 3 rows -> 1,1,2).
+    const rowCount = Math.floor((n * (r + 1)) / rows) - Math.floor((n * r) / rows);
+    const y = axisPos(r, rows, y0, bh);
+    for (let c = 0; c < rowCount && placed < n; c++) {
+      placeNudged(axisPos(c, rowCount, x0, bw), y);
+      placed++;
+    }
   }
-  return chosen.slice(0, n).map(t => [t.x, t.y]);
+  return out;
 }
 
 // Kill Box: arrange the squad in an L on the two outer edges adjacent to the
@@ -1088,7 +1109,7 @@ board.addEventListener('click', (evt) => {
         selectedUnits = new Set();
       } else {
         // Formation move (multi-select, squad, or no selection)
-        const payload = { type: 'tw_formation_move', tile, count: formationCount, formation: formationShape };
+        const payload = { type: 'tw_formation_move', tile, count: formationCount, formation: formationShape, spacing: formationSpacing };
         if (selectedSquad !== null) {
           payload.squad_id = selectedSquad;
           selectedSquad = null;
@@ -2828,7 +2849,7 @@ function draw() {
       } else if (selectedUnits.size > 0) {
         previewCount = selectedUnits.size;
       }
-      const fPositions = getFormationPositions(hoverTile, formationShape, previewCount, tw().map);
+      const fPositions = getFormationPositions(hoverTile, formationShape, previewCount, tw().map, formationSpacing);
       ctx.save();
       ctx.fillStyle = 'rgba(100, 210, 255, 0.22)';
       ctx.strokeStyle = 'rgba(100, 210, 255, 0.8)';
@@ -4097,7 +4118,17 @@ if (buildToggle) buildToggle.addEventListener('click', (evt) => {
   const btn = el(`fshape-${shape}`);
   if (btn) btn.addEventListener('click', () => {
     formationShape = shape;
-    document.querySelectorAll('.fshape-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.fshape-row .fshape-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    render();
+  });
+});
+
+[0, 1, 2, 3].forEach(sp => {
+  const btn = el(`fspacing-${sp}`);
+  if (btn) btn.addEventListener('click', () => {
+    formationSpacing = sp;
+    document.querySelectorAll('.fspacing-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     render();
   });
@@ -4112,7 +4143,7 @@ for (const [btnId, kind] of [['tactic-killbox', 'killbox'], ['tactic-defend', 'd
     armedBoxKind = kind;
     setStatus(kind === 'killbox'
       ? 'Kill Box — drag a box on the map from the corner your squad attacks from.'
-      : 'Defend — drag a box; the squad holds the best ground inside it.');
+      : 'Defend — drag a box; the squad spreads out evenly to hold the whole area.');
     render();
   });
 }

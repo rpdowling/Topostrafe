@@ -1738,21 +1738,24 @@ class TopowarGameState:
                 spotted.add(target.unit_id)
         return spotted
 
-    def _formation_positions(self, target: tuple[int, int], formation: str, count: int) -> list[tuple[int, int]]:
+    def _formation_positions(self, target: tuple[int, int], formation: str, count: int, spacing: int = 0) -> list[tuple[int, int]]:
         """Return count distinct tile positions in the given formation centered near target.
 
-        Positions are clamped into the map; if clamping (or a scatter target) makes two
-        positions land on the same tile, collisions are nudged to the nearest free tile so
-        no two soldiers are ever assigned the same destination.
+        `spacing` is the number of empty tiles left between adjacent soldiers in a
+        line (0 = shoulder-to-shoulder). Positions are clamped into the map; if
+        clamping (or a scatter target) makes two positions land on the same tile,
+        collisions are nudged to the nearest free tile so no two soldiers are ever
+        assigned the same destination.
         """
         tx, ty = target
         W, H = self.map.width, self.map.height
+        step = max(1, spacing + 1)
         if formation == 'horizontal':
             half = (count - 1) // 2
-            raw = [(tx - half + i, ty) for i in range(count)]
+            raw = [(tx + (i - half) * step, ty) for i in range(count)]
         elif formation == 'vertical':
             half = (count - 1) // 2
-            raw = [(tx, ty - half + i) for i in range(count)]
+            raw = [(tx, ty + (i - half) * step) for i in range(count)]
         else:
             raw = [target] * count
         used: set[tuple[int, int]] = set()
@@ -2480,6 +2483,7 @@ class TopowarGameState:
                 raise ValueError("Invalid move target.")
             count = max(1, min(4, int(action.get("count", 1))))
             formation = action.get("formation", "horizontal")
+            spacing = max(0, min(6, int(action.get("spacing", 0))))
             squad_id_arg = action.get("squad_id")
             unit_ids_arg = action.get("unit_ids")
             scatter_positions = action.get("positions") or []
@@ -2527,7 +2531,7 @@ class TopowarGameState:
                     for p in scatter_positions[:len(soldiers_to_move)]
                 ]
             else:
-                form_positions = self._formation_positions(target, formation, len(soldiers_to_move))
+                form_positions = self._formation_positions(target, formation, len(soldiers_to_move), spacing)
 
             # Assign soldiers to positions
             assignments = self._assign_soldiers_to_positions(soldiers_to_move, form_positions)
