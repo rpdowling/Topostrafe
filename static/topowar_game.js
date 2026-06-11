@@ -196,6 +196,7 @@ const OY = 20;
 const RIFLE_RANGE = 10;
 const RIFLE_RANGE_HILL = 12;
 const RIFLE_RANGE_MOUNTAIN = 14;
+const SOLDIER_DIG_SECONDS = 8.0;  // mirrors server SOLDIER_DIG_SECONDS (combat-phase dig)
 const GRENADIER_RANGE = 7;
 const MG_RANGE = 20;
 const MIN_BOARD_ZOOM = 0.6;
@@ -2716,6 +2717,26 @@ function draw() {
       }
     }
 
+    // Dig-in-progress ring (own side): a soldier digging a trench stands still
+    // for several seconds, so trace how far along the dig is — without this the
+    // soldier just looks idle and it seems like nothing is happening.
+    if (s.task && s.task.type === 'dig' && s.owner === mySeat()) {
+      const frac = Math.max(0, Math.min(1, (s.task.progress || 0) / SOLDIER_DIG_SECONDS));
+      ctx.beginPath();
+      ctx.arc(scx, scy, 11, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(120,90,40,0.55)';
+      ctx.lineWidth = 2.2;
+      ctx.stroke();
+      if (frac > 0) {
+        ctx.beginPath();
+        ctx.arc(scx, scy, 11, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,210,90,0.98)';
+        ctx.lineWidth = 2.4;
+        ctx.stroke();
+      }
+      ctx.lineWidth = 1;
+    }
+
     // Steadied-aim "+" in the top-left corner (own side only — the server only
     // sends `aimed` for the viewer's own soldiers).
     if (s.aimed) {
@@ -3770,7 +3791,11 @@ function updateSelectionPanel() {
     const taskLabel = { dig: 'Digging', build_mg: 'Building MG', operate_mg: 'Crewing MG', move: 'Moving' };
     const side = soldier.owner === 0 ? 'Red' : 'Blue';
     const hp = Math.round((soldier.hp / (soldier.hp_max || 5)) * 100);
-    const tsk = soldier.combat_halt ? 'Engaging' : (soldier.task ? (taskLabel[soldier.task.type] || soldier.task.type) : '—');
+    let tsk = soldier.combat_halt ? 'Engaging' : (soldier.task ? (taskLabel[soldier.task.type] || soldier.task.type) : '—');
+    if (soldier.task && soldier.task.type === 'dig' && !soldier.combat_halt) {
+      const pct = Math.round(Math.max(0, Math.min(1, (soldier.task.progress || 0) / SOLDIER_DIG_SECONDS)) * 100);
+      tsk = (soldier.task.progress || 0) > 0 ? `Digging ${pct}%` : 'Moving to dig';
+    }
     const blockedTag = soldier.blocked ? '<span class="sel-blocked">BLOCKED</span>' : '';
     const rangeRow = !soldier.is_grenadier
       ? `<span class="sel-label">Range</span><span class="sel-val">${soldier.range ?? RIFLE_RANGE}</span>`

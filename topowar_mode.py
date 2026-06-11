@@ -3059,6 +3059,20 @@ class TopowarGameState:
                     s.current_task = None  # already a trench / blocked / invalid
                     continue
                 if s.tile != tile:
+                    # A soldier standing on the dig tile makes it unreachable — the
+                    # digger can never step onto it and would otherwise stall next
+                    # to it forever (the classic "walks over but never digs"). If
+                    # we're jammed right beside the target, dig where we stand
+                    # instead: a trench one tile over is just as good for cover.
+                    adjacent = max(abs(s.tile[0] - tile[0]), abs(s.tile[1] - tile[1])) <= 1
+                    if (s.blocked and s.blocked_for >= 1.0 and adjacent
+                            and self._is_diggable(s.tile)):
+                        task["tile"] = [s.tile[0], s.tile[1]]
+                        task["progress"] = 0.0
+                        s.path = []
+                        s.blocked = False
+                        s.blocked_for = 0.0
+                        continue
                     # Walk onto the tile, then dig it in.
                     if not s.path or s.path[-1] != tile or (s.blocked and s.blocked_for >= 0.3):
                         s.path = self._plan_path(s, tile, trench_only=False, blocked=blocked_keys - {s.tile})
