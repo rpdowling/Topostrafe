@@ -1720,82 +1720,90 @@ function drawCaptureZone(data) {
   ctx.restore();
 }
 
+// Body colour tinted by HP: full strength at 3 HP, lighter at 2, pale at 1.
+// Red soldiers go red -> lighter red -> pink; blue go blue -> lighter -> baby
+// blue; officers (gold / teal) lighten the same way.
+function soldierBodyColor(s) {
+  const hp = Math.max(1, Math.min(3, s.hp || 3));
+  if (s.is_officer) {
+    const gold = ['#fcf6c0', '#f8ed80', '#f5e642'];  // [1hp, 2hp, 3hp]
+    const teal = ['#b3f0ea', '#6fe3da', '#22d4c8'];
+    return (s.owner === 0 ? gold : teal)[hp - 1];
+  }
+  const red  = ['#f7a8c0', '#f06a6a', '#e83030'];     // pink, lighter red, red
+  const blue = ['#a9c8f5', '#6f93ec', '#3d6cdf'];     // baby blue, lighter blue, blue
+  return (s.owner === 0 ? red : blue)[hp - 1];
+}
+
 // Territory mode: faint fill + outline of each side's owned land, plus both
 // sides' pending capture zones with progress traced in the owner's colour, and
 // a live preview of the rectangle I'm dragging in Zone mode.
 function drawTerritory(data) {
   const terr = data && data.territory;
   if (!terr) return;
-  const W = data.map.width, H = data.map.height;
+  const H = data.map.height;
   const flip = mySeat() === 1;
   const seat = mySeat();
-  const cornerX = (cx) => OX + cx * CELL;                       // tile grid-line x -> pixel
-  const cornerY = (cy) => OY + (flip ? (H - cy) : cy) * CELL;   // tile grid-line y -> pixel
-  const tileTop = (y) => OY + (flip ? (H - 1 - y) : y) * CELL;  // tile top-left pixel row
   const COL = { 0: [224, 48, 48], 1: [48, 96, 208] };
-
-  ctx.save();
-  ctx.setLineDash([]);
-  for (const side of [0, 1]) {
-    const idxs = terr[String(side)] || [];
-    if (!idxs.length) continue;
-    const set = new Set(idxs);
-    const [r, g, b] = COL[side];
-    const mine = side === seat;
-    ctx.fillStyle = `rgba(${r},${g},${b},0.06)`;
-    for (const idx of idxs) {
-      ctx.fillRect(cornerX(idx % W), tileTop((idx / W) | 0), CELL, CELL);
-    }
-    ctx.beginPath();
-    for (const idx of idxs) {
-      const x = idx % W, y = (idx / W) | 0;
-      if (x === 0     || !set.has(idx - 1)) { ctx.moveTo(cornerX(x),     cornerY(y)); ctx.lineTo(cornerX(x),     cornerY(y + 1)); }
-      if (x === W - 1 || !set.has(idx + 1)) { ctx.moveTo(cornerX(x + 1), cornerY(y)); ctx.lineTo(cornerX(x + 1), cornerY(y + 1)); }
-      if (y === 0     || !set.has(idx - W)) { ctx.moveTo(cornerX(x),     cornerY(y)); ctx.lineTo(cornerX(x + 1), cornerY(y)); }
-      if (y === H - 1 || !set.has(idx + W)) { ctx.moveTo(cornerX(x),     cornerY(y + 1)); ctx.lineTo(cornerX(x + 1), cornerY(y + 1)); }
-    }
-    ctx.strokeStyle = `rgba(${r},${g},${b},${mine ? 0.55 : 0.40})`;
-    ctx.lineWidth = mine ? 2 : 1.4;
-    ctx.stroke();
-  }
-
-  const zoneRectPx = (x0, y0, x1, y1) => {
+  const rectPx = (x0, y0, x1, y1) => {
     const px0 = OX + Math.min(x0, x1) * CELL, px1 = OX + (Math.max(x0, x1) + 1) * CELL;
     const fyA = flip ? (H - 1 - y0) : y0, fyB = flip ? (H - 1 - y1) : y1;
     const py0 = OY + Math.min(fyA, fyB) * CELL, py1 = OY + (Math.max(fyA, fyB) + 1) * CELL;
     return [px0, py0, px1 - px0, py1 - py0];
   };
+  const traceRect = (ix, iy, iw, ih, prog, rgb) => {
+    const perim = 2 * (iw + ih);
+    ctx.setLineDash([perim * Math.max(0, Math.min(1, prog)), perim]);
+    ctx.lineDashOffset = 0;
+    ctx.lineCap = 'butt';
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+    ctx.strokeRect(ix, iy, iw, ih);
+    ctx.setLineDash([]);
+  };
 
+  ctx.save();
+
+  // Owned rectangles (discrete; non-home ones are flippable). A flip in progress
+  // traces the rectangle's outline in the capturer's colour.
+  for (const rc of (terr.rectangles || [])) {
+    const [r, g, b] = COL[rc.owner];
+    const mine = rc.owner === seat;
+    const [zx, zy, w, h] = rectPx(rc.x0, rc.y0, rc.x1, rc.y1);
+    ctx.setLineDash([]);
+    ctx.fillStyle = `rgba(${r},${g},${b},${rc.home ? 0.10 : 0.07})`;
+    ctx.fillRect(zx, zy, w, h);
+    const ix = zx + 1, iy = zy + 1, iw = w - 2, ih = h - 2;
+    ctx.lineWidth = mine ? 2 : 1.4;
+    ctx.setLineDash(rc.home ? [] : [3, 3]);
+    ctx.strokeStyle = rc.contested ? 'rgba(240,200,60,0.9)' : `rgba(${r},${g},${b},${mine ? 0.6 : 0.45})`;
+    ctx.strokeRect(ix, iy, iw, ih);
+    ctx.setLineDash([]);
+    if ((rc.progress || 0) > 0 && (rc.capturer === 0 || rc.capturer === 1)) {
+      traceRect(ix, iy, iw, ih, rc.progress, COL[rc.capturer]);
+    }
+  }
+
+  // Pending neutral zones (one per side), captured by their proposer.
   const zones = terr.zones || {};
   for (const side of [0, 1]) {
     const z = zones[String(side)];
     if (!z) continue;
     const [r, g, b] = COL[side];
-    const [zx, zy, w, h] = zoneRectPx(z.x0, z.y0, z.x1, z.y1);
+    const [zx, zy, w, h] = rectPx(z.x0, z.y0, z.x1, z.y1);
     const ix = zx + 1.5, iy = zy + 1.5, iw = w - 3, ih = h - 3;
     ctx.setLineDash([5, 4]);
     ctx.lineWidth = 1.5;
     ctx.strokeStyle = z.contested ? 'rgba(240,200,60,0.9)' : `rgba(${r},${g},${b},0.5)`;
     ctx.strokeRect(ix, iy, iw, ih);
-    const prog = Math.max(0, Math.min(1, z.progress || 0));
-    if (prog > 0) {
-      // Trace progress in whoever is capturing it — your own colour when you're
-      // taking it, the enemy's when they're raiding it.
-      const [cr, cg, cb] = (z.capturer === 0 || z.capturer === 1) ? COL[z.capturer] : [r, g, b];
-      const perim = 2 * (iw + ih);
-      ctx.setLineDash([perim * prog, perim]);
-      ctx.lineDashOffset = 0;
-      ctx.lineCap = 'butt';
-      ctx.lineWidth = 3.5;
-      ctx.strokeStyle = `rgb(${cr},${cg},${cb})`;
-      ctx.strokeRect(ix, iy, iw, ih);
-    }
     ctx.setLineDash([]);
+    if ((z.progress || 0) > 0) traceRect(ix, iy, iw, ih, z.progress, [r, g, b]);
   }
 
+  // Live drag preview in Zone mode.
   if (mode === 'zone' && zoneDrag) {
     const [r, g, b] = COL[seat === 1 ? 1 : 0];
-    const [zx, zy, w, h] = zoneRectPx(zoneDrag.x0, zoneDrag.y0, zoneDrag.x1, zoneDrag.y1);
+    const [zx, zy, w, h] = rectPx(zoneDrag.x0, zoneDrag.y0, zoneDrag.x1, zoneDrag.y1);
     ctx.setLineDash([6, 4]);
     ctx.lineWidth = 2;
     ctx.strokeStyle = `rgba(${r},${g},${b},0.95)`;
@@ -2605,7 +2613,7 @@ function draw() {
 
     // Body (officers are star-shaped; grenadiers and riflemen are circles)
     if (s.is_officer) {
-      ctx.fillStyle = s.owner === 0 ? '#f5e642' : '#22d4c8';
+      ctx.fillStyle = soldierBodyColor(s);
       ctx.beginPath();
       const pts = 5, outerR = 7, innerR = 3.5;
       for (let i = 0; i < pts * 2; i++) {
@@ -2623,12 +2631,12 @@ function draw() {
       // Circle border in the same fill color as the star
       ctx.beginPath();
       ctx.arc(scx, scy, 9, 0, Math.PI * 2);
-      ctx.strokeStyle = s.owner === 0 ? '#f5e642' : '#22d4c8';
+      ctx.strokeStyle = soldierBodyColor(s);
       ctx.lineWidth = 1.5;
       ctx.stroke();
       ctx.lineWidth = 1;
     } else {
-      ctx.fillStyle = s.owner === 0 ? '#e83030' : '#3d6cdf';
+      ctx.fillStyle = soldierBodyColor(s);
       ctx.beginPath();
       ctx.arc(scx, scy, 6, 0, Math.PI * 2);
       ctx.fill();
@@ -2643,6 +2651,22 @@ function draw() {
         ctx.stroke();
         ctx.restore();
       }
+    }
+
+    // Steadied-aim "+" in the top-left corner (own side only — the server only
+    // sends `aimed` for the viewer's own soldiers).
+    if (s.aimed) {
+      ctx.font = 'bold 10px system-ui';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const ax = scx - CELL * 0.34, ay = scy - CELL * 0.34;
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+      ctx.strokeText('+', ax, ay);
+      ctx.fillStyle = 'rgba(255,255,255,0.97)';
+      ctx.fillText('+', ax, ay);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
     }
 
     // Thin dashed path preview for moving soldiers.

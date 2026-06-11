@@ -96,6 +96,19 @@ TERRITORY_SPEED_BONUS = 1.15         # movement multiplier on your own territory
 # The margin band is the "fringe": visible but rendered slightly dimmer.
 TERRITORY_SIGHT_MARGIN = 2
 
+# A soldier that holds still (no move, no shot) this long gets a steadied first
+# shot at the top of the hit-chance range; firing or moving resets the timer.
+FIRST_SHOT_AIM_SECONDS = 5.0
+
+# Soldiers take multiple hits to kill. Damage by source:
+SOLDIER_MAX_HP = 3
+RIFLE_DAMAGE = 1
+MG_DAMAGE = 2
+MORTAR_CENTER_DAMAGE = 3    # 3x3 block around the impact tile
+MORTAR_BLAST_DAMAGE = 2     # the rest of the blast radius
+GRENADE_CENTER_DAMAGE = 3   # impact tile + 4 orthogonally-adjacent tiles
+GRENADE_BLAST_DAMAGE = 2    # the rest of the blast radius
+
 
 # Ordered tier list used for elevation-adjacency checks during movement.
 _ELEV_TIER_ORDER = [ELEV_TRENCH, ELEV_GROUND, ELEV_HILL, ELEV_MOUNTAIN]
@@ -210,6 +223,10 @@ class Soldier(Unit):
     path: list[tuple[int, int]] = field(default_factory=list)
     attack_target_id: int | None = None
     rifle_cooldown: float = 0.0
+    # Seconds the soldier has held still without moving or firing. At
+    # FIRST_SHOT_AIM_SECONDS its next shot is a steadied, top-of-range hit
+    # (then resets). Moving or firing resets it to 0.
+    aim_time: float = 0.0
     # Seconds remaining until the soldier completes the current step in
     # `path`. While > 0 the soldier is still on its current tile.
     move_cooldown: float = 0.0
@@ -626,13 +643,20 @@ class TopowarGameState:
         # territory[owner] is the set of tiles a side owns; proposed_zone[owner]
         # is its pending capture rect (or None); zone_progress[owner] is the
         # accumulated capture seconds; zone_contested[owner] flags an enemy in it.
+        # Territory is a list of discrete owned rectangles (they never merge).
+        #   {"id", "owner", "rect": (x0,y0,x1,y1), "home": bool,
+        #    "capturer": int|None, "progress": float, "contested": bool}
+        # A non-home rectangle is flipped to the enemy by occupying it
+        # uncontested for its size-time. self.territory is the derived tile-set
+        # per side (rebuilt on any rectangle change) used by vision/speed/recruits.
+        self.rectangles: list[dict[str, Any]] = []
+        self.next_rect_id: int = 1
         self.territory: dict[int, set[tuple[int, int]]] = {0: set(), 1: set()}
+        # A side draws one zone at a time in neutral space; on capture it becomes
+        # a new owned rectangle. proposed_zone is that pending draw.
         self.proposed_zone: dict[int, tuple[int, int, int, int] | None] = {0: None, 1: None}
         self.zone_progress: dict[int, float] = {0: 0.0, 1: 0.0}
         self.zone_contested: dict[int, bool] = {0: False, 1: False}
-        # Which side is currently capturing each proposed zone (None = nobody).
-        # A zone can be taken by its proposer (1x) or raided by the enemy (2x).
-        self.zone_capturer: dict[int, int | None] = {0: None, 1: None}
         # Unit ids that resolved a head-on swap this tick (so the move loop skips
         # the partner, which already moved). Reset at the top of each move pass.
         self._swapped_this_tick: set[int] = set()
@@ -669,17 +693,66 @@ class TopowarGameState:
             self._init_territory()
 
     def _init_territory(self):
-        """Give each side its home quarter: Red the bottom rows, Blue the top.
+        """Give each side a home rectangle: Red the bottom quarter, Blue the top.
 
-        Each strip is TERRITORY_START_FRACTION of the board's height (so ~25% of
-        the tiles), mirroring the existing top/bottom orientation of the two
-        starting trenches.
+        The home rectangle is ~TERRITORY_START_FRACTION of the board and is not
+        flippable (it's a base). All further territory is captured rectangles.
         """
         W, H = self.map.width, self.map.height
         q = max(1, round(H * TERRITORY_START_FRACTION))
         q = min(q, H // 2)  # never overlap the two home strips on a tiny board
-        self.territory[1] = {(x, y) for x in range(W) for y in range(q)}            # Blue: top
-        self.territory[0] = {(x, y) for x in range(W) for y in range(H - q, H)}     # Red: bottom
+        self._add_rectangle(1, (0, 0, W - 1, q - 1), home=True)          # Blue: top
+        self._add_rectangle(0, (0, H - q, W - 1, H - 1), home=True)      # Red: bottom
+        self._rebuild_territory()
+
+    def _add_rectangle(self, owner: int, rect: tuple[int, int, int, int], home: bool = False) -> dict:
+        r = {"id": self.next_rect_id, "owner": owner, "rect": tuple(rect),
+             "home": home, "capturer": None, "progress": 0.0, "contested": False}
+        self.next_rect_id += 1
+        self.rectangles.append(r)
+        return r
+
+    def _rebuild_territory(self):
+        """Recompute the per-side owned-tile sets from the rectangle list."""
+        terr = {0: set(), 1: set()}
+        for r in self.rectangles:
+            x0, y0, x1, y1 = r["rect"]
+            o = r["owner"]
+            for yy in range(y0, y1 + 1):
+                for xx in range(x0, x1 + 1):
+                    terr[o].add((xx, yy))
+        self.territory = terr
+        self._invalidate_fog_cache()  # ownership changes alter full-vision tiles
+
+    def _largest_free_subrect(self, x0: int, y0: int, x1: int, y1: int):
+        """Largest axis-aligned rectangle of un-owned tiles inside [x0..x1,y0..y1].
+
+        Used to auto-correct a drawn zone to the edge of existing territory:
+        the part overlapping any rectangle is excluded and the biggest clear box
+        within the drag is kept. Returns a board-coord rect or None if no free
+        tile remains. Standard maximal-rectangle-in-histogram per row.
+        """
+        owned = self.territory[0] | self.territory[1]
+        W = x1 - x0 + 1
+        heights = [0] * W
+        best = None  # (area, bx0, by0, bx1, by1)
+        for ry in range(y0, y1 + 1):
+            for rx in range(W):
+                heights[rx] = 0 if (x0 + rx, ry) in owned else heights[rx] + 1
+            stack: list[tuple[int, int]] = []  # (start_col, height)
+            for rx in range(W + 1):
+                cur = heights[rx] if rx < W else 0
+                start = rx
+                while stack and stack[-1][1] >= cur:
+                    sc, sh = stack.pop()
+                    area = sh * (rx - sc)
+                    if sh > 0 and (best is None or area > best[0]):
+                        best = (area, x0 + sc, ry - sh + 1, x0 + rx - 1, ry)
+                    start = sc
+                stack.append((start, cur))
+        if best is None:
+            return None
+        return (best[1], best[2], best[3], best[4])
 
     def _place_capture_zone(self):
         """Pick the Capture Zone's tile rect on the map's centre line.
@@ -855,7 +928,7 @@ class TopowarGameState:
         sid = self.next_unit_id
         self.next_unit_id += 1
         name = self._name_pool.pop(0) if self._name_pool else f"Pvt.{sid}"
-        self.soldiers[sid] = Soldier(sid, owner, float(tile[0]), float(tile[1]), name=name, is_grenadier=is_grenadier, is_officer=is_officer)
+        self.soldiers[sid] = Soldier(sid, owner, float(tile[0]), float(tile[1]), hp=SOLDIER_MAX_HP, name=name, is_grenadier=is_grenadier, is_officer=is_officer)
 
     def _spawn_recruit(self, owner: int):
         """Spawn a new soldier on the back row. Weighted toward the middle 10 columns."""
@@ -1110,6 +1183,10 @@ class TopowarGameState:
             self.capture_occupant_count = 0
         if not hasattr(self.rules, "territory_mode"):
             self.rules.territory_mode = False
+        if not hasattr(self, "rectangles"):
+            self.rectangles = []
+        if not hasattr(self, "next_rect_id"):
+            self.next_rect_id = 1
         if not hasattr(self, "territory"):
             self.territory = {0: set(), 1: set()}
         if not hasattr(self, "proposed_zone"):
@@ -1118,8 +1195,9 @@ class TopowarGameState:
             self.zone_progress = {0: 0.0, 1: 0.0}
         if not hasattr(self, "zone_contested"):
             self.zone_contested = {0: False, 1: False}
-        if not hasattr(self, "zone_capturer"):
-            self.zone_capturer = {0: None, 1: None}
+        for s in self.soldiers.values():
+            if not hasattr(s, "aim_time"):
+                s.aim_time = 0.0
         if not hasattr(self, "recruit_anchor"):
             old = getattr(self, "next_recruit_time", None)
             if isinstance(old, dict):
@@ -1991,12 +2069,17 @@ class TopowarGameState:
             x1 = min(self.map.width - 1, x1); y1 = min(self.map.height - 1, y1)
             if x1 < x0 or y1 < y0:
                 raise ValueError("Zone is off the board.")
-            self.proposed_zone[owner] = (x0, y0, x1, y1)
+            # Zones must sit outside existing territory: auto-correct the drawn
+            # box to its largest sub-rectangle of un-owned (neutral) ground.
+            clipped = self._largest_free_subrect(x0, y0, x1, y1)
+            if clipped is None:
+                raise ValueError("No open ground there — zones must be drawn outside existing territory.")
+            cx0, cy0, cx1, cy1 = clipped
+            self.proposed_zone[owner] = (cx0, cy0, cx1, cy1)
             self.zone_progress[owner] = 0.0
             self.zone_contested[owner] = False
-            self.zone_capturer[owner] = None
-            secs = self._capture_seconds_for_rect((x0, y0, x1, y1))
-            return f"Capture zone set ({(x1 - x0 + 1)}x{(y1 - y0 + 1)}, ~{secs:.0f}s to take)."
+            secs = self._capture_seconds_for_rect(clipped)
+            return f"Capture zone set ({(cx1 - cx0 + 1)}x{(cy1 - cy0 + 1)}, ~{secs:.0f}s to take)."
         if t == "tw_toggle_operate_mortar":
             mid = int(action.get("mortar_id", -1))
             mortar = self.mortars.get(mid)
@@ -2572,6 +2655,7 @@ class TopowarGameState:
             s.path.pop(0)
             s.move_cooldown = 0.0
             s.crossing_wire = False
+            s.aim_time = 0.0  # moving breaks the steadied aim
 
     def _try_swap(self, s: "Soldier", target: tuple[int, int], occ: dict) -> bool:
         """Resolve a head-on pass: if the friendly soldier occupying `target`
@@ -2604,6 +2688,7 @@ class TopowarGameState:
         step_secs = 1.0 / max(0.001, self.rules.soldier_move_speed)
         s.x, s.y = float(target[0]), float(target[1])
         other.x, other.y = float(s_tile[0]), float(s_tile[1])
+        s.aim_time = other.aim_time = 0.0  # both moved — break steadied aim
         if target in s.path:
             s.path = s.path[s.path.index(target) + 1:]
         if s_tile in other.path:
@@ -2650,6 +2735,9 @@ class TopowarGameState:
             else:
                 s.combat_halt = False
 
+            # Steadied aim builds while the soldier holds still (movement resets
+            # it in _move_soldier; firing resets it below).
+            s.aim_time += dt
             s.rifle_cooldown = max(0.0, s.rifle_cooldown - dt)
             if s.rifle_cooldown > 0:
                 continue
@@ -2687,6 +2775,10 @@ class TopowarGameState:
             dist = best[0]
             frac = min(1.0, dist / max(1.0, effective_range))
             chance = 0.90 - 0.50 * frac
+            # First steadied shot after holding still: top of the range at any
+            # distance (cover caps below still apply). Reset after this shot.
+            if s.aim_time >= FIRST_SHOT_AIM_SECONDS:
+                chance = 0.90
             # Assaulting an entrenched enemy across open ground is much harder.
             is_moving = advancing and not s.combat_halt
             if is_moving and target_elev == ELEV_TRENCH:
@@ -2700,6 +2792,7 @@ class TopowarGameState:
                 chance = min(chance, 0.25)
 
             s.rifle_cooldown = 2.0
+            s.aim_time = 0.0  # firing breaks the steadied aim
             will_hit = self.random.random() <= chance
             self.projectiles.append(Projectile(s.owner, s.x, s.y, target_tile[0] - s.x, target_tile[1] - s.y, effective_range, "rifle", s_elev, will_hit=will_hit))
             self.muzzle_flashes.append(MuzzleFlash(s.x, s.y, target_tile[0] - s.x, target_tile[1] - s.y, s.owner))
@@ -2986,6 +3079,19 @@ class TopowarGameState:
                 self.projectiles.append(Projectile(mg.owner, float(sx), float(sy), target[0] - sx + spreadx, target[1] - sy + spready, mg_range, "mg", self.map.elevation_at(mg.tile)))
                 self.muzzle_flashes.append(MuzzleFlash(float(sx), float(sy), target[0] - sx + spreadx, target[1] - sy + spready, mg.owner))
 
+    def _damage_soldier(self, victim: "Soldier", amount: int, killer_owner: int):
+        """Apply `amount` HP of damage; finalize the kill only on the lethal hit.
+
+        Routes through _register_kill (whose own hp<=0 guard stays intact as
+        double-kill protection) only when this hit drops the soldier to 0.
+        """
+        if victim.hp <= 0:
+            return
+        if victim.hp - amount <= 0:
+            self._register_kill(victim, killer_owner)  # victim.hp still > 0 here
+        else:
+            victim.hp -= amount
+
     def _register_kill(self, victim: "Soldier", killer_owner: int):
         if victim.hp <= 0:
             return
@@ -3085,7 +3191,8 @@ class TopowarGameState:
                     continue
                 if (tx + ty) % 2 != (lx + ly) % 2:
                     continue
-                self._register_kill(s, owner)
+                center = abs(tx - lx) <= 1 and abs(ty - ly) <= 1
+                self._damage_soldier(s, MORTAR_CENTER_DAMAGE if center else MORTAR_BLAST_DAMAGE, owner)
             self.explosions.append(Explosion(
                 float(lx), float(ly),
                 kill_radius=kill_radius,
@@ -3120,7 +3227,8 @@ class TopowarGameState:
                         continue
                     if self._has_bunker_cover_between(landing, s.tile):
                         continue
-                self._register_kill(s, owner)
+                center = abs(s.tile[0] - lx) <= 1 and abs(s.tile[1] - ly) <= 1
+                self._damage_soldier(s, MORTAR_CENTER_DAMAGE if center else MORTAR_BLAST_DAMAGE, owner)
             self.explosions.append(Explosion(float(lx), float(ly), kill_radius=kill_radius, landing_elev=landing_elev))
             return
 
@@ -3158,7 +3266,8 @@ class TopowarGameState:
                     continue
                 if self._has_bunker_cover_between(landing, s.tile):
                     continue
-            self._register_kill(s, owner)
+            center = abs(s.tile[0] - lx) <= 1 and abs(s.tile[1] - ly) <= 1
+            self._damage_soldier(s, MORTAR_CENTER_DAMAGE if center else MORTAR_BLAST_DAMAGE, owner)
 
         # Pre-capture which adjacent trench tiles will be collapsed so the client
         # can restore them for the blast-highlight LOS check (post-deformation map
@@ -3326,7 +3435,8 @@ class TopowarGameState:
                     continue
                 if self._has_bunker_cover_between(landing, s.tile):
                     continue
-            self._register_kill(s, owner)
+            center = abs(s.tile[0] - landing[0]) + abs(s.tile[1] - landing[1]) <= 1
+            self._damage_soldier(s, GRENADE_CENTER_DAMAGE if center else GRENADE_BLAST_DAMAGE, owner)
         self.explosions.append(Explosion(float(landing[0]), float(landing[1]), kill_radius=kill_radius, landing_in_trench=(landing_elev == ELEV_TRENCH), landing_elev=landing_elev, source='grenade'))
 
     def _update_grenade_shells(self, dt: float):
@@ -3477,7 +3587,7 @@ class TopowarGameState:
         if landing not in bunker_tiles:
             for s in self.soldiers.values():
                 if s.hp > 0 and s.owner != owner and s.tile == landing:
-                    self._register_kill(s, owner)
+                    self._damage_soldier(s, MORTAR_CENTER_DAMAGE, owner)
         self.smoke_sources.append(SmokeSource(float(lx), float(ly)))
         # No Explosion record: the growing smoke_sources zone is the visual feedback.
         # Adding one would trigger spawnSmoke() on the client which floods large opaque particles.
@@ -3729,7 +3839,7 @@ class TopowarGameState:
                         if target_e == ELEV_TRENCH:
                             continue  # MG flat trajectory overshoots trenches
                     # Rifle fire: hit/miss is fully decided at fire time via will_hit.
-                    self._register_kill(s, p.owner)
+                    self._damage_soldier(s, MG_DAMAGE if p.source == "mg" else RIFLE_DAMAGE, p.owner)
                     hit = True
                     break
             if not hit:
@@ -3824,74 +3934,83 @@ class TopowarGameState:
         per_fraction = TERRITORY_CAPTURE_REF_SECONDS / TERRITORY_CAPTURE_REF_FRACTION
         return max(0.5, (area / total) * per_fraction)
 
-    def _claim_zone(self, claimer: int, zone_owner: int, rect: tuple[int, int, int, int]):
-        """Award a captured zone: its tiles become `claimer`'s territory (taken
-        from the other side), and the proposer's pending-zone slot is freed."""
-        loser = 1 - claimer
+    def _count_in_rect(self, rect: tuple[int, int, int, int]) -> tuple[int, int]:
+        """(n0, n1): living soldiers of each side inside the inclusive rect."""
         x0, y0, x1, y1 = rect
-        for yy in range(y0, y1 + 1):
-            for xx in range(x0, x1 + 1):
-                t = (xx, yy)
-                self.territory[claimer].add(t)
-                self.territory[loser].discard(t)
-        self.proposed_zone[zone_owner] = None
-        self.zone_progress[zone_owner] = 0.0
-        self.zone_contested[zone_owner] = False
-        self.zone_capturer[zone_owner] = None
-        self._invalidate_fog_cache()  # ownership changes alter full-vision tiles
+        n0 = n1 = 0
+        for s in self.soldiers.values():
+            if s.hp <= 0:
+                continue
+            tx, ty = s.tile
+            if x0 <= tx <= x1 and y0 <= ty <= y1:
+                if s.owner == 0:
+                    n0 += 1
+                else:
+                    n1 += 1
+        return n0, n1
 
     def _update_territory(self, dt: float):
-        """Advance each pending zone's capture and award the conquest win.
+        """Advance pending neutral-zone draws and enemy rectangle flips; win at 75%.
 
-        A proposed zone is a contested objective: whichever side holds it with no
-        enemy present fills it — the proposer at 1x, the enemy raiding it at 2x.
-        Switching holders resets progress; a contested or empty zone freezes.
-        Completing it gives the holder the rect (taken from the other side) and
-        frees the proposer's slot. First side to own >= TERRITORY_WIN_FRACTION of
-        the board (a strict fraction, never rounded up) wins.
+        A side's drawn (neutral) zone fills while its proposer holds it with no
+        enemy present (an enemy freezes it); completing it becomes a new owned
+        rectangle. Every non-home rectangle can be flipped by the enemy occupying
+        it uncontested for its size-time (the owner re-entering freezes it). First
+        side to own >= TERRITORY_WIN_FRACTION of the board (strict) wins.
         """
         if self.time_elapsed < self.rules.build_phase_seconds:
             return
+        changed = False
+        # 1. Each side's pending neutral zone.
         for owner in (0, 1):
             rect = self.proposed_zone[owner]
             if rect is None:
                 self.zone_contested[owner] = False
-                self.zone_capturer[owner] = None
                 self.zone_progress[owner] = 0.0
                 continue
-            x0, y0, x1, y1 = rect
-            n = {0: 0, 1: 0}
-            for s in self.soldiers.values():
-                if s.hp <= 0:
-                    continue
-                tx, ty = s.tile
-                if x0 <= tx <= x1 and y0 <= ty <= y1:
-                    n[s.owner] += 1
-            enemy = 1 - owner
-            if n[owner] > 0 and n[enemy] > 0:
-                holder, contested = None, True
-            elif n[owner] > 0:
-                holder, contested = owner, False
-            elif n[enemy] > 0:
-                holder, contested = enemy, False
-            else:
-                holder, contested = None, False
-            self.zone_contested[owner] = contested
-            if holder is not None:
-                if self.zone_capturer[owner] != holder:
-                    self.zone_capturer[owner] = holder
-                    self.zone_progress[owner] = 0.0
-                rate = 1.0 if holder == owner else 2.0  # enemy raids your zone at 2x
-                self.zone_progress[owner] += dt * rate
+            n0, n1 = self._count_in_rect(rect)
+            own_n, enemy_n = (n0, n1) if owner == 0 else (n1, n0)
+            self.zone_contested[owner] = enemy_n > 0
+            if own_n > 0 and enemy_n == 0:
+                self.zone_progress[owner] += dt
                 if self.zone_progress[owner] >= self._capture_seconds_for_rect(rect):
-                    self._claim_zone(holder, owner, rect)
-            # contested or empty -> progress and capturer hold
-        total = self.map.width * self.map.height
+                    self._add_rectangle(owner, rect)
+                    self.proposed_zone[owner] = None
+                    self.zone_progress[owner] = 0.0
+                    self.zone_contested[owner] = False
+                    changed = True
+            # contested / empty -> progress holds
+        # 2. Enemy flips of existing non-home rectangles (hold it uncontested).
+        for r in self.rectangles:
+            if r["home"]:
+                r["capturer"] = None; r["progress"] = 0.0; r["contested"] = False
+                continue
+            owner = r["owner"]; enemy = 1 - owner
+            n0, n1 = self._count_in_rect(r["rect"])
+            own_n, enemy_n = (n0, n1) if owner == 0 else (n1, n0)
+            if enemy_n > 0 and own_n == 0:
+                if r["capturer"] != enemy:
+                    r["capturer"] = enemy
+                    r["progress"] = 0.0
+                r["contested"] = False
+                r["progress"] += dt
+                if r["progress"] >= self._capture_seconds_for_rect(r["rect"]):
+                    r["owner"] = enemy
+                    r["capturer"] = None
+                    r["progress"] = 0.0
+                    r["contested"] = False
+                    changed = True
+            elif enemy_n > 0 and own_n > 0:
+                r["contested"] = True  # freeze
+            else:
+                r["capturer"] = None; r["progress"] = 0.0; r["contested"] = False
+        if changed:
+            self._rebuild_territory()
+        # 3. Win at >= TERRITORY_WIN_FRACTION (strict, integer compare).
         if self.winner is None:
+            total = self.map.width * self.map.height
+            num, den = TERRITORY_WIN_FRACTION.as_integer_ratio()
             for owner in (0, 1):
-                # Strict >= TERRITORY_WIN_FRACTION with no rounding up: compare as
-                # integers (tiles/total >= 3/4  <=>  4*tiles >= 3*total).
-                num, den = TERRITORY_WIN_FRACTION.as_integer_ratio()
                 if len(self.territory[owner]) * den >= num * total:
                     self.winner = owner
                     self.win_reason = "Territory control."
@@ -4048,6 +4167,10 @@ class TopowarGameState:
                 "x": s.x,
                 "y": s.y,
                 "tile": list(s.tile),
+                "hp": s.hp,
+                "hp_max": SOLDIER_MAX_HP,
+                # The steadied-aim "+" only shows to the soldier's own side.
+                "aimed": (s.aim_time >= FIRST_SHOT_AIM_SECONDS) if (viewer is None or s.owner == viewer) else False,
                 "mode": s.mode,
                 "blocked": s.blocked,
                 "task": task,
@@ -4217,28 +4340,35 @@ class TopowarGameState:
                 }
             else:
                 capture_zone = {"active": False}
-        # Territory mode payload: both sides' owned tiles and pending zones (both
-        # always shown — they are objectives), plus the viewer's capture progress.
+        # Territory mode payload: the owned rectangles (with flip progress) and
+        # each side's pending neutral zone. Always shown — they are objectives.
         territory = None
         if getattr(self.rules, "territory_mode", False):
-            Wd = self.map.width
             total = max(1, self.map.width * self.map.height)
 
             def _zone(o):
                 r = self.proposed_zone.get(o)
                 if r is None:
                     return None
-                z = {"x0": r[0], "y0": r[1], "x1": r[2], "y1": r[3],
-                     "owner": o,
-                     "capturer": self.zone_capturer.get(o),
-                     "contested": self.zone_contested.get(o, False)}
                 need = self._capture_seconds_for_rect(r)
-                z["progress"] = min(1.0, self.zone_progress.get(o, 0.0) / need) if need else 0.0
-                return z
+                return {
+                    "x0": r[0], "y0": r[1], "x1": r[2], "y1": r[3], "owner": o,
+                    "contested": self.zone_contested.get(o, False),
+                    "progress": min(1.0, self.zone_progress.get(o, 0.0) / need) if need else 0.0,
+                }
 
+            rects_out = []
+            for r in self.rectangles:
+                x0, y0, x1, y1 = r["rect"]
+                need = self._capture_seconds_for_rect(r["rect"])
+                rects_out.append({
+                    "x0": x0, "y0": y0, "x1": x1, "y1": y1,
+                    "owner": r["owner"], "home": r["home"],
+                    "capturer": r["capturer"], "contested": r["contested"],
+                    "progress": min(1.0, r["progress"] / need) if need else 0.0,
+                })
             territory = {
-                "0": sorted(ty * Wd + tx for (tx, ty) in self.territory.get(0, ())),
-                "1": sorted(ty * Wd + tx for (tx, ty) in self.territory.get(1, ())),
+                "rectangles": rects_out,
                 "counts": {"0": len(self.territory.get(0, ())), "1": len(self.territory.get(1, ()))},
                 "total": total,
                 "win_fraction": TERRITORY_WIN_FRACTION,
