@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -174,28 +175,44 @@ async def ws_game(websocket: WebSocket, game_id: str):
     try:
         await websocket.send_json({"type": "state", "state": store.serialize(game_id, player_key), "message": None})
         while True:
-            data = await websocket.receive_json()
-            msg_type = data.get("type")
-            if msg_type == "ping":
-                before = store.serialize(game_id, player_key)
-                await websocket.send_json({"type": "state", "state": before, "message": None})
+            try:
+                data = await websocket.receive_json()
+            except WebSocketDisconnect:
+                raise
+            except Exception:
+                # Malformed / non-JSON frame: skip it and keep the socket open
+                # instead of letting the error tear the connection down.
                 continue
-            if msg_type == "chat":
-                try:
+            if not isinstance(data, dict):
+                continue
+            msg_type = data.get("type")
+            # One guard around all processing — including the ping's serialize —
+            # so a transient state/serialize error reports back rather than
+            # dropping the player (a common source of mid-game disconnects).
+            try:
+                if msg_type == "ping":
+                    await websocket.send_json({"type": "state", "state": store.serialize(game_id, player_key), "message": None})
+                    continue
+                if msg_type == "chat":
                     store.add_chat_message(game_id, player_key, data.get("text", ""))
                     await broadcast_state(game_id)
-                except Exception as e:
-                    await websocket.send_json({"type": "error", "message": str(e)})
-                    await websocket.send_json({"type": "state", "state": store.serialize(game_id, player_key), "message": None})
-                continue
-            try:
+                    continue
                 message = store.apply_action(game_id, player_key, data)
                 bot_message = store.run_bot_if_needed(game_id)
                 merged = message if not bot_message else f"{message} {bot_message}".strip()
                 await broadcast_state(game_id, merged)
+            except WebSocketDisconnect:
+                raise
             except Exception as e:
-                await websocket.send_json({"type": "error", "message": str(e)})
-                await websocket.send_json({"type": "state", "state": store.serialize(game_id, player_key), "message": None})
+                # ValueErrors are expected (invalid command); anything else is a
+                # real bug worth logging server-side. Either way, keep the socket.
+                if not isinstance(e, ValueError):
+                    logging.getLogger("topowar").exception("ws_game processing error")
+                try:
+                    await websocket.send_json({"type": "error", "message": str(e)})
+                    await websocket.send_json({"type": "state", "state": store.serialize(game_id, player_key), "message": None})
+                except Exception:
+                    pass
     except WebSocketDisconnect:
         pass
     finally:

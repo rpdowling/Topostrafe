@@ -96,6 +96,10 @@ TERRITORY_SPEED_BONUS = 1.15         # movement multiplier on your own territory
 # The margin band is the "fringe": visible but rendered slightly dimmer.
 TERRITORY_SIGHT_MARGIN = 2
 
+# Seconds for one soldier to dig a single open-ground tile into a trench, when
+# ordered to dig in during the combat phase (one tile per soldier, no queue).
+SOLDIER_DIG_SECONDS = 8.0
+
 
 # Ordered tier list used for elevation-adjacency checks during movement.
 _ELEV_TIER_ORDER = [ELEV_TRENCH, ELEV_GROUND, ELEV_HILL, ELEV_MOUNTAIN]
@@ -1997,6 +2001,23 @@ class TopowarGameState:
             self.zone_capturer[owner] = None
             secs = self._capture_seconds_for_rect((x0, y0, x1, y1))
             return f"Capture zone set ({(x1 - x0 + 1)}x{(y1 - y0 + 1)}, ~{secs:.0f}s to take)."
+        if t == "tw_assign_soldier_dig":
+            if self.time_elapsed < self.rules.build_phase_seconds:
+                raise ValueError("Soldiers can only be ordered to dig after the build phase.")
+            uid = int(action.get("unit_id", -1))
+            s = self.soldiers.get(uid)
+            if not s or s.owner != owner or s.hp <= 0:
+                raise ValueError("Soldier not found.")
+            tile_raw = action.get("tile", [])
+            if len(tile_raw) != 2:
+                raise ValueError("Invalid tile.")
+            tile = (int(tile_raw[0]), int(tile_raw[1]))
+            if not self._is_diggable(tile):
+                raise ValueError("That tile can't be dug — needs open ground.")
+            # One square per soldier, no queue: this replaces the soldier's task.
+            s.current_task = {"type": "dig", "tile": [tile[0], tile[1]], "progress": 0.0}
+            s.path = []
+            return "Soldier digging in."
         if t == "tw_toggle_operate_mortar":
             mid = int(action.get("mortar_id", -1))
             mortar = self.mortars.get(mid)
@@ -2712,6 +2733,19 @@ class TopowarGameState:
             return False
         return not any(b.hp > 0 and b.tile == tile for b in self.bunkers.values())
 
+    def _is_diggable(self, tile: tuple[int, int]) -> bool:
+        """True if a soldier can dig this tile into a trench: in-bounds, open flat
+        ground (not already a trench / hill / mountain), and clear of structures."""
+        if not self.map.in_bounds(tile):
+            return False
+        if self.map.elevation_at(tile) != ELEV_GROUND:
+            return False
+        return not (
+            tile in self._mg_tile_set() or tile in self._mortar_tile_set()
+            or tile in self._sandbag_tile_set() or tile in self._wire_tile_set()
+            or tile in self._bunker_tile_set()
+        )
+
     def _killbox_tiles(self, owner: int) -> frozenset[tuple[int, int]]:
         """Tiles inside `owner`'s active Kill Box zones — soft obstacles their
         own soldiers route around. Cached per tick. Boxes whose squad has been
@@ -2865,6 +2899,24 @@ class TopowarGameState:
                         s.current_task = {"type": "build_wire", "wire_id": s.wire_queue.pop(0), "progress": 0.0}
                     else:
                         s.current_task = None
+            elif task["type"] == "dig":
+                tile = (int(task["tile"][0]), int(task["tile"][1]))
+                if not self._is_diggable(tile):
+                    s.current_task = None  # already a trench / blocked / invalid
+                    continue
+                if s.tile != tile:
+                    # Walk onto the tile, then dig it in.
+                    if not s.path or s.path[-1] != tile or (s.blocked and s.blocked_for >= 0.3):
+                        s.path = self._plan_path(s, tile, trench_only=False, blocked=blocked_keys - {s.tile})
+                    if not s.path:
+                        s.current_task = None  # unreachable
+                else:
+                    task["progress"] = task.get("progress", 0.0) + dt
+                    if task["progress"] >= SOLDIER_DIG_SECONDS:
+                        self.map.trenches.add(tile)
+                        self._invalidate_fog_cache()  # new trench changes LOS/cover
+                        s.current_task = None
+                        s.path = []
 
         # Auto-cancel unbuilt MGs whose assigned builder has been killed or
         # had their task changed. Any unbuilt MG with no living soldier actively
