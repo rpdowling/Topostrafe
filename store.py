@@ -875,6 +875,7 @@ class GameStore:
                     "positions",
                     "count",
                     "formation",
+                    "spacing",
                     "squad_id",
                     "kind",
                     "box",

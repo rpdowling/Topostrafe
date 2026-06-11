@@ -1740,6 +1740,12 @@ body.info-modal-open {
   gap: 4px;
 }
 
+.fspacing-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
 .tactic-row {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
