@@ -1329,10 +1329,13 @@ board.addEventListener('click', (evt) => {
       const trenchSet = new Set((tw().map?.trenches || []).map(t => `${t[0]},${t[1]}`));
       const sbSet = new Set((tw().sandbags || []).filter(s => s.hp > 0).map(s => `${s.tile[0]},${s.tile[1]}`));
       const bkey = `${tile[0]},${tile[1]}`;
+      const hasAdjTrench = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => trenchSet.has(`${tile[0] + dx},${tile[1] + dy}`));
       if (bunkerRem <= 0) {
         setStatus('No build-phase bunkers remaining.', true);
       } else if (!trenchSet.has(bkey)) {
         setStatus('Bunkers can only be placed on trench tiles.', true);
+      } else if (!hasAdjTrench) {
+        setStatus('Bunkers need a run of 2+ trench tiles — dig an adjacent trench first.', true);
       } else if (sbSet.has(bkey)) {
         setStatus('Cannot place a bunker on a sandbag.', true);
       } else {
@@ -1974,9 +1977,13 @@ function drawBuildPhaseOverlay(data) {
   const remaining = Math.max(0, Number(data.build_phase_remaining || 0));
   if (seat === null || remaining <= 0) return;
   const mid = Math.floor(data.map.height / 2);
+  // Capture Zone mode seals the central 6-row strip during the build phase so
+  // neither side can pre-position in (or peek into) the hidden objective.
+  const captureStrip = !!(data.capture_zone && data.capture_zone.mode);
+  const inStrip = (gy) => captureStrip && gy >= mid - 3 && gy <= mid + 2;
   const isOffLimitsY = seat === 0
-    ? (gy) => gy < mid
-    : (gy) => gy >= mid;
+    ? (gy) => gy < mid || inStrip(gy)
+    : (gy) => gy >= mid || inStrip(gy);
 
   for (let y = 0; y < data.map.height; y++) {
     if (!isOffLimitsY(y)) continue;

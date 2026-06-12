@@ -1602,6 +1602,20 @@ class TopowarGameState:
         mid = self.map.height // 2
         return tile[1] >= mid if owner == 0 else tile[1] < mid
 
+    def _in_capture_build_strip(self, tile: tuple[int, int]) -> bool:
+        """Capture Zone mode only: the central 6-row horizontal strip is a sealed
+        no-man's-land during the build phase, so neither side can pre-position in
+        (or peek into) the hidden objective. 3 rows either side of the midline."""
+        if not getattr(self.rules, "capture_zone", False) or getattr(self.rules, "territory_mode", False):
+            return False
+        mid = self.map.height // 2
+        return mid - 3 <= tile[1] <= mid + 2
+
+    def _build_phase_offlimits(self, owner: int, tile: tuple[int, int]) -> bool:
+        """A tile a soldier may not enter during the build phase: the enemy half,
+        or the sealed central strip in Capture Zone mode."""
+        return not self._on_owner_side(owner, tile) or self._in_capture_build_strip(tile)
+
     def _has_los_through_trenches(self, a: tuple[int, int], b: tuple[int, int]) -> bool:
         """Bresenham line-of-sight between two trench tiles.
         Blocked if any intermediate tile is not a trench (elevated open ground obstructs view)."""
@@ -1695,48 +1709,14 @@ class TopowarGameState:
         return False
 
     def _soldier_visible_to(self, target: "Soldier", viewer: int) -> bool:
-        """Enemy in a trench: visible if a friendly trench soldier has LOS, or a friendly
-        soldier in the open is within rifle range of the target. Open-ground enemies are
-        always visible.
+        """Whether an enemy soldier can be spotted/targeted by `viewer`'s side.
 
-        Per-tick memoized: the set of spotted trench enemies is computed once per viewer
-        per tick and cached in _tick_cache. Soldier positions and hp are stable during the
-        combat phase (damage is applied later via projectile resolution), so the memo is
-        exact within a tick. This turns what was an O(n) friendly scan inside every
-        shooter×enemy pair — overall O(n^3) — into an O(1) lookup over an O(n^2) precompute."""
-        if target.tile not in self.map.trenches:
-            return True
-        cache = self._tick_cache.setdefault('visible_trench', {})
-        spotted = cache.get(viewer)
-        if spotted is None:
-            spotted = self._spotted_trench_enemies(viewer)
-            cache[viewer] = spotted
-        return target.unit_id in spotted
-
-    def _spotted_trench_enemies(self, viewer: int) -> set[int]:
-        """Unit ids of enemy soldiers in trenches currently spotted by `viewer`'s side."""
-        friends_trench: list[tuple[int, int]] = []
-        friends_open: list["Soldier"] = []
-        for s in self.soldiers.values():
-            if s.hp <= 0 or s.owner != viewer:
-                continue
-            if s.tile in self.map.trenches:
-                friends_trench.append(s.tile)
-            else:
-                friends_open.append(s)
-        spotted: set[int] = set()
-        for target in self.soldiers.values():
-            if target.hp <= 0 or target.owner == viewer or target.tile not in self.map.trenches:
-                continue
-            seen = any(self._has_los_through_trenches(ft, target.tile) for ft in friends_trench)
-            if not seen:
-                seen = any(
-                    math.dist(s.tile, target.tile) <= self._soldier_max_range(s)
-                    for s in friends_open
-                )
-            if seen:
-                spotted.add(target.unit_id)
-        return spotted
+        Trenches are cover, not concealment: an entrenched soldier is seen like
+        anyone else within normal line of sight (the per-tile fog handles range
+        and LOS), and being dug in only lowers the chance of being hit — applied
+        in combat, not here. So this is unconditionally True; the fog does the
+        actual hiding."""
+        return True
 
     def _formation_positions(self, target: tuple[int, int], formation: str, count: int, spacing: int = 0) -> list[tuple[int, int]]:
         """Return count distinct tile positions in the given formation centered near target.
@@ -2339,6 +2319,9 @@ class TopowarGameState:
                 raise ValueError("Must place on your side of the map.")
             if tile not in self.map.trenches:
                 raise ValueError("Bunkers can only be placed on trench tiles.")
+            if not any((tile[0] + dx, tile[1] + dy) in self.map.trenches
+                       for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+                raise ValueError("Bunkers need a run of two or more trench tiles — dig an adjacent trench first.")
             if tile in self._structure_tile_set():
                 raise ValueError("Tile already occupied.")
             rem = self.build_bunkers_remaining.get(owner, 0)
@@ -2666,7 +2649,7 @@ class TopowarGameState:
             s.move_cooldown = 0.0
             return
         target = s.path[0]
-        if self.time_elapsed < self.rules.build_phase_seconds and not self._on_owner_side(s.owner, target):
+        if self.time_elapsed < self.rules.build_phase_seconds and self._build_phase_offlimits(s.owner, target):
             s.path = []
             s.move_cooldown = 0.0
             return
@@ -2838,8 +2821,6 @@ class TopowarGameState:
                     continue
                 if not self._has_combat_los(s.tile, s2.tile):
                     continue
-                if self._is_concealed_by_elevation(s.tile, s2.tile):
-                    continue
                 if self._has_smoke_between(s.tile, s2.tile, smoke_tiles):
                     continue
                 if best is None or d2 < best[0]:
@@ -2860,10 +2841,18 @@ class TopowarGameState:
             # distance (cover caps below still apply). Reset after this shot.
             if s.aim_time >= FIRST_SHOT_AIM_SECONDS:
                 chance = 0.90
-            # Assaulting an entrenched enemy across open ground is much harder.
+            # A trench is cover, not concealment: an entrenched target is seen
+            # and shootable, just harder to hit. Assaulting one on the move is
+            # harder still, and firing flat into the dead ground behind a trench's
+            # lip (no elevation edge, not point-blank) is hardest — but never
+            # impossible. Plunging fire from a hill/mountain ignores the lip.
             is_moving = advancing and not s.combat_halt
-            if is_moving and target_elev == ELEV_TRENCH:
-                chance *= 0.55
+            if target_elev == ELEV_TRENCH:
+                chance *= 0.60
+                if is_moving:
+                    chance *= 0.70
+                if self._is_concealed_by_elevation(s.tile, target_tile):
+                    chance = min(chance, 0.15)
             # Hard cover caps the chance regardless of range: a target inside a
             # bunker is very hard to hit; one hunkered next to a sandbag (on the
             # shooter's side) is well protected.
@@ -4463,6 +4452,7 @@ class TopowarGameState:
                 cx0, cy0, cx1, cy1 = self.capture_zone_rect
                 capture_zone = {
                     "active": True,
+                    "mode": True,
                     "x0": cx0, "y0": cy0, "x1": cx1, "y1": cy1,
                     "progress": self.capture_progress / CAPTURE_GOAL_SECONDS if CAPTURE_GOAL_SECONDS else 0.0,
                     "owner": self.capture_owner,
@@ -4471,7 +4461,7 @@ class TopowarGameState:
                     "goal_seconds": CAPTURE_GOAL_SECONDS,
                 }
             else:
-                capture_zone = {"active": False}
+                capture_zone = {"active": False, "mode": True}
         # Territory mode payload: the owned rectangles (with flip progress) and
         # each side's pending neutral zone. Always shown — they are objectives.
         territory = None
