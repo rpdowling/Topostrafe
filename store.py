@@ -158,6 +158,7 @@ class GameStore:
             generate_terrain=bool(raw.get("generate_terrain", True)),
             capture_zone=bool(raw.get("capture_zone", False)),
             territory_mode=bool(raw.get("territory_mode", True)),
+            fov_cones=bool(raw.get("fov_cones", False)),
         )
 
     def _prune_expired_open_games_locked(self):

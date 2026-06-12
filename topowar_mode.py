@@ -100,6 +100,12 @@ TERRITORY_SIGHT_MARGIN = 2
 # rate — a 180 degree turn takes 2 seconds. Bearing is visual only (no combat
 # effect yet); it's the readable foundation for flanking.
 SOLDIER_TURN_RATE = 90.0   # degrees per second
+# Field-of-view cones (spotting-only mode). A soldier spots enemies within a
+# 135-degree cone (±67.5° of its bearing), plus a small 360° close-awareness
+# bubble, plus any enemy whose own recent muzzle flash gives them away.
+FOV_HALF_ANGLE = 67.5            # degrees either side of bearing (135° total)
+FOV_CLOSE_BUBBLE = 2.0           # tiles: 360° awareness of anything this close
+FOV_FLASH_REVEAL_SECONDS = 1.5   # a soldier that just fired is seen (muzzle flash)
 # Move-speed multiplier for a soldier in sight of a living friendly officer.
 OFFICER_AURA_SPEED = 1.15
 
@@ -185,6 +191,11 @@ class RulesConfig:
     # Territory (conquest) mode. Replaces the single capture zone with growable
     # territory, range-capped vision, and a 75%-of-board win condition. Default on.
     territory_mode: bool = True
+    # Field-of-view cones (spotting-only). When True, an enemy soldier is only
+    # spotted (and so only seen / engaged) if a friendly soldier has them inside
+    # its facing cone, in a short 360 close-awareness bubble, or lit by their own
+    # recent muzzle flash. Combat math and tile fog are unchanged.
+    fov_cones: bool = False
 
 
 @dataclass
@@ -244,6 +255,9 @@ class Soldier(Unit):
     # moving and the direction of the last shot when firing. Default toward enemy.
     facing: float = 270.0
     facing_target: float = 270.0
+    # Match time of this soldier's last shot — used by FOV spotting so a soldier
+    # that just fired is revealed to the enemy by its muzzle flash.
+    last_fire_time: float = -999.0
     # Seconds remaining until the soldier completes the current step in
     # `path`. While > 0 the soldier is still on its current tile.
     move_cooldown: float = 0.0
@@ -1204,6 +1218,11 @@ class TopowarGameState:
             self.capture_occupant_count = 0
         if not hasattr(self.rules, "territory_mode"):
             self.rules.territory_mode = False
+        if not hasattr(self.rules, "fov_cones"):
+            self.rules.fov_cones = False
+        for s in self.soldiers.values():
+            if not hasattr(s, "last_fire_time"):
+                s.last_fire_time = -999.0
         if not hasattr(self, "rectangles"):
             self.rectangles = []
         if not hasattr(self, "next_rect_id"):
@@ -1484,6 +1503,33 @@ class TopowarGameState:
             else:
                 s.facing = (s.facing + (max_step if diff > 0 else -max_step)) % 360.0
 
+    def _update_soldier_attention(self, dt: float):
+        """FOV mode only: point idle soldiers at the nearest threat their side has
+        spotted, so a held line keeps watch instead of staring at a wall. Moving
+        soldiers look where they go and shooters look at their target (both set
+        facing_target elsewhere this tick), so we only redirect soldiers that are
+        standing still and not mid-shot."""
+        if not getattr(self.rules, "fov_cones", False):
+            return
+        spotted_by = {0: self._fov_spotted_enemies(0), 1: self._fov_spotted_enemies(1)}
+        for s in self.soldiers.values():
+            if s.hp <= 0 or s.path or s.combat_halt:
+                continue
+            if (self.time_elapsed - s.last_fire_time) < s.rifle_cooldown:
+                continue  # just fired — keep looking at the target
+            spotted = spotted_by.get(s.owner, ())
+            nearest = None
+            best = 1e9
+            for uid in spotted:
+                e = self.soldiers.get(uid)
+                if not e or e.hp <= 0:
+                    continue
+                d = math.dist(s.tile, e.tile)
+                if d < best:
+                    best, nearest = d, e
+            if nearest is not None:
+                s.facing_target = self._bearing_deg(s.tile, nearest.tile)
+
     def _is_concealed_by_elevation(self, shooter_tile: tuple[int, int], target_tile: tuple[int, int]) -> bool:
         """Dead-ground concealment for a trench target.
 
@@ -1711,12 +1757,47 @@ class TopowarGameState:
     def _soldier_visible_to(self, target: "Soldier", viewer: int) -> bool:
         """Whether an enemy soldier can be spotted/targeted by `viewer`'s side.
 
-        Trenches are cover, not concealment: an entrenched soldier is seen like
-        anyone else within normal line of sight (the per-tile fog handles range
-        and LOS), and being dug in only lowers the chance of being hit — applied
-        in combat, not here. So this is unconditionally True; the fog does the
-        actual hiding."""
-        return True
+        Default (FOV off): always True. Trenches are cover, not concealment, so an
+        entrenched soldier is seen like anyone else within line of sight (the
+        per-tile fog handles range/LOS) and is only harder to hit, in combat.
+
+        FOV mode (spotting-only): True only if a friendly soldier has `target`
+        inside its facing cone, in the short close-awareness bubble, or lit by its
+        own recent muzzle flash — see _fov_spotted_enemies."""
+        if not getattr(self.rules, "fov_cones", False):
+            return True
+        return target.unit_id in self._fov_spotted_enemies(viewer)
+
+    def _fov_spotted_enemies(self, viewer: int) -> set[int]:
+        """Unit ids of enemy soldiers `viewer`'s side currently spots under FOV
+        rules. An enemy is spotted if any living friendly:
+          - is within FOV_CLOSE_BUBBLE tiles of it (360° close awareness), or
+          - has it inside its 135° facing cone within sight range and LOS, or
+          - is within sight range + LOS of it while it has fired in the last
+            FOV_FLASH_REVEAL_SECONDS (a muzzle flash gives the shooter away).
+        Memoized per viewer per tick (facing/positions are stable within a tick)."""
+        cache = self._tick_cache.setdefault('fov_spotted', {})
+        if viewer in cache:
+            return cache[viewer]
+        friends = [s for s in self.soldiers.values() if s.hp > 0 and s.owner == viewer]
+        spotted: set[int] = set()
+        for e in self.soldiers.values():
+            if e.hp <= 0 or e.owner == viewer:
+                continue
+            flashing = (self.time_elapsed - getattr(e, "last_fire_time", -999.0)) < FOV_FLASH_REVEAL_SECONDS
+            for f in friends:
+                d = math.dist(f.tile, e.tile)
+                if d <= FOV_CLOSE_BUBBLE:
+                    spotted.add(e.unit_id); break
+                if d > self._sight_radius(f):
+                    continue
+                if not self._has_combat_los(f.tile, e.tile):
+                    continue
+                in_cone = abs(self._angle_diff_deg(f.facing, self._bearing_deg(f.tile, e.tile))) <= FOV_HALF_ANGLE
+                if in_cone or flashing:
+                    spotted.add(e.unit_id); break
+        cache[viewer] = spotted
+        return spotted
 
     def _formation_positions(self, target: tuple[int, int], formation: str, count: int, spacing: int = 0) -> list[tuple[int, int]]:
         """Return count distinct tile positions in the given formation centered near target.
@@ -2863,6 +2944,7 @@ class TopowarGameState:
 
             s.rifle_cooldown = 2.0
             s.aim_time = 0.0  # firing breaks the steadied aim
+            s.last_fire_time = self.time_elapsed  # muzzle flash reveals us (FOV)
             s.facing_target = self._bearing_deg(s.tile, target_tile)  # face the shot
             will_hit = self.random.random() <= chance
             self.projectiles.append(Projectile(s.owner, s.x, s.y, target_tile[0] - s.x, target_tile[1] - s.y, effective_range, "rifle", s_elev, will_hit=will_hit))
@@ -4182,6 +4264,7 @@ class TopowarGameState:
                 self._move_soldier(s, dt)
         self._update_mortar_construction(dt)
         self._rifle_combat(dt)
+        self._update_soldier_attention(dt)
         self._update_facing(dt)
         self._update_mgs(dt)
         self._update_mortars(dt)
