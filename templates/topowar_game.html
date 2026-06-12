@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=70" />
+  <link rel="stylesheet" href="/static/app.css?v=71" />
 </head>
 <body>
   <div class="page game-layout topowar-layout">
@@ -140,9 +140,13 @@
                 <svg width="44" height="12" viewBox="0 0 44 12"><circle cx="6" cy="6" r="3.5" fill="currentColor"/><circle cx="14" cy="6" r="1.7" fill="currentColor"/><circle cx="22" cy="6" r="1.7" fill="currentColor"/><circle cx="30" cy="6" r="1.7" fill="currentColor"/><circle cx="38" cy="6" r="3.5" fill="currentColor"/></svg>
               </button>
             </div>
-            <div class="tactic-row top-6">
+            <div class="tactic-row tactic-row-3 top-6">
               <button id="tactic-killbox" class="tactic-btn tactic-killbox" title="Kill Box (squad): pick a squad, click this, then drag a box from the corner your squad attacks from. The squad forms an L on the two near edges and fires into the box.">Kill Box</button>
               <button id="tactic-defend" class="tactic-btn tactic-defend" title="Defend (squad): pick a squad, click this, then drag a box. The squad spreads out evenly across the box to hold the whole area.">Defend</button>
+              <button id="tactic-rally" class="tactic-btn tactic-rally" title="Rally (retreat): fall back to your rally area. With a squad selected, only that squad retreats; with nothing selected, the whole army does (officer included). Troops break contact and run, firing on the move.">Rally</button>
+            </div>
+            <div class="tactic-row top-6">
+              <button id="set-rally" class="tactic-btn tactic-setrally" title="Set Rally Point: click, then drag a box anywhere to mark your fall-back area. It persists all game and only you can see it. Click again to redraw it.">Set Rally Point</button>
             </div>
           </div>
           <div id="squad-window" class="squad-window top-8"></div>
@@ -222,6 +226,6 @@
     </section>
   </div>
   <script>window.TOPOS_GAME_ID = "{{ game_id }}";</script>
-  <script src="/static/topowar_game.js?v=55"></script>
+  <script src="/static/topowar_game.js?v=56"></script>
 </body>
 </html>

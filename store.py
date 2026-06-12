@@ -857,6 +857,8 @@ class GameStore:
                 "tw_toggle_mortar_hold_fire",
                 "tw_set_capture_zone",
                 "tw_assign_soldier_dig",
+                "tw_set_rally",
+                "tw_rally",
             }:
                 out = {"type": t}
                 for key in (

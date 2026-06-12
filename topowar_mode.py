@@ -267,6 +267,9 @@ class Soldier(Unit):
     move_delay: float = 0.0
     name: str = ""
     combat_halt: bool = False
+    # True while falling back on a Retreat order: the soldier breaks contact
+    # (does not halt to fight) and runs for the rally area, firing on the move.
+    retreating: bool = False
     is_grenadier: bool = False
     is_officer: bool = False
     grenade_target: tuple[int, int] | None = None
@@ -624,6 +627,9 @@ class TopowarGameState:
         # rect. A side's own soldiers route around these (they fire into them),
         # so pathfinding treats friendly kill-box tiles as high-cost.
         self.squad_boxes: dict[int, tuple[int, int, int, int]] = {}
+        # Per-side rally point: a persistent tile rect (x0,y0,x1,y1) a side can
+        # fall back to on a Retreat order. Private to its owner. None until set.
+        self.rally_rect: dict[int, tuple[int, int, int, int] | None] = {0: None, 1: None}
         # Build-phase dig bank: tiles each side may dig (immediate). dug_tiles
         # records each dug tile's pre-dig elevation so an erase can restore the
         # terrain and refund the bank.
@@ -1187,9 +1193,13 @@ class TopowarGameState:
             self.next_squad_id = 1
         if not hasattr(self, "squad_boxes"):
             self.squad_boxes = {}
+        if not hasattr(self, "rally_rect"):
+            self.rally_rect = {0: None, 1: None}
         for s in self.soldiers.values():
             if not hasattr(s, "squad_id"):
                 s.squad_id = None
+            if not hasattr(s, "retreating"):
+                s.retreating = False
         if not hasattr(self, "officer_rank"):
             self.officer_rank = {0: 0, 1: 0}
         if not hasattr(self, "airstrike_used"):
@@ -1874,6 +1884,53 @@ class TopowarGameState:
         positions_sorted = sorted(positions, key=lambda p: math.dist(p, squad), reverse=True)
         return [(soldiers_sorted[i], positions_sorted[i]) for i in range(n)]
 
+    def _rally_positions(self, rect: tuple[int, int, int, int], n: int) -> list[tuple[int, int]]:
+        """Spread n soldiers evenly across the rally rect (balanced grid, with a
+        collision nudge) — mirrors the Defend distribution so a retreating group
+        arrives fanned out and already holding the area rather than stacked."""
+        W, H = self.map.width, self.map.height
+        x0 = max(0, min(rect[0], rect[2])); x1 = min(W - 1, max(rect[0], rect[2]))
+        y0 = max(0, min(rect[1], rect[3])); y1 = min(H - 1, max(rect[1], rect[3]))
+        bw, bh = x1 - x0 + 1, y1 - y0 + 1
+        if n <= 0 or bw <= 0 or bh <= 0:
+            return []
+        rows = max(1, min(bh, round((n * bh / bw) ** 0.5)))
+        cols = max(1, math.ceil(n / rows))
+        if cols > bw:
+            cols = bw; rows = max(1, min(bh, math.ceil(n / cols)))
+        used: set[tuple[int, int]] = set()
+        out: list[tuple[int, int]] = []
+
+        def place_nudged(px: int, py: int):
+            for radius in range(max(bw, bh) + 1):
+                for dy in range(-radius, radius + 1):
+                    for dx in range(-radius, radius + 1):
+                        if max(abs(dx), abs(dy)) != radius:
+                            continue
+                        x, y = px + dx, py + dy
+                        if x < x0 or x > x1 or y < y0 or y > y1 or (x, y) in used:
+                            continue
+                        used.add((x, y)); out.append((x, y)); return
+            out.append((px, py))  # area full — allow the overflow to stack
+
+        def axis_pos(i: int, count: int, lo: int, span: int) -> int:
+            if count <= 1:
+                return lo + (span - 1) // 2
+            return round(lo + i * (span - 1) / (count - 1))
+
+        placed = 0
+        for r in range(rows):
+            if placed >= n:
+                break
+            row_count = (n * (r + 1)) // rows - (n * r) // rows
+            y = axis_pos(r, rows, y0, bh)
+            for c in range(row_count):
+                if placed >= n:
+                    break
+                place_nudged(axis_pos(c, row_count, x0, bw), y)
+                placed += 1
+        return out
+
     def command(self, owner: int, action: dict[str, Any]) -> str:
         self._ensure_runtime_compat()
         t = action.get("type")
@@ -2427,6 +2484,7 @@ class TopowarGameState:
             occ = set(self._occupied_tiles().keys()) | self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
             s.current_task = {"type": "move", "goal": list(target)}
             s.combat_halt = False
+            s.retreating = False  # an explicit move order ends a fall-back
             s.move_delay = 0.0  # a single-unit move never waits on a formation stagger
             s.path = self._plan_path(s, target, trench_only=False, blocked=occ - {s.tile})
             return "Unit moving."
@@ -2617,6 +2675,7 @@ class TopowarGameState:
             for s, pos in assignments:
                 s.current_task = {"type": "move", "goal": list(pos)}
                 s.combat_halt = False
+                s.retreating = False  # a fresh formation order ends a fall-back
                 s.move_delay = 0.0
                 s.path = self._plan_path(
                     s, pos, trench_only=False, blocked=blocked_base - {s.tile}
@@ -2702,6 +2761,50 @@ class TopowarGameState:
                 self.squad_boxes.pop(sqid, None)
             self._tick_cache.pop("killbox", None)  # force recompute next path
             return "Kill box set."
+
+        if t == "tw_set_rally":
+            rect = action.get("rect")
+            if rect and len(rect) == 4:
+                x0, y0, x1, y1 = (int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3]))
+                if not (self.map.in_bounds((x0, y0)) and self.map.in_bounds((x1, y1))):
+                    raise ValueError("Rally point is off the map.")
+                self.rally_rect[owner] = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+                return "Rally point set."
+            self.rally_rect[owner] = None
+            return "Rally point cleared."
+
+        if t == "tw_rally":
+            rect = self.rally_rect.get(owner)
+            if not rect:
+                raise ValueError("Set a rally point first.")
+            squad_id_arg = action.get("squad_id")
+            if squad_id_arg is not None:
+                squad = self.squads.get(int(squad_id_arg))
+                if not squad or squad.owner != owner:
+                    raise ValueError("Invalid squad.")
+                soldiers = [self.soldiers[uid] for uid in squad.soldier_ids
+                            if uid in self.soldiers and self.soldiers[uid].hp > 0]
+            else:
+                # No squad selected: the whole army falls back, officer included.
+                soldiers = [s for s in self.soldiers.values() if s.owner == owner and s.hp > 0]
+            if not soldiers:
+                raise ValueError("No soldiers to rally.")
+            positions = self._rally_positions(rect, len(soldiers))
+            if not positions:
+                raise ValueError("Rally point is invalid.")
+            assignments = self._assign_soldiers_to_positions(soldiers, positions)
+            moving_ids = {s.unit_id for s, _ in assignments}
+            other_tiles = {sol.tile for sol in self.soldiers.values()
+                           if sol.hp > 0 and sol.unit_id not in moving_ids}
+            blocked_base = other_tiles | self._mg_tile_set() | self._mortar_tile_set() | self._sandbag_tile_set()
+            for s, pos in assignments:
+                s.current_task = {"type": "move", "goal": list(pos)}
+                s.combat_halt = False
+                s.retreating = True  # break contact and run for the rally
+                s.move_delay = 0.0
+                s.path = self._plan_path(s, pos, trench_only=False, blocked=blocked_base - {s.tile})
+            who = "Squad" if squad_id_arg is not None else "All troops"
+            return f"{who} falling back to the rally point."
 
         raise ValueError("Unknown Topowar action.")
 
@@ -2864,6 +2967,7 @@ class TopowarGameState:
                 s.current_task is not None
                 and s.current_task.get("type") == "move"
                 and s.tile not in self.map.trenches
+                and not s.retreating  # retreating soldiers break contact, never plant to fight
             )
             if advancing:
                 open_enemy_near = any(
@@ -3028,6 +3132,11 @@ class TopowarGameState:
         for s in self.soldiers.values():
             if s.hp <= 0:
                 continue
+            # A soldier is only "retreating" while running a fall-back move; once
+            # it arrives (task cleared) or picks up any non-move task, contact is
+            # no longer being broken.
+            if s.retreating and not (s.current_task and s.current_task.get("type") == "move"):
+                s.retreating = False
             task = s.current_task
             if not task:
                 # No active task: stay put.
@@ -4383,6 +4492,7 @@ class TopowarGameState:
                 "rifle_cooldown": s.rifle_cooldown,
                 "name": s.name,
                 "combat_halt": s.combat_halt,
+                "retreating": s.retreating,
                 "crossing_wire": s.crossing_wire,
                 "is_grenadier": s.is_grenadier,
                 "is_officer": s.is_officer,
@@ -4593,6 +4703,7 @@ class TopowarGameState:
             "fog_tiles": fog_tiles,
             "fringe_tiles": fringe_tiles,
             "capture_zone": capture_zone,
+            "rally_rect": list(self.rally_rect.get(viewer)) if (viewer is not None and self.rally_rect.get(viewer)) else None,
             "territory": territory,
             "soldiers": soldiers,
             "machine_guns": mgs,
