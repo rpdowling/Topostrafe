@@ -176,6 +176,8 @@ let buildFlyoutOpen = false;
 let squadBoxes = new Map();
 let armedBoxKind = null;       // 'killbox' | 'defend' when the next board-drag will define a box
 let boxInteraction = null;     // active drag: {squadId, kind, mode:'create'|'resize', handle, ax, ay}
+let armingRally = false;       // true when the next board-drag sets the rally area
+let rallyDrag = null;          // {x0,y0,x1,y1} in TILE coords while dragging the rally area
 let airstrikeFirst = null;     // first clicked tile [x,y] of a two-click airstrike line
 const BUILD_MODES = new Set(['build', 'mortar', 'sandbag', 'wire', 'bunker', 'erase']);
 
@@ -1406,6 +1408,12 @@ board.addEventListener('mousedown', (evt) => {
   const mcx = (evt.clientX - r0.left) * (board.width / r0.width);
   const mcy = (evt.clientY - r0.top) * (board.height / r0.height);
 
+  // Arming the rally area: this drag defines it (persists until reset).
+  if (armingRally) {
+    const tile = tileFromEvent(evt);
+    if (tile) rallyDrag = { x0: tile[0], y0: tile[1], x1: tile[0], y1: tile[1] };
+    return;
+  }
   // Arming a new tactical box: this drag defines it (approach corner = start tile).
   if (armedBoxKind && selectedSquad !== null) {
     const tile = tileFromEvent(evt);
@@ -1462,6 +1470,17 @@ board.addEventListener('mousedown', (evt) => {
 });
 
 board.addEventListener('mouseup', (evt) => {
+  if (armingRally) {
+    if (rallyDrag) {
+      send({ type: 'tw_set_rally', rect: [rallyDrag.x0, rallyDrag.y0, rallyDrag.x1, rallyDrag.y1] });
+      setStatus('Rally point set. Use Rally to fall back to it.');
+    }
+    armingRally = false;
+    rallyDrag = null;
+    el('set-rally')?.classList.remove('arming');
+    render();
+    return;
+  }
   if (mode === 'zone' && zoneDrag) {
     send({ type: 'tw_set_capture_zone', rect: [zoneDrag.x0, zoneDrag.y0, zoneDrag.x1, zoneDrag.y1] });
     zoneDrag = null;
@@ -1527,6 +1546,11 @@ board.addEventListener('mousemove', (evt) => {
       const box = squadBoxes.get(boxInteraction.squadId);
       if (box) { box.x1 = tile[0]; box.y1 = tile[1]; render(); }
     }
+    return;
+  }
+  if (armingRally && rallyDrag) {
+    const tile = tileFromEvent(evt);
+    if (tile) { rallyDrag.x1 = tile[0]; rallyDrag.y1 = tile[1]; render(); }
     return;
   }
   if (mode === 'zone' && zoneDrag) {
@@ -3691,6 +3715,7 @@ function draw() {
   // Capture Zone objective (revealed once the build phase ends).
   drawCaptureZone(data);
   drawTerritory(data);
+  drawRallyArea(data);
 
   // Game-over overlay
   if (state && state.winner !== null && state.winner !== undefined) {
@@ -3732,6 +3757,34 @@ function draw() {
 
 // Draw the persistent squad tactical boxes with hatching, delete-X, and (for
 // Kill Box) an approach arrow in the corner the squad attacks from.
+// Rally area: your persistent fall-back zone, a faint orange dashed outline
+// (own side only — the server only sends your own rally rect), plus a brighter
+// live preview while you drag a new one.
+function drawRallyArea(data) {
+  const paint = (x0, y0, x1, y1, a) => {
+    const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
+    const minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
+    const left = OX + minX * CELL, right = OX + (maxX + 1) * CELL;
+    const fyA = flipY(minY), fyB = flipY(maxY);
+    const top = OY + Math.min(fyA, fyB) * CELL, bot = OY + (Math.max(fyA, fyB) + 1) * CELL;
+    ctx.save();
+    ctx.fillStyle = `rgba(255,160,50,${a * 0.14})`;
+    ctx.fillRect(left, top, right - left, bot - top);
+    ctx.strokeStyle = `rgba(255,170,60,${a})`;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(left + 1, top + 1, right - left - 2, bot - top - 2);
+    ctx.setLineDash([]);
+    ctx.fillStyle = `rgba(255,195,130,${Math.min(1, a + 0.35)})`;
+    ctx.font = 'bold 10px system-ui';
+    ctx.fillText('RALLY', left + 4, top + 12);
+    ctx.restore();
+  };
+  const rr = data.rally_rect;
+  if (rr && rr.length === 4) paint(rr[0], rr[1], rr[2], rr[3], 0.45);
+  if (rallyDrag) paint(rallyDrag.x0, rallyDrag.y0, rallyDrag.x1, rallyDrag.y1, 0.85);
+}
+
 function drawSquadBoxes() {
   for (const [squadId, box] of squadBoxes) {
     const r = boxCanvasRect(box);
@@ -4215,6 +4268,8 @@ for (const [btnId, kind] of [['tactic-killbox', 'killbox'], ['tactic-defend', 'd
   if (btn) btn.addEventListener('click', () => {
     if (!hasCommand()) { setStatus('No officer — squad orders unavailable.', true); return; }
     if (selectedSquad === null) { setStatus('Select a squad first, then draw a box.', true); return; }
+    armingRally = false;
+    el('set-rally')?.classList.remove('arming');
     armedBoxKind = kind;
     setStatus(kind === 'killbox'
       ? 'Kill Box — drag a box on the map from the corner your squad attacks from.'
@@ -4222,6 +4277,29 @@ for (const [btnId, kind] of [['tactic-killbox', 'killbox'], ['tactic-defend', 'd
     render();
   });
 }
+
+// Set Rally Point: arm a drag that marks the persistent fall-back area.
+if (el('set-rally')) el('set-rally').addEventListener('click', () => {
+  armedBoxKind = null;
+  armingRally = !armingRally;
+  el('set-rally').classList.toggle('arming', armingRally);
+  setStatus(armingRally
+    ? 'Set Rally — drag a box anywhere to mark your fall-back area.'
+    : 'Set Rally cancelled.');
+  render();
+});
+
+// Rally (retreat): fall back to the rally area — selected squad, or everyone.
+if (el('tactic-rally')) el('tactic-rally').addEventListener('click', () => {
+  if (!tw()?.rally_rect) { setStatus('Set a rally point first (Set Rally Point).', true); return; }
+  if (selectedSquad !== null) {
+    send({ type: 'tw_rally', squad_id: selectedSquad });
+    setStatus('Squad falling back to the rally point.');
+  } else {
+    send({ type: 'tw_rally' });
+    setStatus('All troops falling back to the rally point.');
+  }
+});
 
 el('cancel-task').addEventListener('click', () => {
   if (mode === 'dig') {

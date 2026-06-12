@@ -1751,6 +1751,7 @@ body.info-modal-open {
   grid-template-columns: repeat(2, 1fr);
   gap: 4px;
 }
+.tactic-row-3 { grid-template-columns: repeat(3, 1fr); }
 
 .tactic-btn {
   padding: 6px 4px;
@@ -1765,6 +1766,9 @@ body.info-modal-open {
 .tactic-btn:hover { filter: brightness(1.15); }
 .tactic-killbox { background: linear-gradient(180deg, #d6452f 0%, #8a2418 100%); border-color: #ff7a5e; }
 .tactic-defend  { background: linear-gradient(180deg, #3a63d6 0%, #1d3486 100%); border-color: #6f96ff; }
+.tactic-rally   { background: linear-gradient(180deg, #d6852f 0%, #8a5018 100%); border-color: #ffb05e; }
+.tactic-setrally { background: linear-gradient(180deg, #5a4a32 0%, #36281a 100%); border-color: #d6a05a; color: #ffd9a8; }
+.tactic-setrally.arming { outline: 2px solid #ffb05e; outline-offset: 1px; }
 
 .fshape-btn {
   padding: 6px 4px;
