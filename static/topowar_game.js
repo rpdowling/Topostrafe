@@ -1972,6 +1972,47 @@ function flareScatterRadius(targetTile) {
   return 3 + Math.max(0, Math.floor(Math.max(0, dist - 10) / 5));
 }
 
+// FOV spotting cones (FOV mode only): shade each of your soldiers' 135° facing
+// cone — the area they can spot enemies in. Overlapping cones brighten, so lit
+// ground is covered and dark wedges are blind spots. The selected soldier gets a
+// crisp outline plus its 360° close-awareness bubble. (This is a directional aid;
+// the server enforces the real line-of-sight, so a cone drawn through a hill does
+// not actually see past it.)
+function drawFovCones(data) {
+  if (!data.rules || !data.rules.fov_cones) return;
+  const seat = mySeat();
+  if (seat === null) return;
+  const HALF = 67.5 * Math.PI / 180;
+  const flip = seat === 1 ? -1 : 1;
+  const fill = seat === 0 ? 'rgba(255,150,90,0.07)' : 'rgba(120,170,255,0.07)';
+  const edge = seat === 0 ? 'rgba(255,185,120,0.6)' : 'rgba(150,195,255,0.6)';
+  ctx.save();
+  for (const s of data.soldiers || []) {
+    if (s.owner !== seat || s.hp <= 0 || typeof s.facing !== 'number') continue;
+    const dp = soldierDisplayPos.get(s.unit_id) || { x: s.x, y: s.y };
+    const scx = cpx(dp.x), scy = cpy(dp.y);
+    const sight = ((s.range ?? 10) + 2) * CELL;
+    const center = flip * s.facing * Math.PI / 180;
+    ctx.beginPath();
+    ctx.moveTo(scx, scy);
+    ctx.arc(scx, scy, sight, center - HALF, center + HALF);
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+    if (selectedUnits.has(s.unit_id)) {
+      ctx.strokeStyle = edge;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(scx, scy, 2 * CELL, 0, Math.PI * 2);
+      ctx.setLineDash([3, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+  ctx.restore();
+}
+
 function drawBuildPhaseOverlay(data) {
   const seat = mySeat();
   const remaining = Math.max(0, Number(data.build_phase_remaining || 0));
@@ -2651,6 +2692,8 @@ function draw() {
   }
 
   // Soldiers
+  drawFovCones(data);
+
   for (const s of data.soldiers || []) {
     const dp = soldierDisplayPos.get(s.unit_id) || { x: s.x, y: s.y };
     const scx = cpx(dp.x);

@@ -107,6 +107,7 @@ function buildForm() {
   if (el('tw_generate_terrain')) el('tw_generate_terrain').checked = topowarDefaults.generate_terrain !== false;
   if (el('tw_capture_zone')) el('tw_capture_zone').checked = topowarDefaults.capture_zone === true;
   if (el('tw_territory_mode')) el('tw_territory_mode').checked = topowarDefaults.territory_mode === true;
+  if (el('tw_fov_cones')) el('tw_fov_cones').checked = topowarDefaults.fov_cones === true;
 }
 
 
@@ -323,6 +324,7 @@ function collectTopowarPayload() {
       generate_terrain: el('tw_generate_terrain')?.checked !== false,
       capture_zone: el('tw_capture_zone')?.checked === true,
       territory_mode: el('tw_territory_mode')?.checked === true,
+      fov_cones: el('tw_fov_cones')?.checked === true,
     },
   };
 }
